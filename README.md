@@ -109,6 +109,8 @@ The same person keeps the same placeholder, so the agent can still follow who di
   only a scrubbed error and the size of the output, so it can fix its own bugs.
 - **Code checking.** `datanyx check` finds misspelled columns, unknown tables, ambiguous joins and
   type mistakes in SQL and pandas code from the schema alone, before anything runs.
+- **Enforced boundaries.** `datanyx protect` sets up Claude Code so the agent can't read the data
+  directly, and can only work with it through DataNyx.
 - **An MCP server** that gives an agent only schemas and anonymized text, nothing that could
   be used to probe for what is hidden.
 - **Reversible when you want it.** Optionally save a mapping and restore real values in what
@@ -579,13 +581,59 @@ templates. It's a small synthetic test, not a real-world accuracy figure:
 
 1. **Run DataNyx yourself**, and read the schema before sharing it.
 2. **Give the agent only the schema**, and block its access to the data file or
-   database in its permissions. DataNyx produces a schema but doesn't restrict the
-   agent: if it can open the file, it can still see the data.
+   database. DataNyx produces a schema but doesn't restrict the agent on its own: if it can
+   open the file, it can still see the data. [`datanyx protect`](#enforcing-it-with-datanyx-protect)
+   sets this up for Claude Code.
 3. **Run the agent's code yourself** against the real data. Code that prints rows or
    logs values would expose them if the agent sees that output.
 
 If the agent runs DataNyx itself, its output is still safe to show, as long as you
 accept that `--keep-name` lets it [test guesses](#adjusting-what-gets-hidden).
+
+### Enforcing it with `datanyx protect`
+
+```sh
+datanyx protect ./data                      # shows what it would change
+datanyx protect ./data --write              # writes it, then checks that the guard works
+datanyx protect ./data --write --command "uv run datanyx"   # if datanyx isn't on Claude Code's PATH
+datanyx protect --remove --write            # takes it all out again
+```
+
+For Claude Code this writes, and only with `--write`:
+
+- **`.claude/settings.json`** (or `settings.local.json` with `--local`): deny rules for `Read` and
+  `Edit` on the paths, plus a `PreToolUse` guard hook. Anything already in the file is kept.
+- **`.mcp.json`**: a `datanyx` MCP server limited to those paths (`--no-mcp` skips it).
+- **`.datanyx/protect.json`**: the protected paths, which the hook reads.
+
+Running it again replaces its own entries rather than adding more, and a settings file that
+isn't valid JSON is left alone. Paths outside the project are covered by the hook only, since
+the deny rules are relative to the project.
+
+**What the guard refuses.** Reading, searching or listing a protected path with Read, Grep or
+Glob. Shell commands that name one: `cat data/x.csv`, `ls data`, `cd data && ...`, `cat data/*.csv`,
+`python -c "open('data/x.csv')"`, and absolute or Windows-style paths. Recursive searches from a
+folder that has protected data inside it (`grep -r foo .`, `rg foo`, `find . -exec ...`); pass
+`--allow-broad-search` to allow those. Changes to the protected data and to the files that set
+the protection up. Every refusal says what to run instead.
+
+**What it lets through**, because they work with the data without showing it: `datanyx schema`,
+`synth`, `check`, `scrub`, `anonymize` and `run`. `run` is refused if it saves raw output to a
+file or if the command after `--` names the data, and `anonymize --mapping`, `restore` and
+`protect` are refused. Running a script that reads the data, like
+`datanyx run -- python report.py`, is the intended way to work.
+
+**It fails closed.** The hook is written with `onFailure: "block"`, so if it can't run, tool calls
+are blocked instead of slipping through. `--write` runs the hook once and tells you if the
+command doesn't start. A bad command would block everything, so fix it before using Claude
+Code in that folder. The hook uses the program-and-arguments form of a hook command, which
+needs a recent Claude Code.
+
+**What it isn't.** A guardrail, not a sandbox. It can't see inside a script (one that prints rows
+is not caught), or follow a path built at run time such as `$DATA/x.csv`, and it matches shell
+commands by their text. It governs Claude Code's tools only: other agents, a terminal, or someone
+who edits the settings themselves aren't stopped. For hard isolation, use a separate account or
+container with no access to the data, or [a database login that can't read rows](#a-login-that-cant-read-rows).
 
 ### As an MCP server
 
@@ -776,6 +824,7 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `privacy.py` | Decides which names are structure and which are data |
 | `formats.py` | Recognises string formats, returning only a label |
 | `renderers/` | Output formats |
+| `protect/` | `datanyx protect` and the guard hook: Claude Code permissions, a hook that refuses direct access, MCP config |
 | `check/` | Checks SQL and pandas code against a schema: unknown names and type mistakes |
 | `scrub.py` | Removes data from error messages and program output, keeping the diagnosis |
 | `synth/` | Generates fake data that fits a schema, and writes it as JSON, JSON Lines, CSV or SQLite |
