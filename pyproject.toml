@@ -16,7 +16,8 @@ mysql = ["pymysql>=1.1", "cryptography"]
 mssql = ["pymssql>=2.3"]
 oracle = ["oracledb>=2"]
 all = ["datanyx[postgres,mysql,mssql,oracle]"]
-dev = ["pytest>=8", "datanyx[all]"]
+text = ["spacy>=3.7"]
+dev = ["pytest>=8", "datanyx[all,text]"]
 
 [project.scripts]
 datanyx = "datanyx.cli:main"

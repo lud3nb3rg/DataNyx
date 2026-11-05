@@ -8,12 +8,14 @@ or exception message could quote the data being processed.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import extract, render
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .sources import SourceError, source_kinds
+from .text import DEFAULT_MODEL, ENTITY_KINDS, PatternDetector, SpacyDetector, anonymize
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,13 +60,47 @@ def build_parser() -> argparse.ArgumentParser:
             "(repeatable); --map-path still hides it"
         ),
     )
+
+    text = commands.add_parser(
+        "anonymize",
+        help="print text with names and other identifiers replaced by placeholders",
+        description=(
+            "Replace sensitive text with placeholders like <PERSON_1>. Detection can miss "
+            "things, so review the result before sharing it."
+        ),
+    )
+    text.add_argument("input", help='UTF-8 text file to anonymize, or "-" for stdin')
+    text.add_argument("-o", "--output", help="write to this file instead of stdout")
+    text.add_argument("--model", default=DEFAULT_MODEL, help="spaCy NER model (default: %(default)s)")
+    text.add_argument(
+        "--keep-entity",
+        action="append",
+        default=[],
+        choices=ENTITY_KINDS,
+        metavar="KIND",
+        help=f"leave this kind of entity visible (repeatable): {', '.join(ENTITY_KINDS)}",
+    )
+    text.add_argument(
+        "--hide",
+        action="append",
+        default=[],
+        metavar="TERM",
+        help="always hide this term, ignoring case (repeatable)",
+    )
+    text.add_argument(
+        "--keep",
+        action="append",
+        default=[],
+        metavar="TERM",
+        help="leave this exact term visible even if detected (repeatable)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        return _run_schema(args)
+        return _run_anonymize(args) if args.command == "anonymize" else _run_schema(args)
     except SourceError as error:
         print(f"error: {error}", file=sys.stderr)
     except RecursionError:
@@ -91,3 +127,44 @@ def _run_schema(args: argparse.Namespace) -> int:
             sys.stdout.reconfigure(encoding="utf-8")
         print(output)
     return 0
+
+
+def _run_anonymize(args: argparse.Namespace) -> int:
+    if args.output and args.input != "-" and _same_file(args.input, args.output):
+        # The original couldn't be recovered, and detection might have been imperfect.
+        raise SourceError("the output file would overwrite the input")
+    text = _read_text(args.input)
+    detectors = [PatternDetector(), SpacyDetector(args.model)]
+    output = anonymize(text, detectors, args.hide, args.keep, args.keep_entity)
+
+    if args.output:
+        with open(args.output, "w", encoding="utf-8", newline="") as stream:
+            stream.write(output)
+    else:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", newline="")
+        sys.stdout.write(output)
+    return 0
+
+
+def _read_text(target: str) -> str:
+    # Read as bytes so that line endings pass through unchanged.
+    try:
+        if target == "-":
+            data = sys.stdin.buffer.read()
+        else:
+            with open(target, "rb") as stream:
+                data = stream.read()
+    except OSError as error:
+        raise SourceError(f"cannot read input: {error.strerror}") from None
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise SourceError("input is not valid UTF-8") from None
+
+
+def _same_file(first: str, second: str) -> bool:
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
