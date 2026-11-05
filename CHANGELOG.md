@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added `datanyx scrub` and `datanyx run`, which remove data from error messages and program output while keeping the exception type, line numbers and code.
 - Added `datanyx synth`, which generates fake data from a schema (JSON, JSON Lines, CSV or SQLite), with unique keys and valid foreign keys, and a `synthetic_sample` MCP tool.
 - Licensed under MIT.
 - Development moved to uv: `uv.lock`, a `dev` dependency group and a `models` group for the NER models.
