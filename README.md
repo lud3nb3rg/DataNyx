@@ -1,37 +1,144 @@
+<div align="center">
+
 # DataNyx
 
-Lets an AI agent work with your data without seeing what's sensitive in it.
+**Let an AI agent work with your data without ever seeing it.**
 
-- **Structured data:** `datanyx schema` turns a file or database into a schema the agent
-  can write code against, with no values, examples, enum labels, counts or statistics.
-- **Free text:** `datanyx anonymize` replaces names, emails and other identifiers with
-  placeholders like `<PERSON_1>`. This is best effort and **can miss things**, so unlike
-  a schema, [the result needs reviewing](#how-reliable-text-anonymization-is).
+DataNyx turns files and databases into value-free schemas an agent can write code against,
+and replaces names and identifiers in free text with placeholders.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](pyproject.toml)
+[![Code style: ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://docs.astral.sh/ruff/)
+[![Types: mypy](https://img.shields.io/badge/types-mypy-2a6db2.svg)](https://mypy-lang.org/)
+
+[Quick start](#quick-start) ·
+[Supported sources](#supported-sources) ·
+[Schemas](#schemas) ·
+[Text anonymization](#text-anonymization) ·
+[Using it with an agent](#using-it-with-an-agent) ·
+[Security model](#security-model) ·
+[Python API](#python-api)
+
+</div>
+
+---
+
+## Why
+
+You want an agent to write a report, a query or a data-cleaning script, but the data is
+customers, patients or payroll. Pasting rows into a chat is a leak. Describing the
+columns by hand is tedious and error-prone.
+
+DataNyx sits in between:
+
+|  | What the agent gets | What it never gets |
+|---|---|---|
+| **Structured data**<br>`datanyx schema` | Field names, types, formats, nesting, primary and foreign keys | Values, examples, enum labels, counts or statistics |
+| **Free text**<br>`datanyx anonymize` | The text with `<PERSON_1>`, `<EMAIL_1>` and friends in place of identifiers | The identifiers themselves (best effort: [review the result](#how-reliable-text-anonymization-is)) |
+
+## See it work
+
+Given a `customers.csv` like this:
+
+```csv
+id,email,signed_up,plan,lifetime_value,notes
+1,ana@example.com,2024-01-02,pro,129.5,called twice
+2,li@example.org,2024-02-11,free,0,
+3,omar@example.net,2024-03-30,pro,310.25,vip
+```
+
+```console
+$ datanyx schema customers.csv --format text
+root: array<{
+  id: integer
+  email: string<email>
+  signed_up: string<date>
+  plan: string
+  lifetime_value: number
+  notes: string | null
+}>
+```
+
+That is everything the agent sees. The same schema can be written as
+[TypeScript, Pydantic models or SQL](#output-formats) with `--format`.
+
+And for text, given a `call-notes.txt` containing:
+
+```
+Jessica Whitfield (jessica@northwind.example) called on March 3rd about invoice
+INV-20419. Ms. Whitfield lives in Portland. Her manager Tomasz Kowalczyk agreed.
+```
+
+```console
+$ datanyx anonymize call-notes.txt
+<PERSON_1> (<EMAIL_1>) called on <DATE_1> about invoice
+<ID_1>. Ms. <PERSON_1> lives in <LOCATION_1>. Her manager <PERSON_2> agreed.
+```
+
+The same person keeps the same placeholder, so the agent can still follow who did what.
+
+## Features
+
+- **Fourteen kinds of input.** CSV, TSV, JSON, JSON Lines, YAML, XML, Excel, Parquet, SQLite,
+  PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, and whole folders of files.
+- **Values can't leak by construction.** The schema model has no field that could hold one.
+  A fuzz test plants a canary in every value and fails if it reaches any output.
+- **Keys are treated as possible data too.** Emails, UUIDs, dates and per-record keys used
+  as object keys are hidden automatically.
+- **Databases are never queried for rows.** Schemas come from the catalog alone, and SQLite
+  files are opened with an authorizer that refuses to read user tables.
+- **Five output formats:** JSON Schema, a compact text form, TypeScript, Pydantic and SQL.
+- **An MCP server** that gives an agent only schemas and anonymized text, nothing that could
+  be used to probe for what is hidden.
+- **Reversible when you want it.** Optionally save a mapping and restore real values in what
+  the agent writes.
+- **Safe error messages.** Every message that can reach an agent, including stderr, is
+  built so it never quotes the data.
+
+## Quick start
+
+DataNyx isn't published on PyPI yet, so install it from a clone.
+
+```sh
+git clone <this repository> datanyx && cd datanyx
+uv sync --all-extras                 # or: pip install -e ".[all]"
+
+datanyx schema customers.csv --format text
+datanyx doctor                       # shows which optional packages and models are installed
+```
+
+Pick only what you need if you'd rather keep it small, for example `pip install -e .` for
+CSV, JSON, XML and SQLite, or `pip install -e ".[parquet,excel]"`. The
+[sources table](#supported-sources) lists the extra for each format.
+
+Requires Python 3.10 or newer.
 
 ## Supported sources
 
 | Source | Input | Install |
 |---|---|---|
-| Plain text (`anonymize`) | Any UTF-8 file, or `-` for stdin | `pip install -e ".[text]"`, plus a [model](#text-anonymization) |
-| JSON, JSON Lines | `.json`, `.jsonl`, `.ndjson`, or `-` for stdin | `pip install -e .` |
-| CSV, TSV | `.csv`, `.tsv`, `.tab` | `pip install -e .` |
-| XML | `.xml` | `pip install -e .` |
-| YAML | `.yaml`, `.yml` | `pip install -e ".[yaml]"` |
-| Excel | `.xlsx`, `.xlsm` | `pip install -e ".[excel]"` |
-| Parquet | `.parquet`, `.pq` | `pip install -e ".[parquet]"` |
+| CSV, TSV | `.csv`, `.tsv`, `.tab` | built in |
+| JSON, JSON Lines | `.json`, `.jsonl`, `.ndjson`, or `-` for stdin | built in |
+| XML | `.xml` | built in |
+| SQLite | `.db`, `.sqlite`, `.sqlite3`, or `sqlite:///path` | built in |
+| YAML | `.yaml`, `.yml` | `.[yaml]` |
+| Excel | `.xlsx`, `.xlsm` | `.[excel]` |
+| Parquet | `.parquet`, `.pq` | `.[parquet]` |
+| PostgreSQL | `postgresql://` | `.[postgres]` |
+| MySQL | `mysql://` | `.[mysql]` |
+| MariaDB | `mariadb://` | `.[mysql]` |
+| SQL Server | `mssql://` | `.[mssql]` |
+| Oracle | `oracle://` | `.[oracle]` |
 | A folder | Every readable file in it, with `-r` for subfolders | as for the files in it |
-| SQLite | `.db`, `.sqlite`, `.sqlite3`, or `sqlite:///path` | `pip install -e .` |
-| PostgreSQL | `postgresql://` | `pip install -e ".[postgres]"` |
-| MySQL | `mysql://` | `pip install -e ".[mysql]"` |
-| MariaDB | `mariadb://` | `pip install -e ".[mysql]"` |
-| SQL Server | `mssql://` | `pip install -e ".[mssql]"` |
-| Oracle | `oracle://` | `pip install -e ".[oracle]"` |
+| Plain text (`anonymize`) | Any UTF-8 file, or `-` for stdin | `.[text]`, plus a [model](#text-anonymization) |
 
-Requires Python 3.10+. Use `.[all]` to install every driver and reader. Other SQLAlchemy URLs,
-such as `snowflake://`, should work if you install their dialect, but only the
-databases above are tested.
+Extras are installed as `pip install -e ".[yaml]"`, and `.[all]` installs every reader and
+driver. Large JSON files stream with `.[streaming]`, and the MCP server needs `.[mcp]`.
+Other SQLAlchemy URLs, such as `snowflake://`, should work if you install their dialect, but
+only the databases above are tested.
 
-## Usage
+## Schemas
 
 ```sh
 datanyx schema customers.json                   # JSON Schema (default)
@@ -52,14 +159,14 @@ datanyx schema orders.csv --format typescript   # or pydantic, or sql
 | `-r`, `--recursive` | For a folder, also read its subfolders |
 | `-o`, `--output` | Write to a file instead of stdout |
 | `--schema` | Database schema to describe, instead of the database's default |
-| `--source` | Set the input type (`json`, `jsonl`, `sql`) when it can't be detected |
+| `--source` | Set the input type (`csv`, `tsv`, `json`, `jsonl`, `yaml`, `xml`, `excel`, `parquet`, `sql`) when it can't be detected |
 | `--map-path` | Hide all keys or columns at a path ([details](#adjusting-what-gets-hidden)) |
 | `--keep-name` | Show a name that was hidden automatically ([details](#adjusting-what-gets-hidden)) |
 
-Prefer `env:NAME` over putting a database URL on the command line. A password in the
-command is visible to an agent running it and is kept in shell history.
+> **Tip:** prefer `env:NAME` over putting a database URL on the command line. A password in
+> the command is visible to an agent running it and is kept in shell history.
 
-### Schema output
+### What the output looks like
 
 Given this JSON:
 
@@ -81,6 +188,8 @@ root: array<{
 }>
 ```
 
+The UUID key was recognised as data, so it's hidden and only the shape of its value is kept.
+
 A database produces one entry per table, with its native types and keys:
 
 ```
@@ -100,20 +209,26 @@ users: {
 ```
 
 In JSON Schema output, each table is an entry under `$defs`, with `x-native-type`,
-`x-primary-key` and `x-foreign-keys` carrying the database details.
-
-Notes about what was hidden go to stderr, so they stay out of the schema.
+`x-primary-key` and `x-foreign-keys` carrying the database details. Notes about what was
+hidden go to stderr, so they stay out of the schema.
 
 ### Output formats
 
-`--format typescript` writes declarations, `--format pydantic` writes Pydantic v2 models
-(Python source), and `--format sql` writes portable `CREATE TABLE` statements. All three
-carry no values, and keys that were hidden stay hidden: they become `Record<string, T>`,
+| `--format` | Produces |
+|---|---|
+| `json-schema` | JSON Schema, draft 2020-12 |
+| `text` | A compact TypeScript-like form that costs an agent few tokens |
+| `typescript` | `export interface` and `export type` declarations |
+| `pydantic` | Pydantic v2 models, as Python source |
+| `sql` | Portable `CREATE TABLE` statements |
+
+None carry values, and keys that were hidden stay hidden: they become `Record<string, T>`,
 `extra="allow"` or a note. Nested data becomes `JSON` columns in SQL, and a database's own
 column types are kept as they are. Names that aren't valid identifiers get a Pydantic
 `alias`, so the model still reads and writes the real keys.
 
-### How each format is read
+<details>
+<summary><b>How each format is read</b></summary>
 
 | Format | How it's described |
 |---|---|
@@ -127,12 +242,39 @@ column types are kept as they are. Names that aren't valid identifiers get a Pyd
 Files with unusual extensions can be read with `--source csv`, `--source tsv`, `--source xml`
 and so on.
 
+</details>
+
+### Adjusting what gets hidden
+
+**`--map-path`** hides everything at a path, for names the automatic rules can't catch.
+The main gap is a small map with plain keys, like `{"alice": {...}, "bob": {...}}`,
+which looks exactly like a record.
+
+```sh
+datanyx schema customers.json --map-path '$.users'   # all keys of an object
+datanyx schema customers.json --map-path '$[].tags'  # inside each array item
+datanyx schema shop.db --map-path '$.users'          # all columns of a table
+```
+
+Paths use `[]` for array items and `.{*}` for the values of a map.
+
+**`--keep-name`** shows a name the rules hid. They favour hiding, so ordinary names like
+`Order Details` or `report_2024` get hidden too.
+
+```sh
+datanyx schema shop.db --keep-name 'Order Details' --keep-name report_2024
+```
+
+The name must match exactly, including case, and is shown everywhere it appears.
+`--map-path` still wins if both apply. Only use it for names you've checked. An agent
+that can run the tool could also use it to test guesses, such as whether
+`alice@example.com` is a key.
+
 ## Text anonymization
 
 ```sh
-pip install -e ".[text]"
-python -m spacy download en_core_web_lg     # the default model, about 400 MB
-datanyx doctor                              # shows which optional packages and models are installed
+uv sync --all-extras --group models         # spaCy plus en_core_web_lg and fr_core_news_md
+# or: pip install -e ".[text]" && python -m spacy download en_core_web_lg   (about 400 MB)
 
 datanyx anonymize notes.txt                 # print to stdout
 datanyx anonymize notes.txt -o clean.txt    # write to a file
@@ -153,10 +295,9 @@ it produces:
 <ID_1>. Ms. <PERSON_1> lives in <LOCATION_1>. Her manager <PERSON_2> agreed.
 ```
 
-The same person keeps the same placeholder, so the agent can still follow who did what.
-A name found once is hidden everywhere it appears, including parts of it like the
-surname above. Two people sharing a surname aren't linked by it. Spacing and line endings
-are preserved.
+A name found once is hidden everywhere it appears, including parts of it like the surname
+above. Two people sharing a surname aren't linked by it. Spacing and line endings are
+preserved.
 
 | Option | Purpose |
 |---|---|
@@ -167,7 +308,7 @@ are preserved.
 | `--keep-entity` | Leave a kind of entity visible, such as `DATE` (repeatable) |
 | `--mapping` | Also save each placeholder's real value to a new file ([details](#restoring-real-values)) |
 
-**What it hides:**
+**What it hides**
 
 - **Using the NER model:** `PERSON`, `ORG`, `LOCATION`, `GROUP` (nationalities, religious
   and political groups), `DATE`, `MONEY` and `MISC`
@@ -193,10 +334,10 @@ datanyx anonymize notes.txt -o clean.txt --mapping notes.mapping.json
 datanyx restore summary.txt --mapping notes.mapping.json -o summary.real.txt
 ```
 
-**The mapping file holds the data you're hiding, in plain text.** Treat it like the
-original: keep it where the agent can't read it, and delete it when you're finished. Don't
-run `restore` through an agent either. It requires `-o`, so real values don't appear in
-the command's output, but an agent could still open the result.
+> **The mapping file holds the data you're hiding, in plain text.** Treat it like the
+> original: keep it where the agent can't read it, and delete it when you're finished. Don't
+> run `restore` through an agent either. It requires `-o`, so real values don't appear in
+> the command's output, but an agent could still open the result.
 
 - `*.mapping.json` is ignored by git here, so use that ending.
 - An existing mapping is never replaced, since placeholders only mean something for the run
@@ -204,12 +345,13 @@ the command's output, but an agent could still open the result.
 - A placeholder covers every form of a name and restores to the longest, so `Ms. <PERSON_1>`
   becomes `Ms. Jessica Whitfield` even if the original said `Ms. Whitfield`.
 - Placeholders not in the mapping, such as ones an agent invented, are left as they are and
-  listed in a note. The mapping file is made readable by its owner only, on Linux, macOS and Windows.
+  listed in a note.
+- The mapping file is made readable by its owner only, on Linux, macOS and Windows.
 
 ### How reliable text anonymization is
 
-**Treat the output as a draft to review, not a guarantee.** A schema contains no data by
-construction, but anonymized text is your original text minus whatever got detected.
+> **Treat the output as a draft to review, not a guarantee.** A schema contains no data by
+> construction, but anonymized text is your original text minus whatever got detected.
 
 These are results for `en_core_web_lg` on 72 invented names from 12 regions in 6 sentence
 templates. It's a small synthetic test, not a real-world accuracy figure:
@@ -247,8 +389,20 @@ accept that `--keep-name` lets it [test guesses](#adjusting-what-gets-hidden).
 ### As an MCP server
 
 ```sh
-pip install -e ".[mcp]"
-datanyx mcp --root ./exports        # stdio; add to your agent's MCP configuration
+datanyx mcp --root ./exports        # stdio; needs the `mcp` extra
+```
+
+Add it to your agent's MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "datanyx": {
+      "command": "datanyx",
+      "args": ["mcp", "--root", "./exports"]
+    }
+  }
+}
 ```
 
 The agent gets two tools: `describe_data` (a schema for a file, folder or `env:NAME`
@@ -264,7 +418,10 @@ database) and `anonymize_file` (a text file with placeholders). It's limited by 
 The server doesn't stop the agent from opening the files itself. Block that in its
 permissions, as above.
 
-## What protects the data
+## Security model
+
+<details open>
+<summary><b>What protects the data</b></summary>
 
 **Values can't reach the output.** Each value is reduced to a type and a format label
 (`email`, `uuid`, `date`, `date-time`, `uri`, `ipv4`, `ipv6`) and then discarded. The
@@ -309,6 +466,8 @@ too.
 - Notes never contain hidden names, and the input filename and database URL aren't
   included in the schema.
 
+</details>
+
 ### A login that can't read rows
 
 These grants were tested against real servers. In each case the login can get the
@@ -323,32 +482,6 @@ schema, and its attempt to `SELECT` from a table is refused.
 
 On Oracle, a table without the grant doesn't appear in the schema.
 
-### Adjusting what gets hidden
-
-**`--map-path`** hides everything at a path, for names the automatic rules can't catch.
-The main gap is a small map with plain keys, like `{"alice": {...}, "bob": {...}}`,
-which looks exactly like a record.
-
-```sh
-datanyx schema customers.json --map-path '$.users'   # all keys of an object
-datanyx schema customers.json --map-path '$[].tags'  # inside each array item
-datanyx schema shop.db --map-path '$.users'          # all columns of a table
-```
-
-Paths use `[]` for array items and `.{*}` for the values of a map.
-
-**`--keep-name`** shows a name the rules hid. They favour hiding, so ordinary names like
-`Order Details` or `report_2024` get hidden too.
-
-```sh
-datanyx schema shop.db --keep-name 'Order Details' --keep-name report_2024
-```
-
-The name must match exactly, including case, and is shown everywhere it appears.
-`--map-path` still wins if both apply. Only use it for names you've checked. An agent
-that can run the tool could also use it to test guesses, such as whether
-`alice@example.com` is a key.
-
 ## Known limits
 
 - **Field names are shown.** They're what make the schema useful, so a sensitive name
@@ -358,9 +491,18 @@ that can run the tool could also use it to test guesses, such as whether
   something even without a value.
 - **JSON schemas reflect the sample.** `required` and formats describe the data seen,
   and hidden keys can include real optional fields.
-- **Database coverage is tables only.** Views, indexes, triggers and `CHECK` constraints
-  aren't described, and each run covers one schema. A foreign key into another schema is
-  left out.
+- **CSV has no types.** Types come from the text, so a column of numbers with one `n/a`
+  becomes a string, and a header row is assumed.
+- **Large files.** JSON over 64 MB is streamed if `ijson` is installed (`.[streaming]`),
+  and otherwise loaded fully into memory. JSON Lines and CSV are read row by row. XML and
+  YAML are loaded fully into memory. Error messages for streamed JSON have no line number,
+  since the parser's own text can quote the data.
+
+<details>
+<summary><b>Database limits</b></summary>
+
+- **Coverage is tables only.** Views, indexes, triggers and `CHECK` constraints aren't
+  described, and each run covers one schema. A foreign key into another schema is left out.
 - **SQLite virtual tables are skipped** with a note, because inspecting one (FTS5, rtree)
   runs its module's queries. The shadow tables behind them do get listed.
 - **Types are what the database reports.** MySQL's `TINYINT(1)` shows as an integer, not a
@@ -370,11 +512,19 @@ that can run the tool could also use it to test guesses, such as whether
   because the catalog can't tell text dates from epoch numbers. A declared type
   SQLAlchemy doesn't recognise, such as `ANY`, shows as `NUMERIC`.
 - **Connections time out after 10 seconds** so an unreachable server can't stall a session.
-- **Large JSON documents** over 64 MB are streamed if `ijson` is installed (`pip install -e ".[streaming]"`); otherwise they're loaded fully into memory. JSON Lines and CSV are read row by row. Error messages for streamed JSON have no line number, since the parser's own text can quote the data.
-- **CSV has no types.** Types come from the text, so a column of numbers with one `n/a` becomes a string, and a header row is assumed.
-- **XML and YAML are loaded fully into memory.**
+
+</details>
 
 ## Python API
+
+```python
+import datanyx
+
+print(datanyx.schema_of("orders.csv", "typescript"))
+print(datanyx.anonymize_text("Jessica Whitfield called.", hide=["Acme"]))
+```
+
+For more control, work with the schema as objects:
 
 ```python
 from datanyx import KeyPolicy, extract, render
@@ -398,23 +548,16 @@ clean, mapping = anonymize_with_mapping("Jessica Whitfield called.", detectors)
 print(restore(clean, mapping))
 ```
 
-Two shortcuts return text directly:
-
-```python
-import datanyx
-
-print(datanyx.schema_of("orders.csv", "typescript"))
-print(datanyx.anonymize_text("Jessica Whitfield called.", hide=["Acme"]))
-```
-
 Failures raise `SourceError`, with a message that's safe to show.
 
-## Architecture
+## Contributing
+
+### Architecture
 
 ```
-Source         --->  DataSchema (schema.py)  --->  Renderer
-JSON, JSONL, CSV,    no values by design           JSON Schema, text,
-YAML, XML, Excel,                                  TypeScript, Pydantic, SQL
+Source               --->  DataSchema (schema.py)  --->  Renderer
+CSV, TSV, JSON, JSONL,     no values by design           JSON Schema, text,
+YAML, XML, Excel,                                        TypeScript, Pydantic, SQL
 Parquet, SQL, folders
 
 Text  --->  Detectors (patterns, NER)  --->  Placeholders
@@ -424,10 +567,10 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 |---|---|
 | `schema.py` | Source-neutral model: `DataSchema` > `Entity` > `Node` |
 | `sources/` | `Source` interface, registry and input readers (`sql_source.py` covers every SQL database) |
+| `sources/directory.py` | Describes a folder: one entry per file, with file names held to the same rules |
 | `inference.py` | Builds nodes from sampled values, for sources without a catalog |
 | `privacy.py` | Decides which names are structure and which are data |
 | `formats.py` | Recognises string formats, returning only a label |
-| `sources/directory.py` | Describes a folder: one entry per file, with file names held to the same rules |
 | `renderers/` | Output formats |
 | `mcp_server.py` | MCP server that only exposes schemas and anonymized text |
 | `text/detectors.py` | Finds sensitive spans: patterns, and spaCy NER through `Detector` |
@@ -445,24 +588,24 @@ and connection timeout argument to `sql_source.py`, add the extra to `pyproject.
 and add a server to the live tests. Anything else with a catalog should read it directly
 and build `Object` nodes, with one `Entity` per table, so it never has to query any rows.
 
-## Development
+### Development
 
 The project uses [uv](https://docs.astral.sh/uv/). `uv sync` creates `.venv` from
 `uv.lock`, so everyone gets the same versions:
 
 ```sh
-uv sync --all-extras                # every reader and database driver, plus the dev tools
-uv sync --all-extras --group models # also the large NER models (about 500 MB)
-uv run datanyx doctor               # shows what's installed
+uv sync --all-extras                 # every reader and database driver, plus the dev tools
+uv sync --all-extras --group models  # also the large NER models (about 500 MB)
+uv run datanyx doctor                # shows what's installed
 ```
 
-## Tests
+### Tests
 
 ```sh
-uv run pytest                       # needs no services; model tests skip without the models
+uv run pytest                        # needs no services; model tests skip without the models
 uv run ruff check src tests
 uv run mypy
-uv run pytest --cov                 # coverage report
+uv run pytest --cov                  # coverage report
 ```
 
 `tests/test_fuzz_leaks.py` generates documents with a canary planted in every value, in
@@ -477,6 +620,8 @@ DATANYX_TEST_SERVERS=1 uv run pytest -m server
 docker compose -f tests/docker-compose.yml down
 ```
 
+See the [changelog](CHANGELOG.md) for what's new.
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 RunningToOblivion
