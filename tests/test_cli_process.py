@@ -64,12 +64,26 @@ def test_doctor_runs():
     assert result.returncode == 0 and "Parquet" in result.stdout
 
 
+def _principals(path):
+    listing = subprocess.run(["icacls", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return [line.strip() for line in listing.stdout.splitlines() if ":(" in line]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows permissions")
-def test_mapping_file_is_restricted_on_windows(tmp_path):
+@pytest.mark.parametrize("folder_inherits", [True, False])
+def test_mapping_file_is_restricted_on_windows(tmp_path, folder_inherits):
     from datanyx.cli import _write_mapping
 
-    target = tmp_path / "m.mapping.json"
+    folder = tmp_path / "private"
+    folder.mkdir()
+    if not folder_inherits:
+        # Some machines, including CI runners, have folders with nothing to inherit. A new
+        # file there gets explicit SYSTEM and Administrators entries instead.
+        me = rf"{os.environ['USERDOMAIN']}\{os.environ['USERNAME']}"
+        subprocess.run(["icacls", str(folder), "/inheritance:r", "/grant", f"{me}:F"], capture_output=True, check=True)
+
+    target = folder / "m.mapping.json"
     _write_mapping(str(target), {"<PERSON_1>": "x"})
-    listing = subprocess.run(["icacls", str(target)], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    principals = [line for line in listing.stdout.splitlines() if ":(" in line]
-    assert len(principals) == 1
+    principals = _principals(target)
+    assert len(principals) == 1, principals
+    assert os.environ["USERNAME"].lower() in principals[0].lower()

@@ -285,13 +285,14 @@ def _restrict_on_windows(path: str) -> None:
     domain = os.environ.get("USERDOMAIN", "")
     account = rf"{domain}\{user}" if domain and user else user
     try:
-        result = subprocess.run(
-            ["icacls", path, "/inheritance:r", "/grant:r", f"{account}:(R,W,D)"],
-            capture_output=True,
-            timeout=15,
-            check=False,
-        )
-        restricted = result.returncode == 0 and bool(user)
+        # /reset first: when the folder has nothing to inherit, a new file gets explicit
+        # entries (SYSTEM, Administrators) that /inheritance:r alone would leave in place.
+        steps = (["/reset"], ["/inheritance:r", "/grant:r", f"{account}:(R,W,D)"])
+        results = [
+            subprocess.run(["icacls", path, *step], capture_output=True, timeout=15, check=False)
+            for step in steps
+        ]
+        restricted = all(result.returncode == 0 for result in results) and bool(user)
     except (OSError, subprocess.SubprocessError):
         restricted = False
     if not restricted:

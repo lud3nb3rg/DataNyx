@@ -10,7 +10,7 @@
 - Added `typescript`, `pydantic` and `sql` output formats.
 - Added `datanyx mcp`, a restricted MCP server, and `schema_of` / `anonymize_text`.
 - Added `datanyx doctor`, which checks the optional packages and the NER model.
-- Mapping files are now restricted to their owner on Windows as well as POSIX.
+- Mapping files are now restricted to their owner on Windows as well as POSIX, including in folders that have no permissions to inherit.
 
 ## 0.1.0
 
