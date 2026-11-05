@@ -304,9 +304,9 @@ STARTER = """# DataNyx project settings. Commands read this file from the projec
 # model = "en_core_web_lg"
 # Several models at once, to cover several languages: models = ["en_core_web_lg", "fr_core_news_md"]
 # Packs of detectors for a field: packs = ["healthcare", "finance"]
-# A second pass by another detector: backends = ["presidio"]  (see the README)
+# A second pass by another detector: backends = ["presidio"]  (see the documentation)
 # keep_entities = ["DATE"]
-# Files of custom detectors for your own formats (see the README).
+# Files of custom detectors for your own formats (see the documentation).
 # detectors = ["detectors/internal.toml"]
 # Terms to hide go in datanyx.local.toml, which is not committed, so they stay private.
 

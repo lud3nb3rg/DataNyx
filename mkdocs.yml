@@ -1,0 +1,52 @@
+site_name: DataNyx
+site_description: Let an AI agent work with your data without ever seeing it.
+docs_dir: docs
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: {icon: material/brightness-7, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: {icon: material/brightness-4, name: Light mode}
+markdown_extensions:
+  - tables
+  - admonition
+  - toc:
+      permalink: true
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Features: features.md
+  - Data and schemas:
+      - Supported sources: sources.md
+      - Schemas: schemas.md
+      - Synthetic data: synthetic-data.md
+      - Schema diff: schema-diff.md
+  - Working without the data:
+      - Debugging: debugging.md
+      - Checking code: checking-code.md
+  - Personal data:
+      - Scanning: scanning.md
+      - Text anonymization: anonymization.md
+      - Pseudonymizing tables: pseudonymization.md
+      - Detection quality: detection.md
+  - Teams and agents:
+      - Team settings: settings.md
+      - Using it with an agent: agents.md
+  - Reference:
+      - Command reference: cli-reference.md
+      - Python API: python-api.md
+      - Security model: security.md
+  - Contributing: contributing.md

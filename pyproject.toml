@@ -57,6 +57,10 @@ dev = [
     "types-PyYAML",
     "pandas>=2.3.3",
 ]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
 # Large NER models, installed from spaCy's releases. Needed only by the text tests.
 models = [
     "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",

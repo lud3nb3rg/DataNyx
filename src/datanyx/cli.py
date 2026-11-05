@@ -199,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
             "numbers, addresses, ids and free text are replaced by fake values. The same real value is "
             "the same fake value everywhere, so joins keep working, and emails still look like emails. "
             "This reads the real values, so run it yourself, not through an agent. Pseudonymized is not "
-            "anonymous: check the plan, and see the README for what it can't do."
+            "anonymous: check the plan, and see the documentation (pseudonymization page) for what it can't do."
         ),
     )
     pseudo.add_argument("input", help="the file to copy: .csv, .tsv, .json, .jsonl or a SQLite database")
@@ -234,7 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Run the anonymizer, with the same models, packs, backends and settings `anonymize` would use, "
             "over documents you have labelled, and report recall by kind. Run it again with other settings "
-            "to compare them. See the README for the file format."
+            "to compare them. See the documentation (detection page) for the file format."
         ),
     )
     evaluate_parser.add_argument("cases", help="a JSON or JSON Lines file of labelled documents")
@@ -994,7 +994,7 @@ def _run_pseudonymize(args: argparse.Namespace) -> int:
         print(f"note: {pseudo.unparsed.get('date', 0)} date value(s) weren't in YYYY-MM-DD form and were kept", file=sys.stderr)
     if not args.key_file:
         print("note: no --key-file, so these fakes won't match the ones from another run", file=sys.stderr)
-    print("note: numbers, categories and dates that were kept can still identify people in combination; see the README", file=sys.stderr)
+    print("note: numbers, categories and dates that were kept can still identify people in combination; see the documentation", file=sys.stderr)
     return 0
 
 

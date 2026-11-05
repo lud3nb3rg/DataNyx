@@ -39,6 +39,17 @@ jobs:
       - run: uv sync --all-extras --group models --locked
       - run: uv run pytest tests/test_text.py tests/test_text_model.py
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras --group docs --locked
+      - run: uv run python tools/gen_cli_reference.py --check
+      - run: uv run mkdocs build --strict
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+
   # Runs the tests that need real database servers, started from docker-compose.
   servers:
     runs-on: ubuntu-latest
