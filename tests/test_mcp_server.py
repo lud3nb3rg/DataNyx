@@ -34,11 +34,11 @@ def folder(tmp_path):
     return tmp_path
 
 
-def test_lists_only_the_two_safe_tools(folder):
+def test_lists_only_the_safe_tools(folder):
     async def names():
         return sorted(tool.name for tool in await create_server([folder]).list_tools())
 
-    assert asyncio.run(names()) == ["anonymize_file", "describe_data"]
+    assert asyncio.run(names()) == ["anonymize_file", "describe_data", "synthetic_sample"]
 
 
 def test_describe_data_returns_schema_without_values(folder):

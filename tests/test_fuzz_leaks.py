@@ -15,8 +15,9 @@ pytest.importorskip("hypothesis")
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from datanyx import KeyPolicy, extract, render
+from datanyx import KeyPolicy, extract, render, synthesize
 from datanyx.renderers import RENDERERS
+from datanyx.synth import render_table
 
 CANARY = "zqcanaryvalue"
 FUZZ = settings(max_examples=60, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -102,3 +103,13 @@ def test_xml_never_leaks(tmp_path_factory, body):
     path = tmp_path_factory.mktemp("x") / "d.xml"
     path.write_text(f"<root>{body}</root>", encoding="utf-8")
     assert not leaked(path)
+
+
+@FUZZ
+@given(DOCUMENTS)
+def test_synthetic_data_never_leaks(tmp_path_factory, document):
+    path = tmp_path_factory.mktemp("s") / "d.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    for table in synthesize(extract(str(path)), rows=20):
+        for output_format in ("json", "jsonl", "csv"):
+            assert CANARY not in render_table(table, output_format)

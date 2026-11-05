@@ -15,6 +15,7 @@ and replaces names and identifiers in free text with placeholders.
 [Quick start](#quick-start) ·
 [Supported sources](#supported-sources) ·
 [Schemas](#schemas) ·
+[Synthetic data](#synthetic-data) ·
 [Text anonymization](#text-anonymization) ·
 [Using it with an agent](#using-it-with-an-agent) ·
 [Security model](#security-model) ·
@@ -63,6 +64,17 @@ root: array<{
 That is everything the agent sees. The same schema can be written as
 [TypeScript, Pydantic models or SQL](#output-formats) with `--format`.
 
+To let the agent try its code and see real output, [generate fake rows](#synthetic-data)
+from that schema:
+
+```console
+$ datanyx synth customers.csv --rows 3 --format csv
+id,email,signed_up,plan,lifetime_value,notes
+1,jonas.larsen6@example.com,2022-11-26,meadow juniper,967.8,Ember juniper ember zephyr delta timber indigo.
+2,lucas.singh19@example.com,2023-06-24,yarrow,73.74,Ripple delta lantern nectar kestrel timber.
+3,elena.rossi71@example.com,2025-05-07,quartz indigo,62.28,Yarrow meadow willow.
+```
+
 And for text, given a `call-notes.txt` containing:
 
 ```
@@ -89,6 +101,8 @@ The same person keeps the same placeholder, so the agent can still follow who di
 - **Databases are never queried for rows.** Schemas come from the catalog alone, and SQLite
   files are opened with an authorizer that refuses to read user tables.
 - **Five output formats:** JSON Schema, a compact text form, TypeScript, Pydantic and SQL.
+- **Synthetic data.** `datanyx synth` generates fake rows from a schema, with foreign keys
+  that point at real rows, so an agent can test its code and see output without any real data.
 - **An MCP server** that gives an agent only schemas and anonymized text, nothing that could
   be used to probe for what is hidden.
 - **Reversible when you want it.** Optionally save a mapping and restore real values in what
@@ -270,6 +284,51 @@ The name must match exactly, including case, and is shown everywhere it appears.
 that can run the tool could also use it to test guesses, such as whether
 `alice@example.com` is a key.
 
+## Synthetic data
+
+An agent that can't see results can't debug its code. `datanyx synth` writes fake data that
+matches a schema, so the agent can run and test against it, and you run the finished code on
+the real data.
+
+```sh
+datanyx synth customers.csv --rows 200 --format csv -o fake.csv
+datanyx synth shop.db --rows 50 --format sqlite -o fake.db      # a whole database
+datanyx synth ./exports/ --format jsonl -o fake/                # a folder: one file per table
+datanyx synth events.json --seed 7                              # to stdout, as JSON
+```
+
+It reads the input the same way `schema` does and takes the same options (`--map-path`,
+`--keep-name`, `-r`, `--schema`, `--source`). Then it generates from the schema alone, so
+no real value is copied. Hidden keys stay hidden: they come out as invented ones.
+
+| Option | Purpose |
+|---|---|
+| `--rows` | Rows per table (default 100) |
+| `--seed` | Makes the output repeatable (default 0). Same seed, same data |
+| `--format` | `json` (default), `jsonl`, `csv` or `sqlite` |
+| `-o`, `--output` | A file, or a folder when there are several tables. Needed for `sqlite`. Existing files are never overwritten |
+
+- **Databases hold together.** Primary keys are unique and a foreign key always points at a
+  row that exists, including composite keys and join tables. Nullable foreign keys are
+  sometimes null. The `sqlite` output has the same schema as the source database, and passes
+  `PRAGMA foreign_key_check`.
+- **Shapes match.** Types, formats (emails, dates, UUIDs...), nesting, optional fields, nulls and
+  arrays follow the schema. Reading the synthetic file back gives the same schema.
+- **Values look plausible.** Field names are used as hints: `city` gets cities, `age` gets
+  ages, `price` gets amounts, and a plain `id` counts up. Emails use `example.com`, IPs use
+  the documentation range and phone numbers use the fictional `555-01xx` block.
+- **Limits.** Values are random, so they don't follow real distributions or relationships
+  between columns (the city doesn't match the country). Hidden columns have no counterpart
+  in CSV or SQLite and are left out, with a note.
+
+```python
+from datanyx import extract, synthesize
+from datanyx.synth import render_table
+
+tables = synthesize(extract("shop.db"), rows=50, seed=1)
+print(render_table(tables[0], "jsonl"))
+```
+
 ## Text anonymization
 
 ```sh
@@ -405,8 +464,9 @@ Add it to your agent's MCP configuration:
 }
 ```
 
-The agent gets two tools: `describe_data` (a schema for a file, folder or `env:NAME`
-database) and `anonymize_file` (a text file with placeholders). It's limited by design:
+The agent gets three tools: `describe_data` (a schema for a file, folder or `env:NAME`
+database), `synthetic_sample` (up to 200 fake rows that match it) and `anonymize_file` (a
+text file with placeholders). It's limited by design:
 
 - It can only read under `--root` (default: the current folder), and database URLs are
   refused unless you start the server with `--allow-urls`. Use `env:NAME` instead.
@@ -557,8 +617,8 @@ Failures raise `SourceError`, with a message that's safe to show.
 ```
 Source               --->  DataSchema (schema.py)  --->  Renderer
 CSV, TSV, JSON, JSONL,     no values by design           JSON Schema, text,
-YAML, XML, Excel,                                        TypeScript, Pydantic, SQL
-Parquet, SQL, folders
+YAML, XML, Excel,                |                       TypeScript, Pydantic, SQL
+Parquet, SQL, folders            +---------------------> Synthetic data
 
 Text  --->  Detectors (patterns, NER)  --->  Placeholders
 ```
@@ -572,7 +632,8 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `privacy.py` | Decides which names are structure and which are data |
 | `formats.py` | Recognises string formats, returning only a label |
 | `renderers/` | Output formats |
-| `mcp_server.py` | MCP server that only exposes schemas and anonymized text |
+| `synth/` | Generates fake data that fits a schema, and writes it as JSON, JSON Lines, CSV or SQLite |
+| `mcp_server.py` | MCP server that only exposes schemas, synthetic samples and anonymized text |
 | `text/detectors.py` | Finds sensitive spans: patterns, and spaCy NER through `Detector` |
 | `text/anonymizer.py` | Merges spans, finds repeat mentions and assigns placeholders |
 | `cli.py` | Command line, which reports errors without quoting data |

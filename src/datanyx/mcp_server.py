@@ -22,6 +22,7 @@ from . import extract, render
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .sources import SourceError
+from .synth import render_table, synthesize
 from .text import (
     DEFAULT_MODEL,
     ENTITY_KINDS,
@@ -34,11 +35,13 @@ from .text import (
 INSTRUCTIONS = (
     "Describes the user's data without revealing it. `describe_data` returns a schema "
     "(types and field names, never values) for a file, folder or database. "
+    "`synthetic_sample` returns fake rows that match that schema, for trying code out. "
     "`anonymize_file` returns text with names and identifiers replaced by placeholders "
     "like <PERSON_1>; it can miss things, so treat it as a draft. Write code against the "
     "schema, and ask the user to run it, rather than asking for the data."
 )
 _ENV_PREFIX = "env:"
+MAX_SAMPLE_ROWS = 200
 
 
 class Access:
@@ -142,6 +145,31 @@ def create_server(
         if schema.notes:
             output += "\n\nNotes:\n" + "\n".join(f"- {note}" for note in schema.notes)
         return output
+
+    @server.tool()
+    @_guard
+    def synthetic_sample(
+        target: str,
+        rows: int = 20,
+        recursive: bool = False,
+        map_paths: list[str] | None = None,
+        database_schema: str | None = None,
+    ) -> str:
+        """Fake rows that match the schema of a file, folder or database, as JSON Lines.
+
+        Use this to try out code and see realistic output. Nothing real is in it: it is
+        generated from the schema alone. Several tables come back as sections, one per
+        table, each headed by its name.
+        """
+        if not 1 <= rows <= MAX_SAMPLE_ROWS:
+            raise SourceError(f"rows must be between 1 and {MAX_SAMPLE_ROWS}")
+        policy = KeyPolicy(map_paths=frozenset(map_paths or ()))
+        schema = extract(access.check(target), policy=policy, namespace=database_schema, recursive=recursive)
+        tables = synthesize(schema, rows)
+        if len(tables) == 1:
+            return render_table(tables[0], "jsonl")
+        sections = [f"-- {table.name or 'root'}" + chr(10) + render_table(table, "jsonl") for table in tables]
+        return chr(10).join(sections)
 
     @server.tool()
     @_guard

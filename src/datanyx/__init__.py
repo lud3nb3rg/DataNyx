@@ -79,6 +79,13 @@ def anonymize_text(
     return anonymize(text, detectors, hide, keep, keep_entity)
 
 
+def synthesize(schema: DataSchema, rows: int = 100, seed: int | None = 0):
+    """Fake data matching `schema`, as a list of `datanyx.synth.Table`. See `datanyx.synth`."""
+    from .synth import synthesize as generate
+
+    return generate(schema, rows, seed)
+
+
 __all__ = [
     "DataSchema",
     "KeyPolicy",
@@ -88,4 +95,5 @@ __all__ = [
     "extract",
     "render",
     "schema_of",
+    "synthesize",
 ]

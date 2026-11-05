@@ -294,7 +294,7 @@ def _build_entity(
         formats = {detect_format(column["name"]) for column in hidden}
         key_format = formats.pop() if len(formats) == 1 else None
 
-    return Entity(table.name, Object(fields, extra, key_format), table.primary_key, foreign_keys)
+    return Entity(table.name, Object(fields, extra, key_format), table.primary_key, foreign_keys, True)
 
 
 def _column_node(column: Mapping[str, Any], table: _Table, enforced: bool) -> Node:

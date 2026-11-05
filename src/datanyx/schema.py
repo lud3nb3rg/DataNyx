@@ -94,6 +94,9 @@ class Entity:
     node: Node
     primary_key: tuple[str, ...] = ()
     foreign_keys: tuple[ForeignKey, ...] = ()
+    #: True when `node` describes one row of many, as for a database table, rather than
+    #: a whole document or a list of records.
+    is_table: bool = False
 
 
 @dataclass(frozen=True)
