@@ -8,11 +8,12 @@ or exception message could quote the data being processed.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
+from typing import IO
 
 from . import extract, render
 from .audit import read_log, summarize_log
@@ -20,8 +21,9 @@ from .check import LANGUAGES as CHECK_LANGUAGES
 from .check import check_code, detect_language, format_diagnostics, load_tables
 from .config import CONFIG_NAME, LOCAL_NAME, STARTER, STARTER_LOCAL, Config, describe, load_config
 from .diff import diff_schemas, has_breaking, render_diff, snapshot
-from .fileperms import restrict_to_owner
 from .privacy import KeyPolicy
+from .pseudonymize import Options as PseudonymizeOptions
+from .pseudonymize import Pseudonymizer, detect_kind, load_key, parse_overrides, pseudonymize_file, render_plan
 from .renderers import RENDERERS
 from .schema import Array, Object
 from .scrub import ScrubPolicy, scrub, shape, visible_names
@@ -32,17 +34,20 @@ from .text import (
     DEFAULT_MODEL,
     ENTITY_KINDS,
     SECRET,
+    Anonymizer,
     Detector,
     PatternDetector,
     SecretDetector,
     SpacyDetector,
-    anonymize_with_mapping,
     build_detectors,
     kinds_of,
     load_detector_file,
     restore,
     unknown_placeholders,
 )
+from .text.batch import BatchResult, anonymize_folder, anonymize_stream, restore_folder
+from .text.documents import anonymize_bytes, can_handle, restore_bytes
+from .text.mapping import MappingFile, read_mapping
 
 
 def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
@@ -157,6 +162,43 @@ def build_parser() -> argparse.ArgumentParser:
             "required for sqlite. Existing files are never overwritten"
         ),
     )
+
+    pseudo = commands.add_parser(
+        "pseudonymize",
+        help="replace real values in a table with consistent fake ones, so it can be shared and joined",
+        description=(
+            "Write a copy of a CSV, TSV, JSON, JSON Lines or SQLite file in which names, emails, phone "
+            "numbers, addresses, ids and free text are replaced by fake values. The same real value is "
+            "the same fake value everywhere, so joins keep working, and emails still look like emails. "
+            "This reads the real values, so run it yourself, not through an agent. Pseudonymized is not "
+            "anonymous: check the plan, and see the README for what it can't do."
+        ),
+    )
+    pseudo.add_argument("input", help="the file to copy: .csv, .tsv, .json, .jsonl or a SQLite database")
+    pseudo.add_argument("-o", "--output", help="the new file to write (never overwritten)")
+    pseudo.add_argument("--source", choices=("csv", "tsv", "json", "jsonl", "sqlite"), help="input type (default: from the extension)")
+    pseudo.add_argument(
+        "--key-file",
+        metavar="FILE",
+        help="a secret key, created if missing: with it the same value gets the same fake in every run. Keep it with the real data",
+    )
+    pseudo.add_argument(
+        "--mapping",
+        metavar="FILE",
+        help="also save which fake stands for which real value, to a new file. It holds real data: keep it away from agents",
+    )
+    pseudo.add_argument(
+        "--column",
+        action="append",
+        default=[],
+        metavar="NAME=KIND",
+        help="treat a column or key as this kind, overriding the guess (repeatable; TABLE.COLUMN for one table of a database)",
+    )
+    pseudo.add_argument("--keep-column", action="append", default=[], metavar="NAME", help="leave this column as it is (repeatable)")
+    pseudo.add_argument("--strict", action="store_true", help="also replace text columns that weren't recognised, instead of keeping them")
+    pseudo.add_argument("--plan", action="store_true", help="show what each column would become, and stop without writing anything")
+    pseudo.add_argument("--hide", action="append", default=[], metavar="TERM", help="for free text: always hide this term (repeatable)")
+    _add_model_and_detectors(pseudo)
 
     scan_parser = commands.add_parser(
         "scan",
@@ -291,8 +333,27 @@ def build_parser() -> argparse.ArgumentParser:
             "things, so review the result before sharing it."
         ),
     )
-    text.add_argument("input", help='UTF-8 text file to anonymize, or "-" for stdin')
-    text.add_argument("-o", "--output", help="write to this file instead of stdout")
+    text.add_argument(
+        "input",
+        help=(
+            "a file or a folder to anonymize, or \"-\" for stdin: text, Markdown, logs, HTML, email (.eml), "
+            "Word (.docx), PDF, WhatsApp and Slack exports"
+        ),
+    )
+    text.add_argument(
+        "-o", "--output", help="write to this file instead of stdout; for a folder, the new folder to write to"
+    )
+    text.add_argument("-r", "--recursive", action="store_true", help="when the input is a folder, also read its subfolders")
+    text.add_argument(
+        "--keep-names",
+        action="store_true",
+        help="when the input is a folder, keep the file names; by default they become file_001, file_002...",
+    )
+    text.add_argument(
+        "--stream",
+        action="store_true",
+        help='anonymize stdin a line at a time as it arrives, for `tail -f app.log | datanyx anonymize - --stream`',
+    )
     _add_model_and_detectors(text)
     text.add_argument(
         "--keep-entity",
@@ -399,7 +460,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        commands = {"diff": _run_diff, "audit": _run_audit, "init": _run_init, "config": _run_config, "scan": _run_scan, "protect": _run_protect, "hook": _run_hook, "check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
+        commands = {"pseudonymize": _run_pseudonymize, "diff": _run_diff, "audit": _run_audit, "init": _run_init, "config": _run_config, "scan": _run_scan, "protect": _run_protect, "hook": _run_hook, "check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
         return commands[args.command](args)
     except SourceError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -787,41 +848,184 @@ def _run_mcp(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_anonymize(args: argparse.Namespace) -> int:
-    _check_paths_differ(args.input, args.output, args.mapping)
-    text = _read_text(args.input)
+def _anonymizer(args: argparse.Namespace) -> Anonymizer:
     config = _cfg(args)
     custom = _custom_detectors(args)
-    keep_entity = [*config.keep_entities, *args.keep_entity]
+    keep_entity = [*config.keep_entities, *getattr(args, "keep_entity", [])]
     allowed = set(ENTITY_KINDS) | {SECRET} | kinds_of(custom)
     unknown = [kind for kind in keep_entity if kind not in allowed]
     if unknown:
         raise SourceError(f"unknown entity kind {unknown[0]!r}; the choices are {sorted(allowed)}")
     detectors: list[Detector] = [*custom, PatternDetector(), SpacyDetector(_model(args))]  # Custom wins ties.
-    output, mapping = anonymize_with_mapping(
-        text, detectors, [*config.hide, *args.hide], [*config.keep, *args.keep], keep_entity
-    )
+    return Anonymizer(detectors, [*config.hide, *args.hide], [*config.keep, *getattr(args, "keep", [])], keep_entity)
+
+
+def _run_pseudonymize(args: argparse.Namespace) -> int:
+    kind = args.source or detect_kind(args.input)
+    if kind is None:
+        raise SourceError("can't tell the input type; pass --source csv, tsv, json, jsonl or sqlite")
+    if not args.plan and not args.output:
+        raise SourceError("name the new file with -o OUTPUT, or use --plan to only see what would change")
+    if not os.path.exists(args.input):
+        raise SourceError("cannot read input: no such file")
+    _check_paths_differ(args.input, args.output, args.mapping, args.key_file)
+    overrides = parse_overrides(args.column)
+    key = load_key(None if args.plan else args.key_file)
+    pseudo = Pseudonymizer(key, text=lambda: _anonymizer(args), record=bool(args.mapping) and not args.plan)
+    mapping_file = MappingFile(args.mapping) if args.mapping and not args.plan else None
+    options = PseudonymizeOptions(overrides, frozenset(args.keep_column), args.strict, args.plan)
+    try:
+        report = pseudonymize_file(args.input, None if args.plan else args.output, kind, pseudo, options)
+        if mapping_file is not None:
+            mapping_file.write_document(pseudo.pairs)
+    finally:
+        if mapping_file is not None:
+            mapping_file.close()
+
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
+    for table, plan in report.plans.items():
+        print(render_plan("Plan" if table == "file" else f"Plan for table {table}", plan), file=sys.stderr)
+        print(file=sys.stderr)
+    kept = [name for plan in report.plans.values() for name, t in plan.items() if t.review]
+    if kept:
+        print(f"Kept as they are, and holding text: {', '.join(kept)}. Check them, and use --column NAME=KIND or --strict.", file=sys.stderr)
+    if args.plan:
+        print("Nothing was written. Run it again with -o OUTPUT to write the copy.", file=sys.stderr)
+        return 0
+    done = ", ".join(f"{count:,} {name}" for name, count in sorted(pseudo.counts.items(), key=lambda pair: -pair[1]))
+    print(f"Wrote {report.rows:,} rows to {args.output}. Replaced: {done or 'nothing'}.", file=sys.stderr)
+    for note in report.notes:
+        print(f"note: {note}", file=sys.stderr)
+    if pseudo.unparsed:
+        print(f"note: {pseudo.unparsed.get('date', 0)} date value(s) weren't in YYYY-MM-DD form and were kept", file=sys.stderr)
+    if not args.key_file:
+        print("note: no --key-file, so these fakes won't match the ones from another run", file=sys.stderr)
+    print("note: numbers, categories and dates that were kept can still identify people in combination; see the README", file=sys.stderr)
+    return 0
+
+
+def _run_anonymize(args: argparse.Namespace) -> int:
+    if args.stream:
+        return _run_stream(args)
+    if args.input != "-" and os.path.isdir(args.input):
+        return _run_anonymize_folder(args)
+    if args.recursive or args.keep_names:
+        raise SourceError("--recursive and --keep-names are for folders")
+    _check_paths_differ(args.input, args.output, args.mapping)
+    if args.input == "-":
+        data, suffix = sys.stdin.buffer.read(), ".txt"
+    else:
+        data = _read_bytes(args.input)
+        suffix = Path(args.input).suffix.lower()
+        if not can_handle(args.input):
+            suffix = ".txt"  # Anything else is read as plain text, as it always has been.
+    anonymizer = _anonymizer(args)
+    output = anonymize_bytes(data, suffix, anonymizer)
+    if not args.output and output.suffix == ".docx":
+        raise SourceError("the result is a Word file; use -o FILE")
+    for note in output.notes:
+        print(f"note: {note}", file=sys.stderr)
 
     # Saved first: anonymized text that can't be restored is worth less than none.
     if args.mapping:
-        _write_mapping(args.mapping, mapping)
+        _write_mapping(args.mapping, anonymizer.mapping)
     if args.output:
-        _write_text(args.output, output)
+        _write_bytes(args.output, output.data)
     else:
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8", newline="")
-        sys.stdout.write(output)
+        sys.stdout.write(output.data.decode("utf-8"))
+    return 0
+
+
+def _run_anonymize_folder(args: argparse.Namespace) -> int:
+    if not args.output:
+        raise SourceError("a folder needs -o NEW_FOLDER to write the results to")
+    _check_paths_differ(args.input, args.output, args.mapping)
+    anonymizer = _anonymizer(args)
+    mapping_file = MappingFile(args.mapping) if args.mapping else None
+
+    def save(result: BatchResult) -> None:
+        if mapping_file is not None:
+            mapping_file.write(anonymizer.mapping, result.files)
+
+    try:
+        result = anonymize_folder(args.input, args.output, anonymizer, args.recursive, args.keep_names, save)
+    finally:
+        if mapping_file is not None:
+            mapping_file.close()
+
+    print(f"Anonymized {len(result.files)} file(s) into {args.output}.", file=sys.stderr)
+    if not args.keep_names and result.files:
+        print("note: files are named file_001, file_002... because names can be sensitive too; --mapping records them", file=sys.stderr)
+    for note in result.notes:
+        print(f"note: {note}", file=sys.stderr)
+    if result.skipped:
+        kinds = ", ".join(f"{kind} ({count})" for kind, count in sorted(result.skipped.items()))
+        print(f"note: skipped files DataNyx can't anonymize: {kinds}", file=sys.stderr)
+    for failure in result.failed:
+        print(f"error: could not anonymize {failure}", file=sys.stderr)
+    return 1 if result.failed else 0
+
+
+def _run_stream(args: argparse.Namespace) -> int:
+    if args.input != "-":
+        raise SourceError("--stream reads stdin: use - as the input")
+    if args.recursive or args.keep_names:
+        raise SourceError("--recursive and --keep-names are for folders")
+    _check_paths_differ(args.output, args.mapping)
+    anonymizer = _anonymizer(args)
+    mapping_file = MappingFile(args.mapping) if args.mapping else None
+    state = {"written": -1, "at": 0.0}
+
+    def sync(force: bool = False) -> None:
+        # Rewritten as the mapping grows, at most once a second, so it survives a stopped stream.
+        if mapping_file is None or anonymizer.changes == state["written"]:
+            return
+        now = time.monotonic()
+        if force or now - state["at"] >= 1.0:
+            mapping_file.write(anonymizer.mapping)
+            state["written"], state["at"] = anonymizer.changes, now
+
+    out: IO[str]
+    if args.output:
+        out = open(args.output, "w", encoding="utf-8", newline="")
+    else:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", newline="")
+        out = sys.stdout
+    try:
+        anonymize_stream(sys.stdin.buffer, anonymizer, out.write, out.flush, sync)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sync(force=True)
+        if mapping_file is not None:
+            mapping_file.close()
+        if args.output:
+            out.close()
     return 0
 
 
 def _run_restore(args: argparse.Namespace) -> int:
     _check_paths_differ(args.input, args.output, args.mapping)
+    placeholders, files = read_mapping(args.mapping)
+    if args.input != "-" and os.path.isdir(args.input):
+        count, unknown = restore_folder(args.input, args.output, placeholders, files)
+        if unknown:
+            print(f"note: not in the mapping, left as they are: {', '.join(unknown)}", file=sys.stderr)
+        print(f"Restored {count} file(s) into {args.output}.", file=sys.stderr)
+        return 0
+    suffix = Path(args.input).suffix.lower() if args.input != "-" else ".txt"
+    if suffix in (".docx", ".html", ".htm"):
+        _write_bytes(args.output, restore_bytes(_read_bytes(args.input), suffix, placeholders))
+        return 0
     text = _read_text(args.input)
-    mapping = _read_mapping(args.mapping)
-    unknown = unknown_placeholders(text, mapping)
-    if unknown:
-        print(f"note: not in the mapping, left as they are: {', '.join(unknown)}", file=sys.stderr)
-    _write_text(args.output, restore(text, mapping))
+    unknown_names = unknown_placeholders(text, placeholders)
+    if unknown_names:
+        print(f"note: not in the mapping, left as they are: {', '.join(unknown_names)}", file=sys.stderr)
+    _write_text(args.output, restore(text, placeholders))
     return 0
 
 
@@ -838,40 +1042,27 @@ def _write_text(path: str, text: str) -> None:
 
 
 def _write_mapping(path: str, mapping: dict[str, str]) -> None:
-    # Placeholders are only meaningful for one run, so replacing an existing mapping
-    # would make earlier output impossible to restore. The file is created owner-only
-    # (mode 600 on POSIX), and restricted again below on Windows, before any data is written.
-    def owner_only(file: str, flags: int) -> int:
-        return os.open(file, flags, 0o600)
-
+    mapping_file = MappingFile(path)
     try:
-        with open(path, "x", encoding="utf-8", opener=owner_only) as stream:
-            _restrict_on_windows(path)
-            json.dump(mapping, stream, ensure_ascii=False, indent=2)
-    except FileExistsError:
-        raise SourceError("the mapping file already exists; choose a new name") from None
-    except OSError as error:
-        raise SourceError(f"cannot write the mapping: {error.strerror}") from None
+        mapping_file.write(mapping)
+    finally:
+        mapping_file.close()
 
 
-def _restrict_on_windows(path: str) -> None:
-    """Leave only the current user with access, since `os.open` modes do nothing on Windows."""
-    if sys.platform == "win32" and not restrict_to_owner(path):
-        print("note: couldn't restrict the mapping file's permissions; keep it somewhere private", file=sys.stderr)
-
-
-def _read_mapping(path: str) -> dict[str, str]:
-    # Every failure message is fixed, since a mapping's content is sensitive by nature.
+def _read_bytes(target: str) -> bytes:
     try:
-        with open(path, encoding="utf-8") as stream:
-            mapping = json.load(stream)
+        with open(target, "rb") as stream:
+            return stream.read()
     except OSError as error:
-        raise SourceError(f"cannot read the mapping: {error.strerror}") from None
-    except ValueError:
-        raise SourceError("the mapping file isn't valid JSON") from None
-    if not isinstance(mapping, dict) or not all(isinstance(v, str) for v in mapping.values()):
-        raise SourceError("the mapping file isn't in the expected format")
-    return mapping
+        raise SourceError(f"cannot read input: {error.strerror}") from None
+
+
+def _write_bytes(path: str, data: bytes) -> None:
+    try:
+        with open(path, "wb") as stream:
+            stream.write(data)
+    except OSError as error:
+        raise SourceError(f"cannot write the output: {error.strerror}") from None
 
 
 def _read_text(target: str) -> str:

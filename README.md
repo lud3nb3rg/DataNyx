@@ -20,6 +20,8 @@ and replaces names and identifiers in free text with placeholders.
 [Code checking](#checking-code-before-it-runs) ·
 [Scanning](#scanning-a-folder-before-sharing-it) ·
 [Team settings](#team-settings) ·
+[Documents](#folders-documents-and-streams) ·
+[Pseudonymizing](#pseudonymizing-tables) ·
 [Schema diff](#watching-a-data-feed-for-changes) ·
 [Text anonymization](#text-anonymization) ·
 [Using it with an agent](#using-it-with-an-agent) ·
@@ -112,6 +114,11 @@ The same person keeps the same placeholder, so the agent can still follow who di
   only a scrubbed error and the size of the output, so it can fix its own bugs.
 - **Code checking.** `datanyx check` finds misspelled columns, unknown tables, ambiguous joins and
   type mistakes in SQL and pandas code from the schema alone, before anything runs.
+- **Documents, folders and streams.** `datanyx anonymize` takes a whole folder with one set of
+  placeholders, reads HTML, email, Word, PDF, WhatsApp and Slack exports as well as text, and can
+  work on a stream as it arrives (`tail -f app.log | datanyx anonymize - --stream`).
+- **Pseudonymized copies of tables.** `datanyx pseudonymize` writes a CSV, JSON or SQLite copy with
+  consistent fake values, so the data can be shared and joined without the real ones.
 - **A scan before you share.** `datanyx scan` reports which files in a folder hold personal data or
   secrets, by kind, count and line, and never the values themselves.
 - **A policy a team can share.** `datanyx.toml` holds the settings that would otherwise be repeated on
@@ -164,10 +171,10 @@ Requires Python 3.10 or newer.
 | SQL Server | `mssql://` | `.[mssql]` |
 | Oracle | `oracle://` | `.[oracle]` |
 | A folder | Every readable file in it, with `-r` for subfolders | as for the files in it |
-| Plain text (`anonymize`) | Any UTF-8 file, or `-` for stdin | `.[text]`, plus a [model](#text-anonymization) |
+| Text and documents (`anonymize`) | Text, HTML, `.eml`, `.docx`, `.pdf`, WhatsApp and Slack exports, a folder of them, or `-` for stdin | `.[text]`, plus a [model](#text-anonymization); PDF needs `.[pdf]` |
 
 Extras are installed as `pip install -e ".[yaml]"`, and `.[all]` installs every reader and
-driver. Large JSON files stream with `.[streaming]`, SQL checking needs `.[check]`, and the MCP server needs `.[mcp]`.
+driver. Large JSON files stream with `.[streaming]`, SQL checking needs `.[check]`, PDF needs `.[pdf]`, and the MCP server needs `.[mcp]`.
 Other SQLAlchemy URLs, such as `snowflake://`, should work if you install their dialect, but
 only the databases above are tested.
 
@@ -734,6 +741,51 @@ Use `--hide` for names you already know, such as your company or clients: it's t
 reliable way to catch them. Run it yourself rather than through an agent, since the term
 is on the command line.
 
+### Folders, documents and streams
+
+`anonymize` takes a folder as well as a file. Every document in it is anonymized with **one set of
+placeholders**, so a person in the tenth file is the same `<PERSON_1>` as in the first, and one
+mapping file restores the whole folder:
+
+```sh
+datanyx anonymize ./reports -o ./clean -r --mapping reports.mapping.json
+datanyx restore ./clean -o ./restored --mapping reports.mapping.json
+```
+
+Output files are named `file_001.txt`, `file_002.docx`... because a file name can be as sensitive as
+what is in it, and the mapping records what each was called. `--keep-names` keeps the real names
+when you know they are safe. `-r` reads subfolders. A file DataNyx can't read is skipped and counted,
+and one that fails doesn't stop the rest. An output folder inside the input, or one that already
+has a file of the same name, is refused.
+
+| Format | Result |
+|---|---|
+| Text, Markdown, logs, CSV, JSON and similar | The same file, with placeholders. Line endings are kept |
+| HTML | The same page: tags and layout stay, text and descriptive attributes (`title`, `alt`, `href`, `value`...) change. Text with nothing to hide keeps its original spelling |
+| Word (`.docx`) | The same document: styles, tables and layout stay. A paragraph with something to hide loses the formatting *inside* it, and author, company and title are cleared |
+| Email (`.eml`) | A text file of the headers and body. People become placeholders (a sender is `<PERSON_1> (<EMAIL_1>)`), routing headers and attachments are left out, and attachment names are listed |
+| PDF | A text file of the pages, with page markers (needs `.[pdf]`) |
+| WhatsApp export | The same chat, each sender one placeholder, so who said what is still clear. Continuation lines and system messages are handled |
+| Slack export | The same JSON. People, user ids, emails and message text are replaced, mentions line up with the people, and timestamps and types stay |
+
+Anything else is read as plain text if you name the file, and skipped inside a folder.
+
+**Streams.** `--stream` anonymizes stdin a line at a time as it arrives, so it works on a live log.
+The same names keep the same placeholders for as long as it runs, and a `--mapping` file is rewritten
+as it grows, so it survives a stopped stream:
+
+```sh
+tail -f app.log | datanyx anonymize - --stream --mapping app.mapping.json
+```
+
+**What these don't do.** Each line of a stream is judged on its own, so a name split across lines isn't
+joined. Inside HTML the contents of `<script>` and `<style>` are left alone, so an email in a script
+stays: check scripts yourself. Images in Word files and the pictures in a PDF aren't read, and a
+scanned PDF has no text to find; the notes printed after a run say when that happened. Changed HTML
+text is re-escaped, so `&nbsp;` becomes a plain non-breaking space. WhatsApp's two usual layouts are
+recognised, and other chat apps aren't. A person is matched by exact name across documents: "Whitfield"
+alone in a later file isn't linked to "Jessica Whitfield" from an earlier one.
+
 ### Restoring real values
 
 If an agent writes something using placeholders, you can put the real values back. This
@@ -785,6 +837,93 @@ templates. It's a small synthetic test, not a real-world accuracy figure:
 - **Model labels differ.** French models have no `DATE` or `MONEY` label, so those rely on
   patterns. `fr_core_news_md` is the only non-English model tested.
 
+## Pseudonymizing tables
+
+Text anonymization turns names into placeholders. For tables, that would break joins and make emails
+stop looking like emails. `datanyx pseudonymize` writes a copy in which each real value becomes a
+**consistent fake one**: the same customer is the same fake customer in every row, table and file,
+ids still match across tables, and the data stays realistic enough to develop against or share.
+
+```console
+$ datanyx pseudonymize customers.csv -o fake.csv --key-file pseudonyms.key
+Plan:
+  customer_id  id          the name ends in id
+  name         name        the name says name
+  email        email       the name says email
+  phone        phone       the name says phone
+  city         city        the name says city
+  plan         keep        nothing personal was recognised   <- kept: check it
+  salary       keep        nothing personal was recognised
+  notes        text        the name says free text
+  joined       keep        dates are kept, except birth dates
+
+Kept as they are, and holding text: plan. Check them, and use --column NAME=KIND or --strict.
+Wrote 3 rows to fake.csv. Replaced: 3 id, 3 name, 3 email, 3 phone, 3 city, 1 text.
+```
+
+```sh
+datanyx pseudonymize customers.csv --plan                     # see the decisions, write nothing
+datanyx pseudonymize shop.db -o shop-fake.db --key-file pseudonyms.key   # a database, rebuilt in a new file
+datanyx pseudonymize events.jsonl -o fake.jsonl --column notes=text --keep-column region
+datanyx pseudonymize customers.csv -o fake.csv --strict       # replace text that wasn't recognised too
+```
+
+It reads CSV, TSV, JSON, JSON Lines and SQLite files. **It reads the real values, so run it yourself
+rather than through an agent**; `datanyx protect` refuses to run it for an agent. Keep the key and
+mapping files inside a path you protect, or outside the project, since the guard doesn't know about them.
+
+| Option | Purpose |
+|---|---|
+| `-o`, `--output` | The new file. Existing files are never overwritten, and a database is rebuilt, not edited |
+| `--plan` | Show what each column would become, and stop |
+| `--key-file FILE` | A secret key, created if missing. **With the same key, the same value gets the same fake in every run**, so a fresh export lines up with the last. Without it, a new random key is used and the fakes won't match another run's |
+| `--mapping FILE` | Also save which fake stands for which real value. It holds real data |
+| `--column NAME=KIND` | Treat a column as this kind (repeatable); `TABLE.COLUMN=KIND` for one table of a database |
+| `--keep-column NAME` | Leave a column as it is |
+| `--strict` | Replace text columns that weren't recognised, instead of keeping them |
+| `--source` | The input type, if the extension doesn't say |
+
+**What becomes what.** A column's kind comes from your override, `--keep-column`, being a key in a
+database, its name, then what its values look like. The kinds are `name`, `first_name`, `last_name`,
+`email`, `phone`, `address`, `city`, `company`, `postal`, `id`, `token`, `date`, `text`, `ip`, `url`,
+`category` (distinct words), `keep` and `drop`.
+
+- **Names, emails, companies, cities and addresses** come from word lists, so they look real. Two
+  different real names never get the same fake. Emails are `first.last42@example.com`.
+- **Whole-number ids** go through a keyed permutation of their own range, so the result has the same
+  number of digits and **two ids can never become one**. That is what keeps foreign keys valid: the
+  `PRAGMA foreign_key_check` of a pseudonymized database is clean, and joins return the same row counts.
+- **Phone numbers, postal codes, account numbers and other codes** keep their shape: a digit becomes a
+  digit, a letter a letter, `+44` and the punctuation stay.
+- **Dates** are kept, except birth dates, which move by one secret number of days, so the gaps between
+  them survive. A date not written as `YYYY-MM-DD` is kept and counted.
+- **Free text** goes through [text anonymization](#text-anonymization), so names inside it become
+  placeholders like `<PERSON_1>` (these don't match the fake name in the `name` column).
+- **JSON keys** work the same as columns, wherever the key appears. A key that is itself data, such as
+  an email used as a key, is replaced, and agrees with the same email used as a value.
+- **SQLite**: tables, keys and indexes are copied, and views too. **Triggers are left out**, since they
+  can hold data or change values, and virtual tables are skipped; the notes at the end say so.
+
+**What it can't promise.** *Pseudonymized is not anonymous.* Look at the plan before you share the copy.
+
+- Anything kept is exactly as it was: numbers (a salary), categories (a diagnosis in a `plan` column) and
+  most dates. A few such columns together, such as postcode, birth year and sex, can identify a person
+  even when every name is gone. Columns that hold text but weren't recognised are listed with
+  "check it"; `--strict` replaces them.
+- A column is recognised by its name and its values, which can be wrong in both directions. That is why
+  the plan is printed, and `--column` exists.
+- Anyone with the key file can test a guess ("is this the fake for Ana Silva?"), so keep it with the
+  real data, not with the copy. The key file is readable by its owner only.
+- A phone number or postal code made by changing digits can, by chance, be a real one.
+
+```python
+from datanyx.pseudonymize import Options, Pseudonymizer, load_key, pseudonymize_file
+
+pseudo = Pseudonymizer(load_key("pseudonyms.key"))
+pseudonymize_file("customers.csv", "fake.csv", "csv", pseudo, Options())
+print(pseudo.apply("email", "jane@acme-corp.io"))      # the same fake every time
+```
+
 ## Using it with an agent
 
 1. **Run DataNyx yourself**, and read the schema before sharing it.
@@ -827,7 +966,7 @@ the protection up. Every refusal says what to run instead.
 
 **What it lets through**, because they work with the data without showing it: `datanyx schema`,
 `synth`, `check`, `scrub`, `anonymize`, `run`, `scan`, `diff`, `audit` and `config`. `run` is refused if it saves raw output to a
-file or if the command after `--` names the data, and `anonymize --mapping`, `restore`, `init` and
+file or if the command after `--` names the data, and `anonymize --mapping`, `restore`, `pseudonymize`, `init` and
 `protect` are refused. So are the options that loosen what you set up, since each shows something
 hidden or works as a way to test guesses: `--keep-name`, `--keep`, `--keep-entity`, `--allow`,
 `--keep-numbers`, `--no-ner`, `--show-paths`, `--include-examples`, `--reveal`, `--allow-urls`,
@@ -1074,9 +1213,13 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `synth/` | Generates fake data that fits a schema, and writes it as JSON, JSON Lines, CSV or SQLite |
 | `mcp_server.py` | MCP server that only exposes schemas, synthetic samples and anonymized text |
 | `text/detectors.py` | Finds sensitive spans: patterns, and spaCy NER through `Detector` |
+| `text/documents.py` | Anonymizes HTML, email, Word, PDF, WhatsApp and Slack files, keeping their structure |
+| `text/batch.py` | Folder and stream drivers: one set of placeholders across many inputs, and restoring a folder |
+| `text/mapping.py` | The mapping file: created private, never overwritten, rewritten as it grows |
+| `pseudonymize/` | Consistent fake values for tables: key-derived fakes, id permutation, column classification, CSV, JSON and SQLite |
 | `text/custom.py` | Detectors described in a file: regular expressions and dictionaries of terms |
 | `text/secrets.py` | Finds credentials by their shape: API keys, tokens, private keys, passwords |
-| `text/anonymizer.py` | Merges spans, finds repeat mentions and assigns placeholders |
+| `text/anonymizer.py` | Merges spans, finds repeat mentions and assigns placeholders. `Anonymizer` keeps them across many texts |
 | `cli.py` | Command line, which reports errors without quoting data |
 
 ### Adding a source

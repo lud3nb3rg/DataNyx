@@ -64,24 +64,117 @@ def anonymize_with_mapping(
     A placeholder used for several forms of a name maps to the longest, so "Ms. <PERSON_1>"
     restores as "Ms. Jessica Whitfield" even if the original said "Ms. Whitfield".
     """
-    keep_terms = set(keep_terms)
-    keep_kinds = set(keep_kinds)
-    detected = [span for detector in detectors for span in detector.find(text)]
-    kept = [
-        span
-        for span in detected
-        if span.kind in keep_kinds or text[span.start : span.end] in keep_terms
-    ]
-    # Also drop what's inside a kept span: "2024-01-02" matches the ID pattern too, and
-    # that shouldn't hide a date the user asked to keep.
-    spans = [
-        span
-        for span in detected
-        if not any(k.start <= span.start and span.end <= k.end for k in kept)
-    ]
-    spans.extend(_literal_spans(text, hide_terms))
-    spans.extend(_other_occurrences(text, spans, keep_terms))
-    return _replace(text, _merge(spans))
+    anonymizer = Anonymizer(detectors, hide_terms, keep_terms, keep_kinds)
+    return anonymizer.anonymize(text), anonymizer.mapping
+
+
+class Anonymizer:
+    """Anonymizes any number of texts with one set of placeholders.
+
+    Each call to `anonymize` is judged on its own text, but the placeholders are shared: a
+    person who appears in a second document gets the same `<PERSON_1>` as in the first, and a
+    new person gets the next number. Use it for a folder of documents, a stream of log lines,
+    or the cells of a table, where the same name must stay recognisable throughout.
+
+    `mapping` holds every placeholder's real value so far, and is sensitive. `changes` counts
+    how many placeholders have been added or lengthened, so a caller can tell when a saved
+    copy of the mapping is out of date.
+    """
+
+    def __init__(
+        self,
+        detectors: Iterable[Detector],
+        hide_terms: Iterable[str] = (),
+        keep_terms: Iterable[str] = (),
+        keep_kinds: Iterable[str] = (),
+    ) -> None:
+        self._detectors = list(detectors)
+        self._hide_terms = list(hide_terms)
+        self._keep_terms = set(keep_terms)
+        self._keep_kinds = set(keep_kinds)
+        self._placeholders: dict[tuple[str, str], str] = {}
+        self._counters: dict[str, int] = {}
+        self._mapping: dict[str, str] = {}
+        self._literals: set[str] = set()
+        self.changes = 0
+
+    @property
+    def mapping(self) -> dict[str, str]:
+        return dict(self._mapping)
+
+    def anonymize(self, text: str) -> str:
+        self._literals.update(_PLACEHOLDER.findall(text))
+        detected = [span for detector in self._detectors for span in detector.find(text)]
+        kept = [
+            span
+            for span in detected
+            if span.kind in self._keep_kinds or text[span.start : span.end] in self._keep_terms
+        ]
+        # Also drop what's inside a kept span: "2024-01-02" matches the ID pattern too, and
+        # that shouldn't hide a date the user asked to keep.
+        spans = [
+            span
+            for span in detected
+            if not any(k.start <= span.start and span.end <= k.end for k in kept)
+        ]
+        spans.extend(_literal_spans(text, self._hide_terms))
+        spans.extend(_other_occurrences(text, spans, self._keep_terms))
+        return self._replace(text, _merge(spans))
+
+    def anonymize_segments(self, segments: list[str]) -> list[str]:
+        """Anonymize pieces of one document (the text of an HTML page, say) as a whole.
+
+        They are joined so that names are judged in context, then split again. If a match
+        crosses a boundary and the count no longer fits, each piece is done on its own.
+        """
+        if not segments:
+            return []
+        joined = _SEGMENT_BREAK.join(segments)
+        # A break the text already contains would split in the wrong place.
+        if _SEGMENT_BREAK not in "".join(segments):
+            pieces = self.anonymize(joined).split(_SEGMENT_BREAK)
+            if len(pieces) == len(segments):
+                return pieces
+        return [self.anonymize(segment) for segment in segments]
+
+    def placeholder_for(self, kind: str, value: str) -> str:
+        """The placeholder for a value known to be of this kind, such as a chat message's sender.
+
+        The same value always gets the same placeholder, and one that text elsewhere already
+        produced is reused, so a sender and the same name in a message line up.
+        """
+        surface = _normalize(value)
+        key = (kind, surface)
+        if key not in self._placeholders:
+            self._placeholders[key] = _next_placeholder(kind, self._counters, self._literals)
+        placeholder = self._placeholders[key]
+        self._remember(placeholder, " ".join(value.split()))
+        return placeholder
+
+    def _remember(self, placeholder: str, value: str) -> None:
+        if len(value) > len(self._mapping.get(placeholder, "")):
+            self._mapping[placeholder] = value
+            self.changes += 1
+
+    def _replace(self, text: str, spans: list[Span]) -> str:
+        identities = _person_identities(text, spans)
+        output: list[str] = []
+        position = 0
+        for span in spans:
+            surface = _normalize(text[span.start : span.end])
+            key = (span.kind, identities.get(surface, surface) if span.kind == PERSON else surface)
+            if key not in self._placeholders:
+                self._placeholders[key] = _next_placeholder(span.kind, self._counters, self._literals)
+            placeholder = self._placeholders[key]
+            self._remember(placeholder, " ".join(text[span.start : span.end].split()))
+            output.append(text[position : span.start])
+            output.append(placeholder)
+            position = span.end
+        output.append(text[position:])
+        return "".join(output)
+
+
+_SEGMENT_BREAK = "\n\u2063\n"  # An invisible separator on its own line, which no match crosses.
 
 
 def _literal_spans(text: str, terms: Iterable[str]) -> Iterable[Span]:
@@ -166,35 +259,12 @@ def _merge(spans: list[Span]) -> list[Span]:
     return merged
 
 
-def _replace(text: str, spans: list[Span]) -> tuple[str, dict[str, str]]:
-    identities = _person_identities(text, spans)
-    placeholders: dict[tuple[str, str], str] = {}
-    counters: dict[str, int] = {}
-    mapping: dict[str, str] = {}
-    output: list[str] = []
-    position = 0
-    for span in spans:
-        surface = _normalize(text[span.start : span.end])
-        key = (span.kind, identities.get(surface, surface) if span.kind == PERSON else surface)
-        if key not in placeholders:
-            placeholders[key] = _next_placeholder(span.kind, counters, text)
-        placeholder = placeholders[key]
-        value = " ".join(text[span.start : span.end].split())
-        if len(value) > len(mapping.get(placeholder, "")):
-            mapping[placeholder] = value
-        output.append(text[position : span.start])
-        output.append(placeholder)
-        position = span.end
-    output.append(text[position:])
-    return "".join(output), mapping
-
-
-def _next_placeholder(kind: str, counters: dict[str, int], text: str) -> str:
+def _next_placeholder(kind: str, counters: dict[str, int], literals: set[str]) -> str:
     # Skip any number the text already uses literally, or restoring would replace it.
     while True:
         counters[kind] = counters.get(kind, 0) + 1
         placeholder = f"<{kind}_{counters[kind]}>"
-        if placeholder not in text:
+        if placeholder not in literals:
             return placeholder
 
 
@@ -212,4 +282,4 @@ def _normalize(surface: str) -> str:
     return " ".join(surface.split()).casefold()
 
 
-__all__ = ["anonymize", "anonymize_with_mapping", "restore", "unknown_placeholders"]
+__all__ = ["Anonymizer", "anonymize", "anonymize_with_mapping", "restore", "unknown_placeholders"]

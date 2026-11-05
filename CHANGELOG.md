@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `datanyx anonymize` now takes a folder (one set of placeholders for every file, files renamed, one mapping that restores the folder), `--stream` for live input, and reads HTML, email (`.eml`), Word, PDF (the new `pdf` extra), WhatsApp and Slack exports with their structure kept. `datanyx restore` restores folders, Word and HTML files. The `Anonymizer` class keeps placeholders across many texts.
+- Added `datanyx pseudonymize`, which writes a copy of a CSV, TSV, JSON, JSON Lines or SQLite file with consistent fake values: joins and foreign keys keep working, ids keep their length and never collide, and a key file makes the fakes repeatable.
 - Added `datanyx.toml` and `datanyx.local.toml` for project settings, with `datanyx init` and `datanyx config`. Unknown settings are errors with a suggestion, and terms to hide can stay in the uncommitted local file. Needs `tomli` on Python 3.10.
 - Added custom detectors: patterns and dictionaries described in a file, found by `anonymize`, `scrub`, `scan` and the MCP server.
 - Added `datanyx diff`, which compares two schemas (saved or live) and sorts the changes into breaking, compatible and info, and a `schema_diff` MCP tool.

@@ -28,3 +28,5 @@ dist/
 .ruff_cache/
 .hypothesis/
 ideas.md
+pseudonyms.key
+*.key

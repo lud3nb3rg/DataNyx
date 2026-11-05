@@ -531,3 +531,22 @@ def test_the_settings_files_cant_be_changed_even_without_a_local_file(config, pr
         assert "protection" in call(config, "Edit", file_path=str(project / name))
     assert "protection" in bash(config, "echo '[schema]' > datanyx.toml")
     assert bash(config, "cat datanyx.toml") is None  # The shared policy may be read.
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "datanyx pseudonymize data/customers.csv -o fake.csv",
+        "datanyx pseudonymize data/customers.csv --plan",
+        "uv run datanyx pseudonymize data/customers.csv -o fake.csv --key-file k.key",
+        "datanyx restore out.txt --mapping m.json -o real.txt",
+    ],
+)
+def test_commands_that_read_or_rebuild_real_values_are_not_available_to_the_agent(config, command):
+    assert "isn't available" in (bash(config, command) or ""), command
+
+
+def test_anonymize_of_folders_and_streams_stays_available_but_without_a_mapping(config):
+    assert bash(config, "datanyx anonymize data -o clean -r") is None
+    assert bash(config, "datanyx anonymize data/notes.txt --stream") is None
+    assert bash(config, "datanyx anonymize data -o clean --mapping m.mapping.json")
