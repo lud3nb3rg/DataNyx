@@ -132,6 +132,7 @@ and so on.
 ```sh
 pip install -e ".[text]"
 python -m spacy download en_core_web_lg     # the default model, about 400 MB
+datanyx doctor                              # shows which optional packages and models are installed
 
 datanyx anonymize notes.txt                 # print to stdout
 datanyx anonymize notes.txt -o clean.txt    # write to a file
@@ -203,7 +204,7 @@ the command's output, but an agent could still open the result.
 - A placeholder covers every form of a name and restores to the longest, so `Ms. <PERSON_1>`
   becomes `Ms. Jessica Whitfield` even if the original said `Ms. Whitfield`.
 - Placeholders not in the mapping, such as ones an agent invented, are left as they are and
-  listed in a note. The mapping's file permissions are restricted on Linux and macOS only.
+  listed in a note. The mapping file is made readable by its owner only, on Linux, macOS and Windows.
 
 ### How reliable text anonymization is
 
@@ -450,6 +451,18 @@ and build `Object` nodes, with one `Entity` per table, so it never has to query 
 pip install -e ".[dev]"
 pytest
 ```
+
+Checks that CI also runs:
+
+```sh
+ruff check src tests
+mypy
+pytest --cov                  # coverage report
+```
+
+`tests/test_fuzz_leaks.py` generates documents with a canary planted in every value, in
+JSON, JSON Lines, CSV, YAML and XML, and fails if the canary reaches any output format or
+note. Run it with other seeds using `pytest tests/test_fuzz_leaks.py --hypothesis-seed=N`.
 
 The default run needs no services. Tests that need a server or an NER model are skipped,
 unless the model is installed:

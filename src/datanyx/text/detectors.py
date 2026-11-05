@@ -9,8 +9,9 @@ from __future__ import annotations
 import ipaddress
 import re
 import warnings
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Callable, Iterable, Iterator, Protocol
+from typing import Protocol
 
 from ..sources.base import SourceError
 
@@ -161,7 +162,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], Callable[[str], bool] | None], ...]
     (DATE, re.compile(
         rf"(?i)\b(?:{_MONTHS})\b\.?\s+\d{{1,2}}(?:st|nd|rd|th)?\b(?:,?\s+\d{{4}}\b)?"
     ), None),
-    (MONEY, re.compile(rf"[$€£¥]\s?\d[\d,. \u00a0]*\d|[$€£¥]\s?\d"), None),
+    (MONEY, re.compile(r"[$€£¥]\s?\d[\d,. \u00a0]*\d|[$€£¥]\s?\d"), None),
     (MONEY, re.compile(
         rf"\b\d[\d,. \u00a0]*\s?(?:[$€£¥]|(?:{_CURRENCY_CODES})\b)"
     ), None),

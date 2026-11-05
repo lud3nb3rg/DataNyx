@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 from . import extract, render
@@ -19,6 +20,7 @@ from .sources import SourceError, source_kinds
 from .text import (
     DEFAULT_MODEL,
     ENTITY_KINDS,
+    Detector,
     PatternDetector,
     SpacyDetector,
     anonymize_with_mapping,
@@ -125,6 +127,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Required so that real values can't land in an agent's view of stdout by default.
     back.add_argument("-o", "--output", required=True, help="file to write the restored text to")
 
+    doctor = commands.add_parser("doctor", help="check which optional packages and models are installed")
+    doctor.add_argument("--model", default=DEFAULT_MODEL, help="spaCy NER model to look for (default: %(default)s)")
+
     serve = commands.add_parser(
         "mcp",
         help="run an MCP server that gives an agent schemas and anonymized text, not data",
@@ -148,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        commands = {"mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
+        commands = {"doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
         return commands[args.command](args)
     except SourceError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -178,6 +183,35 @@ def _run_schema(args: argparse.Namespace) -> int:
     return 0
 
 
+_OPTIONAL = (
+    ("CSV, TSV, JSON, XML, SQLite", "sqlalchemy", "built in", None),
+    ("YAML", "yaml", "datanyx[yaml]", None),
+    ("Excel", "openpyxl", "datanyx[excel]", None),
+    ("Parquet", "pyarrow", "datanyx[parquet]", None),
+    ("Large JSON streaming", "ijson", "datanyx[streaming]", None),
+    ("MCP server", "mcp", "datanyx[mcp]", None),
+    ("PostgreSQL", "psycopg", "datanyx[postgres]", None),
+    ("MySQL / MariaDB", "pymysql", "datanyx[mysql]", None),
+    ("SQL Server", "pymssql", "datanyx[mssql]", None),
+    ("Oracle", "oracledb", "datanyx[oracle]", None),
+    ("Text anonymization", "spacy", "datanyx[text]", None),
+)
+
+
+def _run_doctor(args: argparse.Namespace) -> int:
+    import importlib.util
+
+    for label, module, install, _ in _OPTIONAL:
+        found = importlib.util.find_spec(module) is not None
+        print(f"{'ok     ' if found else 'missing'}  {label}" + ("" if found else f'  ->  pip install "{install}"'))
+    if importlib.util.find_spec("spacy") is not None:
+        import spacy.util
+
+        found = spacy.util.is_package(args.model)
+        print(f"{'ok     ' if found else 'missing'}  NER model {args.model}" + ("" if found else f"  ->  python -m spacy download {args.model}"))
+    return 0
+
+
 def _run_mcp(args: argparse.Namespace) -> int:
     from .mcp_server import run
 
@@ -188,7 +222,7 @@ def _run_mcp(args: argparse.Namespace) -> int:
 def _run_anonymize(args: argparse.Namespace) -> int:
     _check_paths_differ(args.input, args.output, args.mapping)
     text = _read_text(args.input)
-    detectors = [PatternDetector(), SpacyDetector(args.model)]
+    detectors: list[Detector] = [PatternDetector(), SpacyDetector(args.model)]
     output, mapping = anonymize_with_mapping(text, detectors, args.hide, args.keep, args.keep_entity)
 
     # Saved first: anonymized text that can't be restored is worth less than none.
@@ -228,17 +262,40 @@ def _write_text(path: str, text: str) -> None:
 
 def _write_mapping(path: str, mapping: dict[str, str]) -> None:
     # Placeholders are only meaningful for one run, so replacing an existing mapping
-    # would make earlier output impossible to restore. Mode 600 applies on POSIX only.
+    # would make earlier output impossible to restore. The file is created owner-only
+    # (mode 600 on POSIX), and restricted again below on Windows, before any data is written.
     def owner_only(file: str, flags: int) -> int:
         return os.open(file, flags, 0o600)
 
     try:
         with open(path, "x", encoding="utf-8", opener=owner_only) as stream:
+            _restrict_on_windows(path)
             json.dump(mapping, stream, ensure_ascii=False, indent=2)
     except FileExistsError:
         raise SourceError("the mapping file already exists; choose a new name") from None
     except OSError as error:
         raise SourceError(f"cannot write the mapping: {error.strerror}") from None
+
+
+def _restrict_on_windows(path: str) -> None:
+    """Leave only the current user with access, since `os.open` modes do nothing on Windows."""
+    if sys.platform != "win32":
+        return
+    user = os.environ.get("USERNAME", "")
+    domain = os.environ.get("USERDOMAIN", "")
+    account = rf"{domain}\{user}" if domain and user else user
+    try:
+        result = subprocess.run(
+            ["icacls", path, "/inheritance:r", "/grant:r", f"{account}:(R,W,D)"],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        restricted = result.returncode == 0 and bool(user)
+    except (OSError, subprocess.SubprocessError):
+        restricted = False
+    if not restricted:
+        print("note: couldn't restrict the mapping file's permissions; keep it somewhere private", file=sys.stderr)
 
 
 def _read_mapping(path: str) -> dict[str, str]:

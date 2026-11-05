@@ -10,8 +10,8 @@ from datanyx import SourceError
 from datanyx.cli import main
 from datanyx.text import (
     PatternDetector,
-    Span,
     SpacyDetector,
+    Span,
     anonymize,
     anonymize_with_mapping,
     restore,

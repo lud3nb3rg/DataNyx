@@ -5,8 +5,8 @@ from __future__ import annotations
 from ..privacy import KeyPolicy
 from ..schema import DataSchema
 from .base import Source, SourceError
-from .directory import describe_directory
 from .delimited_source import DelimitedSource
+from .directory import describe_directory
 from .excel_source import ExcelSource
 from .json_source import JsonLinesSource, JsonSource
 from .parquet_source import ParquetSource

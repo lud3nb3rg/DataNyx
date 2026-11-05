@@ -125,4 +125,4 @@ class _Builder:
 
 
 def _allows_null(node: Node) -> bool:
-    return isinstance(node, Null) or isinstance(node, Union) and any(isinstance(o, Null) for o in node.options)
+    return isinstance(node, Null) or (isinstance(node, Union) and any(isinstance(o, Null) for o in node.options))

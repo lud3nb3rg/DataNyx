@@ -44,7 +44,7 @@ def _entity(entity: Entity, name: str) -> str:
         columns, referenced = ", ".join(key.columns), ", ".join(key.referenced_columns)
         comments.append(f"// foreign key: {columns} -> {key.referenced_entity} ({referenced})")
     node = entity.node
-    head = "\n".join(comments + [""])[:-1] if comments else ""
+    head = "\n".join([*comments, ""])[:-1] if comments else ""
     prefix = head + "\n" if head else ""
     if isinstance(node, Object) and node.extra is None:
         return f"{prefix}export interface {name} {_object(node, 0)}"

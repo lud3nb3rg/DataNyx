@@ -42,17 +42,17 @@ class Observation:
     """What has been seen at one position in the data. Holds no values."""
 
     __slots__ = (
-        "seen",
-        "nulls",
-        "booleans",
-        "integers",
-        "floats",
-        "strings",
-        "string_formats",
         "arrays",
-        "items",
-        "objects",
+        "booleans",
         "fields",
+        "floats",
+        "integers",
+        "items",
+        "nulls",
+        "objects",
+        "seen",
+        "string_formats",
+        "strings",
     )
 
     def __init__(self) -> None:

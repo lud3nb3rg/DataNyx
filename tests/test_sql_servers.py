@@ -263,7 +263,7 @@ def test_only_structure_reaches_the_output(backend):
 
 def test_tables_and_hidden_names(backend):
     found = tables(extract(backend.admin_url))
-    assert VISIBLE_TABLES <= set(found)
+    assert set(found) >= VISIBLE_TABLES
     assert "dn_tenant_00123" not in found
     users = found["dn_users"].node
     assert users.extra is not None  # The email-shaped column is hidden, not lost.
@@ -317,13 +317,12 @@ def test_no_statement_reads_a_user_table(backend):
 def test_login_without_row_access_still_gets_the_schema(backend):
     prefix = f"{backend.reader_namespace}." if backend.reader_namespace else ""
     engine = engine_for(backend.reader_url)
-    with engine.connect() as connection:
-        with pytest.raises(sa.exc.DBAPIError):
-            connection.execute(sa.text(f"SELECT email FROM {prefix}dn_users")).fetchall()
+    with engine.connect() as connection, pytest.raises(sa.exc.DBAPIError):
+        connection.execute(sa.text(f"SELECT email FROM {prefix}dn_users")).fetchall()
     engine.dispose()
 
     found = tables(extract(backend.reader_url, namespace=backend.reader_namespace))
-    assert VISIBLE_TABLES <= set(found)
+    assert set(found) >= VISIBLE_TABLES
     assert "email" in found["dn_users"].node.fields
     assert found["dn_orders"].foreign_keys[0].referenced_entity == "dn_users"
 
@@ -352,7 +351,7 @@ def test_cli_reads_the_url_from_the_environment(backend, capsys, monkeypatch):
     assert main(["schema", "env:DN_TEST_URL"]) == 0
     captured = capsys.readouterr()
     assert PW not in captured.out + captured.err
-    assert VISIBLE_TABLES <= set(json.loads(captured.out)["$defs"])
+    assert set(json.loads(captured.out)["$defs"]) >= VISIBLE_TABLES
 
 
 def test_unrecognised_type_does_not_reveal_a_hidden_column_on_stderr():

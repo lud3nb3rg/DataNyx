@@ -70,7 +70,7 @@ def _column(name: str, field: Field) -> str:
 
 
 def _allows_null(node: Node) -> bool:
-    return isinstance(node, Null) or isinstance(node, Union) and any(isinstance(o, Null) for o in node.options)
+    return isinstance(node, Null) or (isinstance(node, Union) and any(isinstance(o, Null) for o in node.options))
 
 
 def _column_type(node: Node) -> str:

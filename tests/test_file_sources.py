@@ -315,3 +315,9 @@ def test_folder_with_sqlite_prefixes_table_names(tmp_path):
     assert sorted(e.name for e in result.entities) == ["shop.db#items", "shop.db#lines"]
     lines = next(e for e in result.entities if e.name.endswith("lines"))
     assert lines.foreign_keys[0].referenced_entity == "shop.db#items"
+
+
+def test_header_whitespace_does_not_unhide_a_name(tmp_path):
+    # "name " has a space, so it's hidden; stripping it first would have shown it.
+    path = write(tmp_path, "d.csv", f"{CANARY} ,id\n1,2\n")
+    assert CANARY not in render(extract(str(path)))

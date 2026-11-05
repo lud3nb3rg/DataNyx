@@ -22,3 +22,8 @@ dist/
 .env
 .env.*
 *.mapping.json
+.benchmarks/
+.coverage
+.mypy_cache/
+.ruff_cache/
+.hypothesis/

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
-from typing import Iterable
+from collections.abc import Iterable
 
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .schema import DataSchema
-from .text import DEFAULT_MODEL
 from .sources import Source, SourceError, describe_folder, resolve_source
+from .text import DEFAULT_MODEL
 
 __version__ = "0.1.0"
 
@@ -73,9 +73,9 @@ def anonymize_text(
 
     Needs `datanyx[text]` and a spaCy model. Best effort: review the result.
     """
-    from .text import PatternDetector, SpacyDetector, anonymize
+    from .text import Detector, PatternDetector, SpacyDetector, anonymize
 
-    detectors = [PatternDetector(), SpacyDetector(model)]
+    detectors: list[Detector] = [PatternDetector(), SpacyDetector(model)]
     return anonymize(text, detectors, hide, keep, keep_entity)
 
 

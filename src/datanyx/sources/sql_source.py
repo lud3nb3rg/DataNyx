@@ -16,9 +16,10 @@ import os
 import re
 import sqlite3
 import warnings
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine, Inspector, make_url
@@ -83,7 +84,7 @@ _TYPE_DETAILS = re.compile(r"\s(COLLATE|CHARACTER SET|CHARSET)\s.*$", re.IGNOREC
 @dataclass(frozen=True)
 class _Table:
     name: str
-    columns: list[dict]
+    columns: Sequence[Mapping[str, Any]]
     visible: frozenset[str]
     key_columns: frozenset[str]
     primary_key: tuple[str, ...]  # Empty when the key involves a hidden column.
@@ -235,7 +236,7 @@ def _read_foreign_keys(
 
 
 def _resolve_foreign_key(
-    key: dict, table: _Table, tables: dict[str, _Table], namespace: str | None
+    key: Mapping[str, Any], table: _Table, tables: dict[str, _Table], namespace: str | None
 ) -> ForeignKey | None:
     """Build the key, or return None if any part of it must stay hidden.
 
@@ -251,7 +252,11 @@ def _resolve_foreign_key(
     targets = [_find_name(referenced.visible, name) for name in key["referred_columns"]]
     if not targets or None in sources or None in targets or len(sources) != len(targets):
         return None
-    return ForeignKey(tuple(sources), referenced_name, tuple(targets))
+    return ForeignKey(
+        tuple(name for name in sources if name is not None),
+        referenced_name,
+        tuple(name for name in targets if name is not None),
+    )
 
 
 def _find_name(names: Iterable[str], wanted: str) -> str | None:
@@ -272,7 +277,7 @@ def _build_entity(
     notes: list[str],
 ) -> Entity:
     fields = {}
-    hidden: list[dict] = []
+    hidden: list[Mapping[str, Any]] = []
     for column in table.columns:
         if column["name"] in table.visible:
             native = _native_type(column["type"], engine)
@@ -292,7 +297,7 @@ def _build_entity(
     return Entity(table.name, Object(fields, extra, key_format), table.primary_key, foreign_keys)
 
 
-def _column_node(column: dict, table: _Table, enforced: bool) -> Node:
+def _column_node(column: Mapping[str, Any], table: _Table, enforced: bool) -> Node:
     node = _type_node(column["type"], enforced)
     in_key = column["name"] in table.key_columns
     if not column.get("nullable", True) or in_key or isinstance(node, Unknown):

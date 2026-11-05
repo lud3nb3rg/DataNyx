@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import re
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import IO, Iterator
+from typing import IO
 
 from ..inference import Observation
 from ..schema import Array, DataSchema, Entity, Node
@@ -99,8 +100,10 @@ def column_names(header: list[object]) -> list[str]:
     names: list[str] = []
     seen: set[str] = set()
     for position, cell in enumerate(header, start=1):
-        name = "" if cell is None else str(cell).strip()
-        name = name or f"column_{position}"
+        # Not stripped: "name " has a space, which the privacy rules read as data. Trimming
+        # it first would turn a hidden name into a plain one.
+        name = "" if cell is None else str(cell)
+        name = name if name.strip() else f"column_{position}"
         base, suffix = name, 2
         while name in seen:
             name, suffix = f"{base}_{suffix}", suffix + 1

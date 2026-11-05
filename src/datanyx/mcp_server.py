@@ -15,8 +15,8 @@ out on purpose:
 from __future__ import annotations
 
 import functools
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Sequence
 
 from . import extract, render
 from .privacy import KeyPolicy
@@ -66,10 +66,10 @@ class Access:
 def _tool_error() -> type[Exception]:
     """The exception type whose message the MCP library passes on to the agent."""
     try:
-        from mcp.server.mcpserver.exceptions import ToolError  # mcp 2.x
+        from mcp.server.mcpserver.exceptions import ToolError  # type: ignore[import-not-found]  # mcp 2.x
     except ImportError:
         try:
-            from mcp.server.fastmcp.exceptions import ToolError  # mcp 1.x
+            from mcp.server.fastmcp.exceptions import ToolError  # type: ignore[no-redef]  # mcp 1.x
         except ImportError:
             return ValueError
     return ToolError
@@ -102,10 +102,10 @@ def create_server(
 ):
     """Build the server. `keep_entity` is the user's choice, set when starting it."""
     try:
-        from mcp.server.mcpserver import MCPServer as Server  # mcp 2.x
+        from mcp.server.mcpserver import MCPServer as Server  # type: ignore[import-not-found]  # mcp 2.x
     except ImportError:
         try:
-            from mcp.server.fastmcp import FastMCP as Server  # mcp 1.x
+            from mcp.server.fastmcp import FastMCP as Server  # type: ignore[no-redef,attr-defined]  # mcp 1.x
         except ImportError:
             raise SourceError("the MCP server needs the mcp package; install datanyx[mcp]") from None
 

@@ -9,7 +9,7 @@ spans are merged, so no part of a detected span can survive.
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from collections.abc import Iterable
 
 from .detectors import PERSON, TERM, Detector, Span
 

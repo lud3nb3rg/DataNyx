@@ -6,8 +6,8 @@ import pytest
 
 pytest.importorskip("mcp")
 
-from datanyx import SourceError, anonymize_text, schema_of  # noqa: E402
-from datanyx.mcp_server import Access, create_server  # noqa: E402
+from datanyx import SourceError, anonymize_text, schema_of
+from datanyx.mcp_server import Access, create_server
 
 CANARY = "zq-canary-value"
 

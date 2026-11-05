@@ -7,8 +7,7 @@ import re
 
 # Attributes of a Pydantic model: a field with one of these names would shadow it.
 _PYDANTIC_RESERVED = frozenset(
-    "copy dict json schema schema_json validate construct fields from_orm parse_obj parse_raw "
-    "parse_file update_forward_refs".split()
+    ["copy", "dict", "json", "schema", "schema_json", "validate", "construct", "fields", "from_orm", "parse_obj", "parse_raw", "parse_file", "update_forward_refs"]
 )
 
 

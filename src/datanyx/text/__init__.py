@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from .anonymizer import anonymize, anonymize_with_mapping, restore, unknown_placeholders
-from .detectors import DEFAULT_MODEL, ENTITY_KINDS, Detector, PatternDetector, Span, SpacyDetector
+from .detectors import DEFAULT_MODEL, ENTITY_KINDS, Detector, PatternDetector, SpacyDetector, Span
 
 __all__ = [
     "DEFAULT_MODEL",
     "ENTITY_KINDS",
     "Detector",
     "PatternDetector",
-    "Span",
     "SpacyDetector",
+    "Span",
     "anonymize",
     "anonymize_with_mapping",
     "restore",

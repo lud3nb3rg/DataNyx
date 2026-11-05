@@ -8,9 +8,9 @@ other file is called `file_N`, where N is its place in the sorted listing.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import replace
 from itertools import combinations
-from typing import Mapping
 
 from ..privacy import KeyPolicy
 from ..schema import Array, DataSchema, Entity, ForeignKey, Node, Object

@@ -86,6 +86,8 @@ def _parse(data: bytes) -> dict[str, object]:
         raise SourceError(f"invalid XML at line {parser.ErrorLineNumber}, column {parser.ErrorColumnNumber + 1}") from None
     except RecursionError:
         raise SourceError("input is too deeply nested") from None
+    if builder.root is None:
+        raise SourceError("input has no root element")
     name, value = builder.root
     return {name: value}
 

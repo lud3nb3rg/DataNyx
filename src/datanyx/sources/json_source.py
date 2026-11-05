@@ -59,7 +59,7 @@ class JsonLinesSource(Source):
         with open_text(target) as stream:
             line_number = 0
             try:
-                for line_number, line in enumerate(stream, start=1):
+                for line_number, line in enumerate(stream, start=1):  # noqa: B007
                     if line.strip():
                         root.observe_item(json.loads(line))
             except json.JSONDecodeError as error:
