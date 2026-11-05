@@ -1,0 +1,62 @@
+# Real database servers for tests/test_sql_servers.py. Test use only: the passwords
+# are throwaway, ports bind to localhost, and nothing is kept between runs.
+name: datanyx-tests
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: datanyx-test-Pw1
+      POSTGRES_DB: datanyx
+    ports: ["127.0.0.1:55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d datanyx"]
+      interval: 3s
+      retries: 40
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: datanyx-test-Pw1
+      MYSQL_DATABASE: datanyx
+    ports: ["127.0.0.1:53306:3306"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -uroot -pdatanyx-test-Pw1 -e 'SELECT 1'"]
+      interval: 5s
+      retries: 40
+
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: datanyx-test-Pw1
+      MARIADB_DATABASE: datanyx
+    ports: ["127.0.0.1:53307:3306"]
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 5s
+      retries: 40
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: datanyx-test-Pw1
+      MSSQL_PID: Developer
+    ports: ["127.0.0.1:51433:1433"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P datanyx-test-Pw1 -Q 'SELECT 1'"]
+      interval: 5s
+      retries: 40
+
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    environment:
+      ORACLE_PASSWORD: datanyx-test-Pw1
+      APP_USER: datanyx
+      APP_USER_PASSWORD: datanyx-test-Pw1
+    ports: ["127.0.0.1:51521:1521"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      retries: 60

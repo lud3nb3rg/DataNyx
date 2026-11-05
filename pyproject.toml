@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datanyx"
+version = "0.1.0"
+description = "Turn sensitive data into a value-free schema that AI agents can work from."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["sqlalchemy>=2"]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.1"]
+mysql = ["pymysql>=1.1", "cryptography"]
+mssql = ["pymssql>=2.3"]
+oracle = ["oracledb>=2"]
+all = ["datanyx[postgres,mysql,mssql,oracle]"]
+dev = ["pytest>=8", "datanyx[all]"]
+
+[project.scripts]
+datanyx = "datanyx.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["server: needs a real database server, started from tests/docker-compose.yml"]
