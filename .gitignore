@@ -17,3 +17,4 @@ dist/
 *.ndjson
 .env
 .env.*
+*.mapping.json

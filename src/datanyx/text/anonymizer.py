@@ -22,6 +22,9 @@ _PARTICLES = {
 }
 
 
+_PLACEHOLDER = re.compile(r"<[A-Z_]+_\d+>")
+
+
 def anonymize(
     text: str,
     detectors: Iterable[Detector],
@@ -34,6 +37,32 @@ def anonymize(
     hide_terms: strings to always hide, ignoring case.
     keep_terms: exact strings to leave visible, even if detected.
     keep_kinds: entity kinds to leave visible, such as "DATE".
+    """
+    return anonymize_with_mapping(text, detectors, hide_terms, keep_terms, keep_kinds)[0]
+
+
+def restore(text: str, mapping: dict[str, str]) -> str:
+    """Put real values back in place of placeholders; unknown placeholders stay as they are."""
+    return _PLACEHOLDER.sub(lambda match: mapping.get(match.group(), match.group()), text)
+
+
+def unknown_placeholders(text: str, mapping: dict[str, str]) -> list[str]:
+    """Placeholders in `text` with no value in `mapping`, such as ones an agent invented."""
+    return sorted(set(_PLACEHOLDER.findall(text)) - set(mapping))
+
+
+def anonymize_with_mapping(
+    text: str,
+    detectors: Iterable[Detector],
+    hide_terms: Iterable[str] = (),
+    keep_terms: Iterable[str] = (),
+    keep_kinds: Iterable[str] = (),
+) -> tuple[str, dict[str, str]]:
+    """Like `anonymize`, also returning each placeholder's real value.
+
+    The mapping holds the very data being hidden, so it must stay out of an agent's reach.
+    A placeholder used for several forms of a name maps to the longest, so "Ms. <PERSON_1>"
+    restores as "Ms. Jessica Whitfield" even if the original said "Ms. Whitfield".
     """
     keep_terms = set(keep_terms)
     keep_kinds = set(keep_kinds)
@@ -137,23 +166,36 @@ def _merge(spans: list[Span]) -> list[Span]:
     return merged
 
 
-def _replace(text: str, spans: list[Span]) -> str:
+def _replace(text: str, spans: list[Span]) -> tuple[str, dict[str, str]]:
     identities = _person_identities(text, spans)
-    numbers: dict[tuple[str, str], int] = {}
+    placeholders: dict[tuple[str, str], str] = {}
     counters: dict[str, int] = {}
+    mapping: dict[str, str] = {}
     output: list[str] = []
     position = 0
     for span in spans:
         surface = _normalize(text[span.start : span.end])
         key = (span.kind, identities.get(surface, surface) if span.kind == PERSON else surface)
-        if key not in numbers:
-            counters[span.kind] = counters.get(span.kind, 0) + 1
-            numbers[key] = counters[span.kind]
+        if key not in placeholders:
+            placeholders[key] = _next_placeholder(span.kind, counters, text)
+        placeholder = placeholders[key]
+        value = " ".join(text[span.start : span.end].split())
+        if len(value) > len(mapping.get(placeholder, "")):
+            mapping[placeholder] = value
         output.append(text[position : span.start])
-        output.append(f"<{span.kind}_{numbers[key]}>")
+        output.append(placeholder)
         position = span.end
     output.append(text[position:])
-    return "".join(output)
+    return "".join(output), mapping
+
+
+def _next_placeholder(kind: str, counters: dict[str, int], text: str) -> str:
+    # Skip any number the text already uses literally, or restoring would replace it.
+    while True:
+        counters[kind] = counters.get(kind, 0) + 1
+        placeholder = f"<{kind}_{counters[kind]}>"
+        if placeholder not in text:
+            return placeholder
 
 
 def _person_identities(text: str, spans: list[Span]) -> dict[str, str]:
@@ -170,4 +212,4 @@ def _normalize(surface: str) -> str:
     return " ".join(surface.split()).casefold()
 
 
-__all__ = ["anonymize"]
+__all__ = ["anonymize", "anonymize_with_mapping", "restore", "unknown_placeholders"]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .anonymizer import anonymize
+from .anonymizer import anonymize, anonymize_with_mapping, restore, unknown_placeholders
 from .detectors import DEFAULT_MODEL, ENTITY_KINDS, Detector, PatternDetector, Span, SpacyDetector
 
 __all__ = [
@@ -13,4 +13,7 @@ __all__ = [
     "Span",
     "SpacyDetector",
     "anonymize",
+    "anonymize_with_mapping",
+    "restore",
+    "unknown_placeholders",
 ]

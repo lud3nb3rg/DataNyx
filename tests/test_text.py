@@ -1,5 +1,6 @@
 """Text anonymization without an NER model, using a stand-in detector. Synthetic data only."""
 
+import json
 import re
 import sys
 
@@ -7,7 +8,15 @@ import pytest
 
 from datanyx import SourceError
 from datanyx.cli import main
-from datanyx.text import PatternDetector, Span, SpacyDetector, anonymize
+from datanyx.text import (
+    PatternDetector,
+    Span,
+    SpacyDetector,
+    anonymize,
+    anonymize_with_mapping,
+    restore,
+    unknown_placeholders,
+)
 from datanyx.text.detectors import _CHUNK_CHARS, _split_chunks, recase_for_ner
 
 
@@ -271,7 +280,7 @@ def test_cli_refuses_to_overwrite_the_input(tmp_path, capsys, fake_model):
     path = tmp_path / "a.txt"
     path.write_text("Jane Doe", encoding="utf-8")
     assert main(["anonymize", str(path), "-o", str(path)]) == 1
-    assert "overwrite" in capsys.readouterr().err
+    assert "different files" in capsys.readouterr().err
     assert path.read_text(encoding="utf-8") == "Jane Doe"
 
 
@@ -297,3 +306,117 @@ def test_cli_failures_report_only_the_error_type(tmp_path, capsys, monkeypatch):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "ValueError" in captured.err and "CANARY" not in captured.err
+
+
+def test_mapping_holds_each_placeholders_real_value():
+    ner = FakeNer(PERSON=["Jane Doe"])
+    output, mapping = anonymize_with_mapping("Jane Doe, jane@x.example. Ms. Doe left.", [PatternDetector(), ner])
+    assert output == "<PERSON_1>, <EMAIL_1>. Ms. <PERSON_1> left."
+    assert mapping == {"<PERSON_1>": "Jane Doe", "<EMAIL_1>": "jane@x.example"}
+
+
+def test_restore_round_trip():
+    ner = FakeNer(PERSON=["Jane Doe"])
+    text = "Jane Doe wrote from jane@x.example on 2024-01-02.\n"
+    output, mapping = anonymize_with_mapping(text, [PatternDetector(), ner])
+    assert restore(output, mapping) == text
+
+
+def test_restore_works_on_text_an_agent_rewrote():
+    mapping = {"<PERSON_1>": "Jane Doe", "<ORG_1>": "Acme"}
+    edited = "Summary: <PERSON_1> left <ORG_1>. <PERSON_1>'s manager agreed."
+    assert restore(edited, mapping) == "Summary: Jane Doe left Acme. Jane Doe's manager agreed."
+
+
+def test_restore_leaves_unknown_placeholders_and_reports_them():
+    text = "<PERSON_1> met <PERSON_9>"
+    mapping = {"<PERSON_1>": "Jane"}
+    assert restore(text, mapping) == "Jane met <PERSON_9>"
+    assert unknown_placeholders(text, mapping) == ["<PERSON_9>"]
+
+
+def test_restore_does_not_expand_placeholders_inside_values():
+    assert restore("<TERM_1>", {"<TERM_1>": "<TERM_2>", "<TERM_2>": "x"}) == "<TERM_2>"
+
+
+def test_placeholder_numbers_avoid_ones_already_in_the_text():
+    text = "Literal <EMAIL_1> and a@b.example"
+    output, mapping = anonymize_with_mapping(text, [PatternDetector()])
+    assert output == "Literal <EMAIL_1> and <EMAIL_2>"
+    assert "<EMAIL_1>" not in mapping
+    assert restore(output, mapping) == text
+
+
+def write_input(tmp_path, data=b"Jane Doe, jane@x.example\n"):
+    path = tmp_path / "in.txt"
+    path.write_bytes(data)
+    return str(path)
+
+
+def test_cli_saves_a_mapping_and_restores_from_it(tmp_path, capsys, fake_model):
+    source = write_input(tmp_path)
+    clean = tmp_path / "clean.txt"
+    saved = tmp_path / "a.mapping.json"
+    back = tmp_path / "back.txt"
+    assert main(["anonymize", source, "-o", str(clean), "--mapping", str(saved)]) == 0
+    assert json.loads(saved.read_text(encoding="utf-8")) == {
+        "<PERSON_1>": "Jane Doe",
+        "<EMAIL_1>": "jane@x.example",
+    }
+    assert main(["restore", str(clean), "--mapping", str(saved), "-o", str(back)]) == 0
+    assert back.read_bytes() == b"Jane Doe, jane@x.example\n"
+    captured = capsys.readouterr()
+    assert "Jane" not in captured.out + captured.err
+
+
+def test_cli_writes_no_mapping_unless_asked(tmp_path, fake_model):
+    source = write_input(tmp_path)
+    before = set(tmp_path.iterdir())
+    assert main(["anonymize", source, "-o", str(tmp_path / "clean.txt")]) == 0
+    assert set(tmp_path.iterdir()) - before == {tmp_path / "clean.txt"}
+
+
+def test_cli_refuses_to_replace_an_existing_mapping(tmp_path, capsys, fake_model):
+    saved = tmp_path / "a.mapping.json"
+    saved.write_text('{"<PERSON_1>": "Earlier"}', encoding="utf-8")
+    clean = tmp_path / "clean.txt"
+    assert main(["anonymize", write_input(tmp_path), "-o", str(clean), "--mapping", str(saved)]) == 1
+    assert "already exists" in capsys.readouterr().err
+    assert json.loads(saved.read_text(encoding="utf-8")) == {"<PERSON_1>": "Earlier"}
+    assert not clean.exists()
+
+
+def test_cli_refuses_a_mapping_that_is_the_input_or_output(tmp_path, capsys, fake_model):
+    source = write_input(tmp_path)
+    assert main(["anonymize", source, "--mapping", source]) == 1
+    assert (tmp_path / "in.txt").read_bytes().startswith(b"Jane")
+    capsys.readouterr()
+
+
+def test_restore_requires_an_output_file(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        main(["restore", write_input(tmp_path), "--mapping", "m.json"])
+    assert "Jane" not in capsys.readouterr().out
+
+
+def test_restore_reports_unknown_placeholders_without_real_values(tmp_path, capsys):
+    source = write_input(tmp_path, b"<PERSON_1> and <PERSON_2>")
+    saved = tmp_path / "m.json"
+    saved.write_text('{"<PERSON_1>": "CANARY"}', encoding="utf-8")
+    assert main(["restore", source, "--mapping", str(saved), "-o", str(tmp_path / "out.txt")]) == 0
+    captured = capsys.readouterr()
+    assert "<PERSON_2>" in captured.err
+    assert "CANARY" not in captured.out + captured.err
+
+
+@pytest.mark.parametrize("content", ['{"<PERSON_1>": CANARY', '["CANARY"]', '{"<PERSON_1>": 5}'])
+def test_bad_mapping_errors_do_not_quote_it(tmp_path, capsys, content):
+    source = write_input(tmp_path, b"<PERSON_1>")
+    saved = tmp_path / "m.json"
+    saved.write_text(content, encoding="utf-8")
+    target = tmp_path / "out.txt"
+    assert main(["restore", source, "--mapping", str(saved), "-o", str(target)]) == 1
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: the mapping file")
+    assert "CANARY" not in captured.out + captured.err
+    assert not target.exists()

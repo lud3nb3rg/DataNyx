@@ -8,6 +8,7 @@ or exception message could quote the data being processed.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -15,7 +16,15 @@ from . import extract, render
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .sources import SourceError, source_kinds
-from .text import DEFAULT_MODEL, ENTITY_KINDS, PatternDetector, SpacyDetector, anonymize
+from .text import (
+    DEFAULT_MODEL,
+    ENTITY_KINDS,
+    PatternDetector,
+    SpacyDetector,
+    anonymize_with_mapping,
+    restore,
+    unknown_placeholders,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,13 +103,32 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TERM",
         help="leave this exact term visible even if detected (repeatable)",
     )
+    text.add_argument(
+        "--mapping",
+        metavar="FILE",
+        help=(
+            "also save each placeholder's real value to this new JSON file, for use with "
+            "`datanyx restore`. It holds the sensitive data: keep it away from agents"
+        ),
+    )
+
+    back = commands.add_parser(
+        "restore",
+        help="put real values back in place of placeholders, using a saved mapping",
+        description="Put real values back. The result is sensitive, so don't run this through an agent.",
+    )
+    back.add_argument("input", help='UTF-8 text containing placeholders, or "-" for stdin')
+    back.add_argument("--mapping", required=True, metavar="FILE", help="file saved by `anonymize --mapping`")
+    # Required so that real values can't land in an agent's view of stdout by default.
+    back.add_argument("-o", "--output", required=True, help="file to write the restored text to")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        return _run_anonymize(args) if args.command == "anonymize" else _run_schema(args)
+        commands = {"anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
+        return commands[args.command](args)
     except SourceError as error:
         print(f"error: {error}", file=sys.stderr)
     except RecursionError:
@@ -130,21 +158,73 @@ def _run_schema(args: argparse.Namespace) -> int:
 
 
 def _run_anonymize(args: argparse.Namespace) -> int:
-    if args.output and args.input != "-" and _same_file(args.input, args.output):
-        # The original couldn't be recovered, and detection might have been imperfect.
-        raise SourceError("the output file would overwrite the input")
+    _check_paths_differ(args.input, args.output, args.mapping)
     text = _read_text(args.input)
     detectors = [PatternDetector(), SpacyDetector(args.model)]
-    output = anonymize(text, detectors, args.hide, args.keep, args.keep_entity)
+    output, mapping = anonymize_with_mapping(text, detectors, args.hide, args.keep, args.keep_entity)
 
+    # Saved first: anonymized text that can't be restored is worth less than none.
+    if args.mapping:
+        _write_mapping(args.mapping, mapping)
     if args.output:
-        with open(args.output, "w", encoding="utf-8", newline="") as stream:
-            stream.write(output)
+        _write_text(args.output, output)
     else:
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8", newline="")
         sys.stdout.write(output)
     return 0
+
+
+def _run_restore(args: argparse.Namespace) -> int:
+    _check_paths_differ(args.input, args.output, args.mapping)
+    text = _read_text(args.input)
+    mapping = _read_mapping(args.mapping)
+    unknown = unknown_placeholders(text, mapping)
+    if unknown:
+        print(f"note: not in the mapping, left as they are: {', '.join(unknown)}", file=sys.stderr)
+    _write_text(args.output, restore(text, mapping))
+    return 0
+
+
+def _check_paths_differ(*paths: str | None) -> None:
+    """Refuse to overwrite an original, which couldn't be recovered afterwards."""
+    real = [path for path in paths if path and path != "-"]
+    if any(_same_file(a, b) for index, a in enumerate(real) for b in real[index + 1 :]):
+        raise SourceError("the input, output and mapping must be different files")
+
+
+def _write_text(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8", newline="") as stream:
+        stream.write(text)
+
+
+def _write_mapping(path: str, mapping: dict[str, str]) -> None:
+    # Placeholders are only meaningful for one run, so replacing an existing mapping
+    # would make earlier output impossible to restore. Mode 600 applies on POSIX only.
+    def owner_only(file: str, flags: int) -> int:
+        return os.open(file, flags, 0o600)
+
+    try:
+        with open(path, "x", encoding="utf-8", opener=owner_only) as stream:
+            json.dump(mapping, stream, ensure_ascii=False, indent=2)
+    except FileExistsError:
+        raise SourceError("the mapping file already exists; choose a new name") from None
+    except OSError as error:
+        raise SourceError(f"cannot write the mapping: {error.strerror}") from None
+
+
+def _read_mapping(path: str) -> dict[str, str]:
+    # Every failure message is fixed, since a mapping's content is sensitive by nature.
+    try:
+        with open(path, encoding="utf-8") as stream:
+            mapping = json.load(stream)
+    except OSError as error:
+        raise SourceError(f"cannot read the mapping: {error.strerror}") from None
+    except ValueError:
+        raise SourceError("the mapping file isn't valid JSON") from None
+    if not isinstance(mapping, dict) or not all(isinstance(v, str) for v in mapping.values()):
+        raise SourceError("the mapping file isn't in the expected format")
+    return mapping
 
 
 def _read_text(target: str) -> str:

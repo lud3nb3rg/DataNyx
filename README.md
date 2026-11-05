@@ -131,6 +131,7 @@ are preserved.
 | `--hide` | Always hide this term, ignoring case (repeatable) |
 | `--keep` | Leave this exact term visible (repeatable) |
 | `--keep-entity` | Leave a kind of entity visible, such as `DATE` (repeatable) |
+| `--mapping` | Also save each placeholder's real value to a new file ([details](#restoring-real-values)) |
 
 **What it hides:**
 
@@ -146,6 +147,30 @@ doesn't fall back to patterns alone, because names would pass through unnoticed.
 Use `--hide` for names you already know, such as your company or clients: it's the one
 reliable way to catch them. Run it yourself rather than through an agent, since the term
 is on the command line.
+
+### Restoring real values
+
+If an agent writes something using placeholders, you can put the real values back. This
+is opt-in, and no mapping is saved unless you ask for one:
+
+```sh
+datanyx anonymize notes.txt -o clean.txt --mapping notes.mapping.json
+# ...the agent works from clean.txt and writes summary.txt...
+datanyx restore summary.txt --mapping notes.mapping.json -o summary.real.txt
+```
+
+**The mapping file holds the data you're hiding, in plain text.** Treat it like the
+original: keep it where the agent can't read it, and delete it when you're finished. Don't
+run `restore` through an agent either. It requires `-o`, so real values don't appear in
+the command's output, but an agent could still open the result.
+
+- `*.mapping.json` is ignored by git here, so use that ending.
+- An existing mapping is never replaced, since placeholders only mean something for the run
+  that made them. Use a new file for each run.
+- A placeholder covers every form of a name and restores to the longest, so `Ms. <PERSON_1>`
+  becomes `Ms. Jessica Whitfield` even if the original said `Ms. Whitfield`.
+- Placeholders not in the mapping, such as ones an agent invented, are left as they are and
+  listed in a note. The mapping's file permissions are restricted on Linux and macOS only.
 
 ### How reliable text anonymization is
 
@@ -308,10 +333,13 @@ print(render(schema))
 ```
 
 ```python
-from datanyx.text import PatternDetector, SpacyDetector, anonymize
+from datanyx.text import PatternDetector, SpacyDetector, anonymize, anonymize_with_mapping, restore
 
 detectors = [PatternDetector(), SpacyDetector("en_core_web_lg")]
 print(anonymize("Jessica Whitfield called.", detectors, hide_terms=["Acme"]))
+
+clean, mapping = anonymize_with_mapping("Jessica Whitfield called.", detectors)
+print(restore(clean, mapping))
 ```
 
 Failures raise `SourceError`, with a message that's safe to show.
