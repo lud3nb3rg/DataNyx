@@ -21,6 +21,7 @@ and replaces names and identifiers in free text with placeholders.
 [Scanning](#scanning-a-folder-before-sharing-it) ·
 [Team settings](#team-settings) ·
 [Documents](#folders-documents-and-streams) ·
+[Detection quality](#measuring-and-improving-detection) ·
 [Pseudonymizing](#pseudonymizing-tables) ·
 [Schema diff](#watching-a-data-feed-for-changes) ·
 [Text anonymization](#text-anonymization) ·
@@ -114,6 +115,9 @@ The same person keeps the same placeholder, so the agent can still follow who di
   only a scrubbed error and the size of the output, so it can fix its own bugs.
 - **Code checking.** `datanyx check` finds misspelled columns, unknown tables, ambiguous joins and
   type mistakes in SQL and pandas code from the schema alone, before anything runs.
+- **Detection you can measure and extend.** `datanyx eval` reports how much of your own labelled text is
+  hidden, by kind. Domain packs (healthcare, finance), several language models at once, and optional
+  Presidio, GLiNER or local-LLM backends are there to improve what it finds.
 - **Documents, folders and streams.** `datanyx anonymize` takes a whole folder with one set of
   placeholders, reads HTML, email, Word, PDF, WhatsApp and Slack exports as well as text, and can
   work on a stream as it arrives (`tail -f app.log | datanyx anonymize - --stream`).
@@ -174,7 +178,7 @@ Requires Python 3.10 or newer.
 | Text and documents (`anonymize`) | Text, HTML, `.eml`, `.docx`, `.pdf`, WhatsApp and Slack exports, a folder of them, or `-` for stdin | `.[text]`, plus a [model](#text-anonymization); PDF needs `.[pdf]` |
 
 Extras are installed as `pip install -e ".[yaml]"`, and `.[all]` installs every reader and
-driver. Large JSON files stream with `.[streaming]`, SQL checking needs `.[check]`, PDF needs `.[pdf]`, and the MCP server needs `.[mcp]`.
+driver. Large JSON files stream with `.[streaming]`, SQL checking needs `.[check]`, PDF needs `.[pdf]`, the Presidio backend needs `.[presidio]`, and the MCP server needs `.[mcp]`.
 Other SQLAlchemy URLs, such as `snowflake://`, should work if you install their dialect, but
 only the databases above are tested.
 
@@ -575,9 +579,11 @@ map_paths = ["$.users"]                  # hide every key under these paths
 keep_names = ["Order Details"]           # show names the rules hid
 
 [anonymize]
-model = "en_core_web_lg"
+model = "en_core_web_lg"                 # or models = ["en_core_web_lg", "fr_core_news_md"]
 keep_entities = ["DATE"]
 detectors = ["detectors/internal.toml"]  # custom detectors (below)
+packs = ["healthcare"]                   # detector packs for a field
+backends = ["presidio"]                  # another detector, run as well
 
 [scrub]
 allow = ["plan"]                         # quoted names to leave readable in errors
@@ -597,7 +603,7 @@ audit_log = "datanyx-audit.jsonl"
 | Section | Used by |
 |---|---|
 | `[schema]` | `schema`, `synth`, `check`, `diff`, and `scrub --names-from` |
-| `[anonymize]` | `anonymize`, `scrub` (the `hide` terms), and the MCP server's `anonymize_file` |
+| `[anonymize]` | `anonymize`, `scrub` (the `hide` terms), `scan`, `eval`, `pseudonymize`'s free text, and the MCP server's `anonymize_file` |
 | `[scrub]` | `scrub` and `run` |
 | `[scan]` | `scan` |
 | `[mcp]` | `datanyx mcp` |
@@ -837,6 +843,89 @@ templates. It's a small synthetic test, not a real-world accuracy figure:
 - **Model labels differ.** French models have no `DATE` or `MONEY` label, so those rely on
   patterns. `fr_core_news_md` is the only non-English model tested.
 
+### Measuring and improving detection
+
+The accuracy table above is for invented names in invented sentences. What matters is *your* text, your
+names and your languages, so measure that. Label a sample (a few dozen documents is enough to see the
+pattern) and run `datanyx eval`:
+
+```json
+[
+  {"name": "ticket 12",
+   "text": "Jessica Whitfield wrote from jw@acme.io about the Leeds branch.",
+   "sensitive": {"PERSON": ["Jessica Whitfield"], "EMAIL": ["jw@acme.io"], "LOCATION": ["Leeds"]}},
+  {"text": "Call Ana on 555 0100", "spans": [{"start": 5, "end": 8, "kind": "PERSON"}]}
+]
+```
+
+```console
+$ datanyx eval labelled.json
+Evaluated 7 documents, 60 labelled strings.
+
+Kind             Strings  Hidden  Partly  Missed   Recall
+ADDRESS                2       2       0       0   100.0%
+EMAIL                  2       2       0       0   100.0%
+LOCATION               7       7       0       0   100.0%
+ORG                    6       6       0       0   100.0%
+PERSON                24      24       0       0   100.0%
+...                  (more kinds, abridged here)
+Overall               60      60       0       0   100.0%
+
+Replaced but not in your labels: 9 (DATE 7, ORG 2). That is over-hiding, or something the labels left out.
+```
+
+Each document is anonymized on its own, as `anonymize` does, with the same models, packs, backends,
+custom detectors and settings it would use, so a result is what you would really get. A string counts as
+**hidden** when none of its identifying words survives, **partly hidden** when some do, and **missed**
+when all do. Titles ("Dr.") and joining words aren't identifying, and matching is by exact case, so the
+name "Will Turner" isn't leaked by an ordinary "will". Labels can be strings or character spans, in a JSON
+list, an object with `documents`, or JSON Lines.
+
+| Option | Purpose |
+|---|---|
+| `--show-misses` | List what wasn't fully hidden. These are strings from your file: read them yourself |
+| `--kind KIND` | Only measure this kind (repeatable) |
+| `--no-ner` | Leave out the name models and backends, to see what patterns alone find |
+| `--min-recall 0.95` | Exit with 1 if recall, overall or for any kind, is lower: a gate for CI |
+| `--format json` | For scripts |
+
+Run it again with another `--model`, a `--backend` or a `--pack` to compare. The same label file is
+the fair way to choose between them. A few dozen strings can't promise a rate, but 0% and 100% are
+informative, and `--show-misses` shows what the gaps look like.
+
+**Several languages.** `--model en_core_web_lg --model fr_core_news_md` (or `models = [...]` in the
+config) runs several spaCy models and merges what they find. `xx_ent_wiki_sm` is a small multilingual
+model, with less accuracy than the language-specific ones.
+
+**Packs** add detectors for fields whose formats have rules. Use `--pack healthcare`, `--pack finance`
+or `packs = ["healthcare"]` in the config. Where a format has a check digit it is verified, so a random
+run of digits isn't mistaken for an account, and labelled fields need a label or a digit:
+"member id: pending" isn't a member id.
+
+| Pack | Finds |
+|---|---|
+| `healthcare` | The HIPAA Safe Harbor identifiers that have a form: patient and provider names after "Patient:" or "Dr.", SSN, medical record numbers, health plan and member numbers, NPI and DEA numbers (check digits verified), vehicle (VIN) and device identifiers, ZIP codes after a state, ages over 89, fax numbers |
+| `finance` | Account numbers, routing numbers (checksum verified), SWIFT/BIC codes, sort codes, ISINs (check digit verified), EIN and tax ids, UK National Insurance numbers, VAT numbers, SSNs, crypto wallet addresses |
+
+Dates, phone numbers, emails, URLs, IP addresses, card numbers and IBANs are found by the general detectors.
+A pack helps with de-identification but isn't a certification that a text meets any standard, and it
+finds identifiers, not meaning: a diagnosis, or a description that points at one person, isn't something a
+pattern sees. Scanning with a pack counts its kinds by default, and `--keep-entity SSN` leaves one visible.
+
+**Backends** run another detector beside the built-in ones and merge the results. Choose them with
+`--backend` (repeatable) or `backends = [...]`:
+
+| Backend | What it adds |
+|---|---|
+| `presidio[:LANG[:MODEL]]` | Microsoft Presidio's recognisers for many national ids and formats. Needs `.[presidio]` and a spaCy model for the language (`presidio:de:de_core_news_lg`) |
+| `gliner[:MODEL]` | A GLiNER model for personal data, useful for names the spaCy models miss and for languages they don't cover. Needs `pip install gliner`; the model downloads once from Hugging Face, and the text itself never leaves your machine |
+| `ollama[:MODEL[@URL]]` | A language model running on this computer through Ollama, asked to quote what is sensitive in each passage |
+
+The Ollama backend **refuses any server that isn't on this computer**: sending sensitive text to a remote
+model would defeat the purpose. A language model can also invent findings or miss real ones, and a backend
+that is slow or wrong costs you time, so compare each with `datanyx eval` before relying on it. `datanyx
+doctor` shows which backends are installed.
+
 ## Pseudonymizing tables
 
 Text anonymization turns names into placeholders. For tables, that would break joins and make emails
@@ -966,7 +1055,7 @@ the protection up. Every refusal says what to run instead.
 
 **What it lets through**, because they work with the data without showing it: `datanyx schema`,
 `synth`, `check`, `scrub`, `anonymize`, `run`, `scan`, `diff`, `audit` and `config`. `run` is refused if it saves raw output to a
-file or if the command after `--` names the data, and `anonymize --mapping`, `restore`, `pseudonymize`, `init` and
+file or if the command after `--` names the data, and `anonymize --mapping`, `restore`, `pseudonymize`, `eval`, `init` and
 `protect` are refused. So are the options that loosen what you set up, since each shows something
 hidden or works as a way to test guesses: `--keep-name`, `--keep`, `--keep-entity`, `--allow`,
 `--keep-numbers`, `--no-ner`, `--show-paths`, `--include-examples`, `--reveal`, `--allow-urls`,
@@ -1217,6 +1306,9 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `text/batch.py` | Folder and stream drivers: one set of placeholders across many inputs, and restoring a folder |
 | `text/mapping.py` | The mapping file: created private, never overwritten, rewritten as it grows |
 | `pseudonymize/` | Consistent fake values for tables: key-derived fakes, id permutation, column classification, CSV, JSON and SQLite |
+| `evaluation.py` | Measures recall by kind over labelled documents, for `datanyx eval` |
+| `text/packs.py` | Healthcare and finance detector packs, with check-digit validation |
+| `text/backends.py` | Presidio, GLiNER and local-LLM (Ollama) detectors, loaded only when asked for |
 | `text/custom.py` | Detectors described in a file: regular expressions and dictionaries of terms |
 | `text/secrets.py` | Finds credentials by their shape: API keys, tokens, private keys, passwords |
 | `text/anonymizer.py` | Merges spans, finds repeat mentions and assigns placeholders. `Anonymizer` keeps them across many texts |

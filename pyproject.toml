@@ -35,13 +35,16 @@ excel = ["openpyxl>=3.1"]
 yaml = ["pyyaml>=6"]
 streaming = ["ijson>=3.2"]
 mcp = ["mcp>=1.2"]
-all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp,check,pdf]"]
+all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp,check,pdf,presidio]"]
 text = ["spacy>=3.7"]
 check = [
     "sqlglot>=25",
 ]
 pdf = [
     "pypdf>=4",
+]
+presidio = [
+    "presidio-analyzer>=2.2",
 ]
 
 [dependency-groups]

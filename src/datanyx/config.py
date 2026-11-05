@@ -37,7 +37,10 @@ ENVIRONMENT_VARIABLE = "DATANYX_CONFIG"
 _LIST, _PATHS, _PATH, _STR, _BOOL, _NUMBER = "list of text", "list of paths", "path", "text", "true or false", "number"
 SPEC: dict[str, dict[str, str]] = {
     "schema": {"map_paths": _LIST, "keep_names": _LIST},
-    "anonymize": {"model": _STR, "hide": _LIST, "keep": _LIST, "keep_entities": _LIST, "detectors": _PATHS},
+    "anonymize": {
+        "model": _STR, "models": _LIST, "hide": _LIST, "keep": _LIST, "keep_entities": _LIST,
+        "detectors": _PATHS, "packs": _LIST, "backends": _LIST,
+    },
     "scrub": {"allow": _LIST, "names_from": _PATHS, "keep_numbers": _BOOL, "ner": _BOOL},
     "scan": {"exclude": _LIST, "kinds": _LIST, "max_size": _NUMBER, "include_examples": _BOOL, "ner": _BOOL},
     "mcp": {"roots": _PATHS, "allow_urls": _BOOL, "audit_log": _PATH},
@@ -53,6 +56,9 @@ class Config:
     map_paths: tuple[str, ...] = ()
     keep_names: tuple[str, ...] = ()
     model: str | None = None
+    models: tuple[str, ...] = ()
+    packs: tuple[str, ...] = ()
+    backends: tuple[str, ...] = ()
     hide: tuple[str, ...] = ()
     keep: tuple[str, ...] = ()
     keep_entities: tuple[str, ...] = ()
@@ -211,6 +217,9 @@ def _build(files: list[Path], data: dict[str, Any]) -> Config:
         map_paths=tuple(get("schema", "map_paths", [])),
         keep_names=tuple(get("schema", "keep_names", [])),
         model=get("anonymize", "model"),
+        models=tuple(get("anonymize", "models", [])),
+        packs=tuple(get("anonymize", "packs", [])),
+        backends=tuple(get("anonymize", "backends", [])),
         hide=tuple(get("anonymize", "hide", [])),
         keep=tuple(get("anonymize", "keep", [])),
         keep_entities=tuple(get("anonymize", "keep_entities", [])),
@@ -253,7 +262,7 @@ def describe(config: Config, reveal: bool = False) -> str:
         ("schema", (("map_paths", config.map_paths), ("keep_names", config.keep_names))),
         (
             "anonymize",
-            (("model", config.model), ("hide", config.hide), ("keep", config.keep), ("keep_entities", config.keep_entities),
+            (("model", config.model), ("models", config.models), ("packs", config.packs), ("backends", config.backends), ("hide", config.hide), ("keep", config.keep), ("keep_entities", config.keep_entities),
              ("detectors", config.detector_files)),
         ),
         (
@@ -293,6 +302,9 @@ STARTER = """# DataNyx project settings. Commands read this file from the projec
 
 [anonymize]
 # model = "en_core_web_lg"
+# Several models at once, to cover several languages: models = ["en_core_web_lg", "fr_core_news_md"]
+# Packs of detectors for a field: packs = ["healthcare", "finance"]
+# A second pass by another detector: backends = ["presidio"]  (see the README)
 # keep_entities = ["DATE"]
 # Files of custom detectors for your own formats (see the README).
 # detectors = ["detectors/internal.toml"]

@@ -538,6 +538,7 @@ def test_the_settings_files_cant_be_changed_even_without_a_local_file(config, pr
     [
         "datanyx pseudonymize data/customers.csv -o fake.csv",
         "datanyx pseudonymize data/customers.csv --plan",
+        "datanyx eval labelled.json --show-misses",
         "uv run datanyx pseudonymize data/customers.csv -o fake.csv --key-file k.key",
         "datanyx restore out.txt --mapping m.json -o real.txt",
     ],

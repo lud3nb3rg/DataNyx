@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import IO
 
@@ -21,6 +22,8 @@ from .check import LANGUAGES as CHECK_LANGUAGES
 from .check import check_code, detect_language, format_diagnostics, load_tables
 from .config import CONFIG_NAME, LOCAL_NAME, STARTER, STARTER_LOCAL, Config, describe, load_config
 from .diff import diff_schemas, has_breaking, render_diff, snapshot
+from .evaluation import evaluate, load_cases
+from .evaluation import render_report as render_eval
 from .privacy import KeyPolicy
 from .pseudonymize import Options as PseudonymizeOptions
 from .pseudonymize import Pseudonymizer, detect_kind, load_key, parse_overrides, pseudonymize_file, render_plan
@@ -45,9 +48,12 @@ from .text import (
     restore,
     unknown_placeholders,
 )
+from .text.backends import availability as backend_availability
+from .text.backends import build_backend
 from .text.batch import BatchResult, anonymize_folder, anonymize_stream, restore_folder
 from .text.documents import anonymize_bytes, can_handle, restore_bytes
 from .text.mapping import MappingFile, read_mapping
+from .text.packs import PACKS, load_packs
 
 
 def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
@@ -107,7 +113,29 @@ def _add_scrub_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_model_and_detectors(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--model", help=f"spaCy NER model (default: the config's, else {DEFAULT_MODEL})")
+    parser.add_argument(
+        "--model",
+        action="append",
+        metavar="MODEL",
+        help=(
+            f"spaCy NER model (default: the config's, else {DEFAULT_MODEL}). Repeat it, or separate with commas, "
+            "to use several, such as one per language"
+        ),
+    )
+    parser.add_argument(
+        "--pack",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=f"a pack of detectors for a field: {', '.join(sorted(PACKS))} (repeatable)",
+    )
+    parser.add_argument(
+        "--backend",
+        action="append",
+        default=[],
+        metavar="SPEC",
+        help="another detector to run as well: presidio[:LANG[:MODEL]], gliner[:MODEL] or ollama[:MODEL[@URL]] (repeatable)",
+    )
     parser.add_argument(
         "--detectors",
         action="append",
@@ -199,6 +227,25 @@ def build_parser() -> argparse.ArgumentParser:
     pseudo.add_argument("--plan", action="store_true", help="show what each column would become, and stop without writing anything")
     pseudo.add_argument("--hide", action="append", default=[], metavar="TERM", help="for free text: always hide this term (repeatable)")
     _add_model_and_detectors(pseudo)
+
+    evaluate_parser = commands.add_parser(
+        "eval",
+        help="measure how much of your own labelled text is hidden, by kind",
+        description=(
+            "Run the anonymizer, with the same models, packs, backends and settings `anonymize` would use, "
+            "over documents you have labelled, and report recall by kind. Run it again with other settings "
+            "to compare them. See the README for the file format."
+        ),
+    )
+    evaluate_parser.add_argument("cases", help="a JSON or JSON Lines file of labelled documents")
+    evaluate_parser.add_argument("--kind", action="append", default=[], metavar="KIND", help="only measure this kind (repeatable)")
+    evaluate_parser.add_argument("--no-ner", action="store_true", help="leave out the name-finding models and backends, to see what patterns alone find")
+    evaluate_parser.add_argument("--show-misses", action="store_true", help="list the strings that weren't fully hidden (they come from your file: read them yourself)")
+    evaluate_parser.add_argument("--min-recall", type=float, metavar="FRACTION", help="exit with 1 if recall, overall or for any kind, is below this (0 to 1)")
+    evaluate_parser.add_argument("--format", choices=("text", "json"), default="text", help="output format (default: %(default)s)")
+    evaluate_parser.add_argument("--hide", action="append", default=[], metavar="TERM", help="always hide this term (repeatable)")
+    evaluate_parser.add_argument("--keep-entity", action="append", default=[], metavar="KIND", help="leave this kind visible (repeatable)")
+    _add_model_and_detectors(evaluate_parser)
 
     scan_parser = commands.add_parser(
         "scan",
@@ -460,7 +507,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        commands = {"pseudonymize": _run_pseudonymize, "diff": _run_diff, "audit": _run_audit, "init": _run_init, "config": _run_config, "scan": _run_scan, "protect": _run_protect, "hook": _run_hook, "check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
+        commands = {"eval": _run_eval, "pseudonymize": _run_pseudonymize, "diff": _run_diff, "audit": _run_audit, "init": _run_init, "config": _run_config, "scan": _run_scan, "protect": _run_protect, "hook": _run_hook, "check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
         return commands[args.command](args)
     except SourceError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -486,8 +533,24 @@ def _policy(args: argparse.Namespace) -> KeyPolicy:
     )
 
 
+def _models(args: argparse.Namespace) -> list[str]:
+    """The spaCy models to use: the command line's, else the config's, else the default."""
+    given = [name.strip() for item in (getattr(args, "model", None) or []) for name in item.split(",") if name.strip()]
+    config = _cfg(args)
+    return given or list(config.models) or ([config.model] if config.model else [DEFAULT_MODEL])
+
+
 def _model(args: argparse.Namespace) -> str:
-    return args.model or _cfg(args).model or DEFAULT_MODEL
+    return _models(args)[0]
+
+
+def _backend_detectors(args: argparse.Namespace) -> list[Detector]:
+    return [build_backend(spec) for spec in [*_cfg(args).backends, *getattr(args, "backend", [])]]
+
+
+def _ner_detectors(args: argparse.Namespace) -> list[Detector]:
+    """Every model and backend that looks for names, places and the like."""
+    return [*(SpacyDetector(name) for name in _models(args)), *_backend_detectors(args)]
 
 
 def _custom_detectors(args: argparse.Namespace) -> list[Detector]:
@@ -495,6 +558,7 @@ def _custom_detectors(args: argparse.Namespace) -> list[Detector]:
     detectors = build_detectors(config.detector_entries)
     for path in [*config.detector_files, *map(Path, args.detectors)]:
         detectors.extend(load_detector_file(Path(path)))
+    detectors.extend(load_packs([*config.packs, *getattr(args, "pack", [])]))
     return detectors
 
 
@@ -573,7 +637,8 @@ def _run_scan(args: argparse.Namespace) -> int:
     ner = args.ner or bool(config.scan_ner)
     detectors: list[Detector] = [*custom, PatternDetector(), SecretDetector()]  # Custom first: it wins ties.
     if ner:
-        detectors.append(SpacyDetector(_model(args)))
+        detectors.extend(SpacyDetector(name) for name in _models(args))
+    detectors.extend(_backend_detectors(args))  # Named on purpose, so always used.
     builtin = set(ENTITY_KINDS) | {SECRET}
     requested = list(args.kinds) or list(config.scan_kinds)
     if requested:
@@ -683,7 +748,8 @@ def _scrub_policy(args: argparse.Namespace) -> ScrubPolicy:
         use_ner = True if config.scrub_ner is None else config.scrub_ner
     detectors: list[Detector] = [*_custom_detectors(args), PatternDetector()]  # Custom first: it wins ties.
     if use_ner:
-        detectors.append(SpacyDetector(_model(args)))
+        detectors.extend(SpacyDetector(name) for name in _models(args))
+    detectors.extend(_backend_detectors(args))  # Named on purpose, so always used.
     keep_numbers = args.keep_numbers or bool(config.scrub_keep_numbers)
     return ScrubPolicy(frozenset(allowed), (*config.hide, *args.hide), tuple(detectors), not keep_numbers)
 
@@ -828,6 +894,10 @@ def _run_doctor(args: argparse.Namespace) -> int:
 
         found = spacy.util.is_package(args.model)
         print(f"{'ok     ' if found else 'missing'}  NER model {args.model}" + ("" if found else f"  ->  python -m spacy download {args.model}"))
+    for name, installed in backend_availability().items():
+        hint = "" if installed else ('  ->  pip install "datanyx[presidio]"' if name == "presidio" else "  ->  pip install gliner")
+        print(f"{'ok     ' if installed else 'missing'}  backend {name}{hint}")
+    print(f"        packs: {', '.join(sorted(PACKS))}")
     return 0
 
 
@@ -842,13 +912,18 @@ def _run_mcp(args: argparse.Namespace) -> int:
         _model(args),
         [*config.keep_entities, *args.keep_entity],
         hide=config.hide,
-        detectors=_custom_detectors(args),
+        detectors=[*_custom_detectors(args), *_backend_detectors(args)],
         audit_log=audit,
     )
     return 0
 
 
 def _anonymizer(args: argparse.Namespace) -> Anonymizer:
+    return _anonymizer_factory(args)()
+
+
+def _anonymizer_factory(args: argparse.Namespace, ner: bool = True) -> Callable[[], Anonymizer]:
+    """Builds the detectors once, and returns a function that makes a fresh Anonymizer from them."""
     config = _cfg(args)
     custom = _custom_detectors(args)
     keep_entity = [*config.keep_entities, *getattr(args, "keep_entity", [])]
@@ -856,8 +931,26 @@ def _anonymizer(args: argparse.Namespace) -> Anonymizer:
     unknown = [kind for kind in keep_entity if kind not in allowed]
     if unknown:
         raise SourceError(f"unknown entity kind {unknown[0]!r}; the choices are {sorted(allowed)}")
-    detectors: list[Detector] = [*custom, PatternDetector(), SpacyDetector(_model(args))]  # Custom wins ties.
-    return Anonymizer(detectors, [*config.hide, *args.hide], [*config.keep, *getattr(args, "keep", [])], keep_entity)
+    detectors: list[Detector] = [*custom, PatternDetector(), *(_ner_detectors(args) if ner else [])]  # Custom wins ties.
+    hide, keep = [*config.hide, *args.hide], [*config.keep, *getattr(args, "keep", [])]
+    return lambda: Anonymizer(detectors, hide, keep, keep_entity)
+
+
+def _run_eval(args: argparse.Namespace) -> int:
+    if args.min_recall is not None and not 0 <= args.min_recall <= 1:
+        raise SourceError("--min-recall is a fraction from 0 to 1")
+    cases = load_cases(args.cases)
+    make = _anonymizer_factory(args, ner=not args.no_ner)
+    report = evaluate(cases, make, set(args.kind) or None)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    print(render_eval(report, args.show_misses, args.format))
+    if args.min_recall is not None:
+        failing = report.below(args.min_recall)
+        if failing:
+            print(f"recall is below {args.min_recall:.0%} for: {', '.join(failing)}", file=sys.stderr)
+            return 1
+    return 0
 
 
 def _run_pseudonymize(args: argparse.Namespace) -> int:

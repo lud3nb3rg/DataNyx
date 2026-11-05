@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added `datanyx eval`, which runs the anonymizer over labelled documents and reports recall by kind (hidden, partly hidden, missed), with `--min-recall` as a gate and `--show-misses` for the owner of the labels.
+- Added detector packs (`--pack healthcare`, `--pack finance`) with check-digit validation, optional backends (`--backend presidio|gliner|ollama`, the last only for a model on this computer, with the new `presidio` extra), and several spaCy models at once (`--model a --model b`). New `models`, `packs` and `backends` settings. `datanyx doctor` lists backends and packs.
 - `datanyx anonymize` now takes a folder (one set of placeholders for every file, files renamed, one mapping that restores the folder), `--stream` for live input, and reads HTML, email (`.eml`), Word, PDF (the new `pdf` extra), WhatsApp and Slack exports with their structure kept. `datanyx restore` restores folders, Word and HTML files. The `Anonymizer` class keeps placeholders across many texts.
 - Added `datanyx pseudonymize`, which writes a copy of a CSV, TSV, JSON, JSON Lines or SQLite file with consistent fake values: joins and foreign keys keep working, ids keep their length and never collide, and a key file makes the fakes repeatable.
 - Added `datanyx.toml` and `datanyx.local.toml` for project settings, with `datanyx init` and `datanyx config`. Unknown settings are errors with a suggestion, and terms to hide can stay in the uncommitted local file. Needs `tomli` on Python 3.10.
