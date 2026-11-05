@@ -955,6 +955,7 @@ source = { editable = "." }
 dependencies = [
     { name = "sqlalchemy", version = "2.0.57", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "sqlalchemy", version = "2.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
 [package.optional-dependencies]
@@ -1041,6 +1042,7 @@ requires-dist = [
     { name = "spacy", marker = "extra == 'text'", specifier = ">=3.7" },
     { name = "sqlalchemy", specifier = ">=2" },
     { name = "sqlglot", marker = "extra == 'check'", specifier = ">=25" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
 ]
 provides-extras = ["postgres", "mysql", "mssql", "oracle", "parquet", "excel", "yaml", "streaming", "mcp", "all", "text", "check"]
 

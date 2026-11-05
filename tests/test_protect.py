@@ -291,7 +291,7 @@ def test_dry_run_changes_nothing_and_write_creates_the_setup(project):
 
     apply(changes)
     settings = read_json(project / ".claude" / "settings.json")
-    assert settings["permissions"]["deny"] == ["Read(data/**)", "Edit(data/**)"]
+    assert settings["permissions"]["deny"] == ["Read(data/**)", "Edit(data/**)", "Read(datanyx.local.toml)"]
     hook = settings["hooks"]["PreToolUse"][0]
     assert "Bash" in hook["matcher"] and "Grep" in hook["matcher"]
     assert hook["hooks"][0] == {
@@ -388,7 +388,7 @@ def test_paths_outside_the_project_use_the_hook_but_not_permission_rules(project
     outside.mkdir()
     apply(plan_protect(project, [project / "data", outside], ["datanyx"]))
     deny = read_json(project / ".claude" / "settings.json")["permissions"]["deny"]
-    assert deny == ["Read(data/**)", "Edit(data/**)"]
+    assert deny == ["Read(data/**)", "Edit(data/**)", "Read(datanyx.local.toml)"]
     stored = read_json(project / ".datanyx" / "protect.json")["paths"]
     assert stored[0] == "data" and Path(stored[1]).is_absolute()
     assert run_hook(payload(project, "Read", file_path=str(outside / "x.csv")), {})
@@ -468,3 +468,66 @@ def test_protect_command_reports_a_broken_launcher_and_bad_input(project, capsys
     assert main(["protect", "--dir", str(project)]) == 1
     assert "name at least one" in capsys.readouterr().err
     assert main(["protect", "x", "--remove", "--dir", str(project)]) == 1
+
+
+# --- Settings files and options that would loosen the policy -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "datanyx schema data/customers.csv --keep-name secret",
+        "datanyx schema data/customers.csv --keep-name=secret",
+        "datanyx synth data/customers.csv --keep-name x",
+        "datanyx scrub data/notes.txt --allow jane",
+        "datanyx scrub data/notes.txt --keep-numbers",
+        "datanyx scrub data/notes.txt --no-ner",
+        "datanyx anonymize data/notes.txt --keep Jessica",
+        "datanyx anonymize data/notes.txt --keep-entity PERSON",
+        "datanyx scan data --show-paths",
+        "datanyx scan data --include-examples",
+        "datanyx config --reveal",
+        "datanyx --config evil.toml schema data/customers.csv",
+        "datanyx --no-config schema data/customers.csv",
+        "datanyx init",
+        "datanyx mcp --allow-urls",
+        "uv run datanyx schema data/customers.csv --keep-name x",
+        "datanyx run --allow plan -- python src/a.py",
+    ],
+)
+def test_options_that_loosen_the_policy_are_refused_for_the_agent(config, command):
+    assert bash(config, command), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "datanyx scan data",
+        "datanyx scan data --format json --kinds EMAIL",
+        "datanyx diff old.json data/customers.csv",
+        "datanyx audit datanyx-audit.jsonl",
+        "datanyx config",
+        "datanyx doctor",
+        "uv run datanyx diff a.json b.json --fail-on never",
+    ],
+)
+def test_reading_commands_stay_available(config, command):
+    assert bash(config, command) is None, command
+
+
+def test_the_local_settings_file_lists_terms_and_cant_be_read(config, project):
+    (project / "datanyx.local.toml").write_text('[anonymize]\nhide = ["Acme"]\n', encoding="utf-8")
+    assert "lists the terms" in call(config, "Read", file_path=str(project / "datanyx.local.toml"))
+    assert "lists the terms" in bash(config, "cat datanyx.local.toml")
+    assert bash(config, "head -3 ./datanyx.local.toml")
+    assert bash(config, "grep -r Acme .")  # A recursive search would reach it.
+    assert call(config, "Grep", path=str(project / "src"), pattern="Acme") is None
+
+
+def test_the_settings_files_cant_be_changed_even_without_a_local_file(config, project):
+    assert call(config, "Read", file_path=str(project / "datanyx.local.toml")) is None  # Nothing there to protect.
+    for name in ("datanyx.toml", "datanyx.local.toml"):
+        assert "protection" in call(config, "Write", file_path=str(project / name), content="x")
+        assert "protection" in call(config, "Edit", file_path=str(project / name))
+    assert "protection" in bash(config, "echo '[schema]' > datanyx.toml")
+    assert bash(config, "cat datanyx.toml") is None  # The shared policy may be read.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .anonymizer import anonymize, anonymize_with_mapping, restore, unknown_placeholders
+from .custom import DictionaryDetector, RegexDetector, build_detectors, kinds_of, load_detector_file
 from .detectors import DEFAULT_MODEL, ENTITY_KINDS, Detector, PatternDetector, SpacyDetector, Span
 from .secrets import SECRET, SecretDetector
 
@@ -11,12 +12,17 @@ __all__ = [
     "ENTITY_KINDS",
     "SECRET",
     "Detector",
+    "DictionaryDetector",
     "PatternDetector",
+    "RegexDetector",
     "SecretDetector",
     "SpacyDetector",
     "Span",
     "anonymize",
     "anonymize_with_mapping",
+    "build_detectors",
+    "kinds_of",
+    "load_detector_file",
     "restore",
     "unknown_placeholders",
 ]

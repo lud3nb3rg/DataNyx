@@ -19,6 +19,8 @@ and replaces names and identifiers in free text with placeholders.
 [Debugging](#debugging-without-seeing-the-data) ·
 [Code checking](#checking-code-before-it-runs) ·
 [Scanning](#scanning-a-folder-before-sharing-it) ·
+[Team settings](#team-settings) ·
+[Schema diff](#watching-a-data-feed-for-changes) ·
 [Text anonymization](#text-anonymization) ·
 [Using it with an agent](#using-it-with-an-agent) ·
 [Security model](#security-model) ·
@@ -112,8 +114,14 @@ The same person keeps the same placeholder, so the agent can still follow who di
   type mistakes in SQL and pandas code from the schema alone, before anything runs.
 - **A scan before you share.** `datanyx scan` reports which files in a folder hold personal data or
   secrets, by kind, count and line, and never the values themselves.
+- **A policy a team can share.** `datanyx.toml` holds the settings that would otherwise be repeated on
+  every command, `datanyx.local.toml` the terms that must stay private, and custom detectors cover
+  your own formats and names.
+- **Change detection.** `datanyx diff` compares two schemas and says which changes could break code
+  written for the old one, with an exit code for CI.
 - **Enforced boundaries.** `datanyx protect` sets up Claude Code so the agent can't read the data
   directly, and can only work with it through DataNyx.
+- **An audit trail.** The MCP server can record every tool call an agent makes, never a value.
 - **An MCP server** that gives an agent only schemas and anonymized text, nothing that could
   be used to probe for what is hidden.
 - **Reversible when you want it.** Optionally save a mapping and restore real values in what
@@ -542,6 +550,137 @@ strictly than in anonymization (dates, version numbers and IPs are not counted),
 ones in unusual formats can be missed. Expect some false positives, such as test fixtures; the
 scan of this repository finds the fake cards and keys in its own tests.
 
+## Team settings
+
+Repeating flags on every command doesn't scale, and a policy that lives in someone's shell history
+can't be reviewed. Put it in `datanyx.toml` at the root of the project and commit it:
+
+```sh
+datanyx init            # a starter file with every setting commented out
+datanyx init --local    # datanyx.local.toml, for what must stay private (added to .gitignore)
+datanyx config          # the settings in effect, and the files they came from
+```
+
+```toml
+# datanyx.toml
+[schema]
+map_paths = ["$.users"]                  # hide every key under these paths
+keep_names = ["Order Details"]           # show names the rules hid
+
+[anonymize]
+model = "en_core_web_lg"
+keep_entities = ["DATE"]
+detectors = ["detectors/internal.toml"]  # custom detectors (below)
+
+[scrub]
+allow = ["plan"]                         # quoted names to leave readable in errors
+names_from = ["data/customers.csv"]      # ...and the names this input's schema shows
+ner = false                              # skip the name model
+
+[scan]
+exclude = ["fixtures", "*.lock"]
+kinds = ["EMAIL", "SECRET"]
+max_size = 5
+
+[mcp]
+roots = ["data"]
+audit_log = "datanyx-audit.jsonl"
+```
+
+| Section | Used by |
+|---|---|
+| `[schema]` | `schema`, `synth`, `check`, `diff`, and `scrub --names-from` |
+| `[anonymize]` | `anonymize`, `scrub` (the `hide` terms), and the MCP server's `anonymize_file` |
+| `[scrub]` | `scrub` and `run` |
+| `[scan]` | `scan` |
+| `[mcp]` | `datanyx mcp` |
+
+- **Where it's found.** In the current folder or the nearest parent, like git. `--config FILE` or the
+  `DATANYX_CONFIG` variable names one instead, and `--no-config` ignores it.
+- **Command line wins.** Lists from the command line are added to the file's, and single values such as
+  `--model` or `--max-size` override it.
+- **Mistakes are errors.** An unknown section or setting is reported with a suggestion
+  (`unknown setting 'hid' in [anonymize]; did you mean 'hide'?`), because a misspelled `hide` would
+  otherwise protect nothing. A value is never repeated in an error message.
+- **Paths** in the file (`detectors`, `names_from`, `roots`, `audit_log`) are relative to the file.
+- **Terms to hide stay private.** `datanyx.local.toml` is merged on top of `datanyx.toml`: lists are
+  joined and single values in the local file win. Put the client and company names you are protecting
+  there, and keep it out of git. `datanyx config` counts them and shows them only with `--reveal`.
+  [`datanyx protect`](#enforcing-it-with-datanyx-protect) stops an agent reading that file or editing
+  either one.
+
+### Custom detectors
+
+For formats and names that are yours alone, describe a detector instead of writing Python. Put the
+entries in `datanyx.toml`, or in a separate file named by `detectors = [...]` or `--detectors FILE`:
+
+```toml
+[[pattern]]
+kind = "EMPLOYEE_ID"          # the placeholder becomes <EMPLOYEE_ID_1>
+regex = 'EMP-\d{6}'
+flags = "i"                   # optional: any of i, m, s
+group = 1                     # optional: mark only this part of the match
+
+[[dictionary]]
+kind = "CLIENT"
+terms = ["Acme", "Northwind"]
+terms_file = "clients.txt"    # optional: one term per line, # for comments
+ignore_case = true            # the default
+word_boundaries = true        # the default: "Acme" doesn't match inside "Acmeville"
+```
+
+- Kinds are capital letters and underscores. They are found by `anonymize`, `scrub`, the MCP server's
+  `anonymize_file`, and `scan`, which counts them by default and accepts them in `--kinds`.
+- A custom kind wins a tie over a built-in one on the same text, so a ticket number is
+  `<TICKET_1>` rather than a generic `<ID_1>`. `--keep-entity TICKET` leaves a kind visible, and
+  `restore` puts custom placeholders back like any other.
+- A bad regex, an unknown key or a missing terms file is an error that never repeats a term. Terms
+  can be sensitive, so a dictionary of real client names belongs in `datanyx.local.toml` or another
+  file you don't commit.
+
+## Watching a data feed for changes
+
+Code written against a data feed breaks when the feed changes shape. Save its schema once, then
+compare against it whenever a new export arrives:
+
+```sh
+datanyx schema feed.csv -o schema.snapshot.json     # once; commit the snapshot
+datanyx diff schema.snapshot.json feed.csv          # on every new export, in CI
+```
+
+```console
+$ datanyx diff schema.snapshot.json feed.csv
+2 breaking, 1 compatible
+
+breaking:
+  ~ $[].email: string<email> -> string<email> | null  (can now be null)
+  - $[].notes: removed
+
+compatible:
+  + $[].score: added  (number, required)
+```
+
+Either side can be a saved schema or any input DataNyx reads: another file, a folder, a database.
+
+| Change | Counted as |
+|---|---|
+| A field or table removed | **breaking** |
+| A type widened: a number may now be text, a field may now be null, an integer may now have decimals | **breaking** |
+| A format lost, or changed (`email` to none, `date` to `date-time`) | **breaking** |
+| A field that was always there is now optional | **breaking** |
+| A field or table added | compatible |
+| A type narrowed, a format gained, an optional field now always present | compatible |
+| A database type changed, a primary or foreign key changed, key names newly hidden | info |
+
+`--fail-on breaking` (the default) exits with 1 when anything breaking changed, `--fail-on any` for any
+difference and `--fail-on never` to just report. `--format json` is for scripts, and the options for
+reading inputs (`--source`, `--schema`, `-r`, `--map-path`, `--keep-name`) work as in `datanyx schema`.
+Nested changes have paths such as `$.user.address.zip` or `users[].tags[]`. The MCP server has a
+`schema_diff` tool.
+
+A schema built from a file is built from what the file contains, so a difference can come from the
+data in a new export, not only from its design: a column that was never empty can show up as nullable.
+
 ## Text anonymization
 
 ```sh
@@ -687,9 +826,13 @@ folder that has protected data inside it (`grep -r foo .`, `rg foo`, `find . -ex
 the protection up. Every refusal says what to run instead.
 
 **What it lets through**, because they work with the data without showing it: `datanyx schema`,
-`synth`, `check`, `scrub`, `anonymize` and `run`. `run` is refused if it saves raw output to a
-file or if the command after `--` names the data, and `anonymize --mapping`, `restore` and
-`protect` are refused. Running a script that reads the data, like
+`synth`, `check`, `scrub`, `anonymize`, `run`, `scan`, `diff`, `audit` and `config`. `run` is refused if it saves raw output to a
+file or if the command after `--` names the data, and `anonymize --mapping`, `restore`, `init` and
+`protect` are refused. So are the options that loosen what you set up, since each shows something
+hidden or works as a way to test guesses: `--keep-name`, `--keep`, `--keep-entity`, `--allow`,
+`--keep-numbers`, `--no-ner`, `--show-paths`, `--include-examples`, `--reveal`, `--allow-urls`,
+`--config` and `--no-config`. The agent can't edit `datanyx.toml` or `datanyx.local.toml`, and can't
+read the local one, which lists the terms you hide. Running a script that reads the data, like
 `datanyx run -- python report.py`, is the intended way to work.
 
 **It fails closed.** The hook is written with `onFailure: "block"`, so if it can't run, tool calls
@@ -723,10 +866,11 @@ Add it to your agent's MCP configuration:
 }
 ```
 
-The agent gets five tools: `describe_data` (a schema for a file, folder or `env:NAME`
+The agent gets six tools: `describe_data` (a schema for a file, folder or `env:NAME`
 database), `synthetic_sample` (up to 200 fake rows that match it), `check_code` (checks its
 SQL or pandas code against that schema), `scan_folder` (which files hold personal data or
-secrets, by kind and count) and `anonymize_file` (a text file with placeholders).
+secrets, by kind and count), `schema_diff` (what changed between two schemas) and
+`anonymize_file` (a text file with placeholders).
 It's limited by design:
 
 - It can only read under `--root` (default: the current folder), and database URLs are
@@ -735,6 +879,32 @@ It's limited by design:
   `--keep-entity` when you start the server instead.
 - There's no restore tool and no mapping, since both hold the real values.
 - Errors are fixed messages, never the library's own text.
+
+**An audit log.** `--audit-log FILE` (or `audit_log` under `[mcp]`) appends one line per tool call:
+
+```sh
+datanyx mcp --root ./data --audit-log audit.jsonl
+datanyx audit audit.jsonl --since 2025-01-31         # who asked about what, and what was refused
+```
+
+```console
+$ datanyx audit audit.jsonl
+42 calls in 3 sessions, 2025-01-31T09:12:03+00:00 to 2025-02-02T16:40:51+00:00
+
+By tool: describe_data 20 · check_code 15 · scan_folder 5 · synthetic_sample 2
+
+Paths asked about:
+  data/customers.csv  ×27
+  ../secrets  ×2
+
+2 calls failed or were refused:
+  describe_data: that path is outside the folders this server may read  ×2
+```
+
+Each record has the time, a session id, the tool, the paths and settings it was called with, whether it
+worked, and sizes. It never has a value or anything the agent was given back: the SQL an agent asked to
+have checked is recorded as a length, the terms it asked to hide as a count, and a password in a database
+URL is replaced. The file is readable by its owner only. Keep it where the agent can't change it.
 
 The server doesn't stop the agent from opening the files itself. Block that in its
 permissions, as above.
@@ -894,6 +1064,9 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `privacy.py` | Decides which names are structure and which are data |
 | `formats.py` | Recognises string formats, returning only a label |
 | `renderers/` | Output formats |
+| `config.py` | Reads and merges `datanyx.toml` and `datanyx.local.toml`, and rejects mistakes in them |
+| `diff.py` | Compares two schemas and sorts the changes by whether they could break old code |
+| `audit.py` | The MCP audit log and its summary: tools, paths and outcomes, never values |
 | `scan.py` | Finds personal data and secrets in a folder, by file, kind and line, without values |
 | `protect/` | `datanyx protect` and the guard hook: Claude Code permissions, a hook that refuses direct access, MCP config |
 | `check/` | Checks SQL and pandas code against a schema: unknown names and type mistakes |
@@ -901,6 +1074,7 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `synth/` | Generates fake data that fits a schema, and writes it as JSON, JSON Lines, CSV or SQLite |
 | `mcp_server.py` | MCP server that only exposes schemas, synthetic samples and anonymized text |
 | `text/detectors.py` | Finds sensitive spans: patterns, and spaCy NER through `Detector` |
+| `text/custom.py` | Detectors described in a file: regular expressions and dictionaries of terms |
 | `text/secrets.py` | Finds credentials by their shape: API keys, tokens, private keys, passwords |
 | `text/anonymizer.py` | Merges spans, finds repeat mentions and assigns placeholders |
 | `cli.py` | Command line, which reports errors without quoting data |

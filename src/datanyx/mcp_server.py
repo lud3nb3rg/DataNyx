@@ -15,12 +15,16 @@ out on purpose:
 from __future__ import annotations
 
 import functools
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 from . import extract, render
+from .audit import AuditLog
 from .check import LANGUAGES, format_diagnostics, load_tables
 from .check import check_code as run_check
+from .diff import diff_schemas, render_diff, snapshot
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .scan import render_report, scan
@@ -34,6 +38,7 @@ from .text import (
     PatternDetector,
     SpacyDetector,
     anonymize,
+    kinds_of,
 )
 
 INSTRUCTIONS = (
@@ -42,6 +47,7 @@ INSTRUCTIONS = (
     "`synthetic_sample` returns fake rows that match that schema, for trying code out. "
     "`check_code` checks your SQL or pandas code against that schema before you run it. "
     "`scan_folder` reports which files hold personal data or secrets, never the values. "
+    "`schema_diff` compares two schemas and says what could break. "
     "`anonymize_file` returns text with names and identifiers replaced by placeholders "
     "like <PERSON_1>; it can miss things, so treat it as a draft. Write code against the "
     "schema, and ask the user to run it, rather than asking for the data."
@@ -108,8 +114,15 @@ def create_server(
     allow_urls: bool = False,
     model: str = DEFAULT_MODEL,
     keep_entity: Sequence[str] = (),
+    hide: Sequence[str] = (),
+    custom_detectors: Sequence[Detector] = (),
+    audit_log: str | Path | None = None,
 ):
-    """Build the server. `keep_entity` is the user's choice, set when starting it."""
+    """Build the server.
+
+    `keep_entity`, `hide` and `custom_detectors` are the user's choices, made when starting
+    it. `audit_log` is a file that gets a record of every tool call (never values).
+    """
     try:
         from mcp.server.mcpserver import MCPServer as Server  # type: ignore[import-not-found]  # mcp 2.x
     except ImportError:
@@ -121,9 +134,27 @@ def create_server(
     access = Access(roots, allow_urls)
     detectors: list[Detector] = []  # Loaded on first use: the model is slow to start.
     server = Server("datanyx", instructions=INSTRUCTIONS)
+    audit = AuditLog(audit_log)
+    hide_terms = list(hide)
 
-    @server.tool()
-    @_guard
+    def tool(function: Callable[..., str]) -> Callable[..., str]:
+        """Register a tool: refusals and failures become fixed messages, and every call is recorded."""
+        guarded = _guard(function)
+
+        @functools.wraps(function)
+        def audited(*args: Any, **kwargs: Any) -> str:
+            started = time.monotonic()
+            try:
+                result = guarded(*args, **kwargs)
+            except Exception as error:
+                audit.record(function.__name__, kwargs, "error", str(error), started, None)
+                raise
+            audit.record(function.__name__, kwargs, "ok", None, started, len(result))
+            return result
+
+        return server.tool()(audited)  # type: ignore[no-any-return]
+
+    @tool
     def describe_data(
         target: str,
         format: str = "text",
@@ -152,8 +183,7 @@ def create_server(
             output += "\n\nNotes:\n" + "\n".join(f"- {note}" for note in schema.notes)
         return output
 
-    @server.tool()
-    @_guard
+    @tool
     def synthetic_sample(
         target: str,
         rows: int = 20,
@@ -177,8 +207,7 @@ def create_server(
         sections = [f"-- {table.name or 'root'}" + chr(10) + render_table(table, "jsonl") for table in tables]
         return chr(10).join(sections)
 
-    @server.tool()
-    @_guard
+    @tool
     def check_code(
         code: str,
         target: str,
@@ -204,8 +233,7 @@ def create_server(
         )
         return format_diagnostics(run_check(code, tables, language, dialect or guessed))
 
-    @server.tool()
-    @_guard
+    @tool
     def scan_folder(target: str, kinds: list[str] | None = None) -> str:
         """Which files in a folder hold personal data or secrets, by kind and count, never by value.
 
@@ -219,8 +247,18 @@ def create_server(
         report = scan(access.check(target), kinds=kinds or None)
         return render_report(report)
 
-    @server.tool()
-    @_guard
+    @tool
+    def schema_diff(old: str, new: str, database_schema: str | None = None) -> str:
+        """Compare two schemas and list what was added, removed or changed, and what could break.
+
+        old, new: a schema saved with `datanyx schema -o`, or any file, folder or env:NAME database.
+        Changes are sorted into breaking, compatible and info.
+        """
+        first = snapshot(access.check(old), namespace=database_schema)
+        second = snapshot(access.check(new), namespace=database_schema)
+        return render_diff(diff_schemas(first, second))
+
+    @tool
     def anonymize_file(target: str, hide: list[str] | None = None) -> str:
         """Return a text file with names and other identifiers replaced by placeholders.
 
@@ -236,8 +274,8 @@ def create_server(
         except UnicodeDecodeError:
             raise SourceError("input is not valid UTF-8") from None
         if not detectors:
-            detectors.extend([PatternDetector(), SpacyDetector(model)])
-        return anonymize(text, detectors, hide or (), (), keep_entity)
+            detectors.extend([*custom_detectors, PatternDetector(), SpacyDetector(model)])
+        return anonymize(text, detectors, [*hide_terms, *(hide or ())], (), keep_entity)
 
     return server
 
@@ -247,8 +285,12 @@ def run(
     allow_urls: bool = False,
     model: str = DEFAULT_MODEL,
     keep_entity: Sequence[str] = (),
+    hide: Sequence[str] = (),
+    detectors: Sequence[Detector] = (),
+    audit_log: str | Path | None = None,
 ) -> None:
-    unknown = set(keep_entity) - set(ENTITY_KINDS)
+    allowed = {*ENTITY_KINDS, SECRET, *kinds_of(list(detectors))}
+    unknown = set(keep_entity) - allowed
     if unknown:
         raise SourceError(f"unknown entity kinds: {sorted(unknown)}")
-    create_server(roots, allow_urls, model, keep_entity).run("stdio")
+    create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log).run("stdio")

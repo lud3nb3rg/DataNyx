@@ -36,7 +36,17 @@ _SHELLS = frozenset({"Bash", "PowerShell"})
 _RECURSIVE_SEARCH = frozenset({"rg", "ag", "ack"})
 _GREPS = frozenset({"grep", "egrep", "fgrep"})
 # DataNyx commands that work with protected data without showing it.
-_SAFE_COMMANDS = frozenset({"schema", "synth", "check", "scrub", "anonymize", "run", "doctor", "hook", "mcp"})
+_SAFE_COMMANDS = frozenset(
+    {"schema", "synth", "check", "scrub", "anonymize", "run", "scan", "diff", "audit", "config", "doctor", "hook", "mcp"}
+)
+# Options that loosen what the user decided: they show names the rules hid, leave terms visible,
+# or point at a settings file the agent wrote. Each also works as a way to test guesses.
+_WEAKENING = frozenset(
+    {
+        "--keep-name", "--keep", "--keep-entity", "--allow", "--keep-numbers", "--no-ner", "--show-paths",
+        "--reveal", "--config", "--no-config", "--allow-urls", "--include-examples",
+    }
+)
 _READ_ONLY_PROGRAMS = frozenset(
     {"cat", "head", "tail", "less", "more", "type", "grep", "egrep", "fgrep", "rg", "ls", "dir", "wc", "diff", "git", "jq", "stat"}
 )
@@ -112,14 +122,16 @@ class _Guard:
         return path if path.is_absolute() else (base or self.base) / path
 
     def protected_hit(self, path: Path) -> Path | None:
-        return next((p for p in self.config.paths if _inside(path, p)), None)
+        return next((p for p in self.config.all_protected if _inside(path, p)), None)
 
     def covers_protected(self, path: Path) -> Path | None:
         """A protected path that lies inside `path`, so searching `path` would reach it."""
-        return next((p for p in self.config.paths if _inside(p, path)), None)
+        return next((p for p in self.config.all_protected if _inside(p, path)), None)
 
     def message(self, target: Path) -> str:
         shown = self.config.display(target)
+        if target.name == "datanyx.local.toml":
+            return "datanyx.local.toml lists the terms DataNyx hides, so it can't be read from here. Ask the user."
         return (
             f"{shown} is protected by DataNyx, so it can't be read directly. To work with it without seeing it: "
             f"`datanyx schema {shown}` for its structure, `datanyx synth {shown} --rows 20` for fake rows, "
@@ -209,6 +221,10 @@ class _Guard:
             return None  # Just `datanyx`: it prints its help.
         if command not in _SAFE_COMMANDS:
             return f"`datanyx {command}` isn't available to the agent. Ask the user to run it."
+        options_part = rest[: rest.index("--")] if "--" in rest else rest
+        weakening = next((o for o in options_part if o.split("=")[0] in _WEAKENING), None)
+        if weakening is not None:
+            return f"`{weakening.split('=')[0]}` loosens what the user set up, so the agent can't use it. Ask the user to run it."
         if command == "run":
             options = rest[: rest.index("--")] if "--" in rest else rest
             if any(option.split("=")[0] in ("--save-stdout", "--save-stderr") for option in options):
@@ -252,7 +268,7 @@ class _Guard:
     def embedded(self, text: str) -> str | None:
         """A protected path written inside other text, such as python -c "open('data/x.csv')"."""
         flat = text.replace("\\", "/")
-        for protected in self.config.paths:
+        for protected in self.config.all_protected:
             absolute = protected.as_posix()
             if absolute.lower() in flat.lower() or _key(protected).replace(os.sep, "/") in flat.lower():
                 return self.message(protected)
@@ -311,9 +327,19 @@ def _datanyx_subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
     """(subcommand, the arguments after it) if the command runs datanyx, in any usual way."""
     for position, token in enumerate(tokens[:8]):
         if _prog(token) == "datanyx" and (position == 0 or _prog(tokens[0]) in {"uv", "uvx", "pipx", "python", "python3", "py"}):
-            rest = tokens[position + 1 :]
-            return (rest[0], rest[1:]) if rest else ("", [])
+            return _split_command(tokens[position + 1 :])
         if token == "-m" and tokens[position + 1 : position + 2] == ["datanyx"]:
-            rest = tokens[position + 2 :]
-            return (rest[0], rest[1:]) if rest else ("", [])
+            return _split_command(tokens[position + 2 :])
     return None
+
+
+def _split_command(rest: list[str]) -> tuple[str, list[str]]:
+    """(command, every other argument) for `datanyx [--config FILE] [--no-config] COMMAND ...`.
+
+    The options before the command are returned with the rest, so they are checked too."""
+    index = 0
+    while index < len(rest) and rest[index].startswith("--"):
+        index += 2 if rest[index] == "--config" else 1
+    if index >= len(rest):
+        return "", rest
+    return rest[index], [*rest[:index], *rest[index + 1 :]]

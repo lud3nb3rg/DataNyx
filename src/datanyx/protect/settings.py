@@ -188,6 +188,7 @@ def _rules(project: Path, targets: list[Path]) -> list[str]:
         else:
             patterns = [shown, f"{shown}/**"]
         rules.extend(f"{tool}({pattern})" for tool in _RULE_TOOLS for pattern in patterns)
+    rules.append("Read(datanyx.local.toml)")  # It lists the terms DataNyx hides.
     return rules
 
 

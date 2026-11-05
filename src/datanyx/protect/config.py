@@ -30,12 +30,20 @@ class ProtectConfig:
             return str(path)
 
     @property
+    def all_protected(self) -> tuple[Path, ...]:
+        """The protected paths, and the local settings file, which lists the terms DataNyx hides."""
+        local = self.root / "datanyx.local.toml"
+        return (*self.paths, local) if local.is_file() else self.paths
+
+    @property
     def guarded_files(self) -> tuple[Path, ...]:
         """The files that set protection up. An agent that could edit them could switch it off."""
         return (
             self.root / ".claude" / "settings.json",
             self.root / ".claude" / "settings.local.json",
             self.root / ".mcp.json",
+            self.root / "datanyx.toml",
+            self.root / "datanyx.local.toml",
             self.root / CONFIG_DIR / CONFIG_FILE,
         )
 

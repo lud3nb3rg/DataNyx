@@ -15,8 +15,12 @@ import sys
 from pathlib import Path
 
 from . import extract, render
+from .audit import read_log, summarize_log
 from .check import LANGUAGES as CHECK_LANGUAGES
 from .check import check_code, detect_language, format_diagnostics, load_tables
+from .config import CONFIG_NAME, LOCAL_NAME, STARTER, STARTER_LOCAL, Config, describe, load_config
+from .diff import diff_schemas, has_breaking, render_diff, snapshot
+from .fileperms import restrict_to_owner
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .schema import Array, Object
@@ -33,6 +37,9 @@ from .text import (
     SecretDetector,
     SpacyDetector,
     anonymize_with_mapping,
+    build_detectors,
+    kinds_of,
+    load_detector_file,
     restore,
     unknown_placeholders,
 )
@@ -90,7 +97,19 @@ def _add_scrub_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="don't use the name-finding model: faster, but names in unquoted text get through",
     )
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="spaCy NER model (default: %(default)s)")
+    parser.add_argument("--ner", action="store_true", help="use the name-finding model even if the config turns it off")
+    _add_model_and_detectors(parser)
+
+
+def _add_model_and_detectors(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--model", help=f"spaCy NER model (default: the config's, else {DEFAULT_MODEL})")
+    parser.add_argument(
+        "--detectors",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="a file of custom detectors for your own formats and names (repeatable)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -98,6 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="datanyx",
         description="Describe data to an AI agent without showing it the data.",
     )
+    parser.add_argument("--config", dest="config_file", metavar="FILE", help="settings file to use instead of the nearest datanyx.toml")
+    parser.add_argument("--no-config", action="store_true", help="ignore datanyx.toml")
     commands = parser.add_subparsers(dest="command", required=True)
 
     schema = commands.add_parser("schema", help="print a value-free schema of the input")
@@ -151,14 +172,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--kinds",
         action="append",
         default=[],
-        choices=[*ENTITY_KINDS, SECRET, "all"],
         metavar="KIND",
-        help="what to look for (repeatable; default: EMAIL, PHONE, CREDIT_CARD, IBAN, IP_ADDRESS, MAC_ADDRESS, ADDRESS, SECRET; 'all' for every kind)",
+        help="what to look for (repeatable; default: EMAIL, PHONE, CREDIT_CARD, IBAN, IP_ADDRESS, MAC_ADDRESS, ADDRESS, SECRET and your custom kinds; 'all' for every built-in kind)",
     )
     scan_parser.add_argument("--ner", action="store_true", help="also find names, organisations and places with the NER model (slow)")
-    scan_parser.add_argument("--model", default=DEFAULT_MODEL, help="spaCy NER model for --ner (default: %(default)s)")
+    _add_model_and_detectors(scan_parser)
     scan_parser.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="skip names matching this pattern (repeatable)")
-    scan_parser.add_argument("--max-size", type=float, default=5.0, metavar="MB", help="skip files larger than this (default: %(default)s)")
+    scan_parser.add_argument("--max-size", type=float, metavar="MB", help="skip files larger than this (default: the config's, else 5)")
     scan_parser.add_argument("--include-examples", action="store_true", help="also count example.com emails and loopback or documentation IPs")
     scan_parser.add_argument("--show-paths", action="store_true", help="show real file names, even ones that look like data (run it yourself)")
     scan_parser.add_argument("--format", choices=("text", "json"), default="text", help="output format (default: %(default)s)")
@@ -273,14 +293,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     text.add_argument("input", help='UTF-8 text file to anonymize, or "-" for stdin')
     text.add_argument("-o", "--output", help="write to this file instead of stdout")
-    text.add_argument("--model", default=DEFAULT_MODEL, help="spaCy NER model (default: %(default)s)")
+    _add_model_and_detectors(text)
     text.add_argument(
         "--keep-entity",
         action="append",
         default=[],
-        choices=ENTITY_KINDS,
         metavar="KIND",
-        help=f"leave this kind of entity visible (repeatable): {', '.join(ENTITY_KINDS)}",
+        help=f"leave this kind of entity visible (repeatable): {', '.join(ENTITY_KINDS)}, or a custom kind",
     )
     text.add_argument(
         "--hide",
@@ -315,6 +334,44 @@ def build_parser() -> argparse.ArgumentParser:
     # Required so that real values can't land in an agent's view of stdout by default.
     back.add_argument("-o", "--output", required=True, help="file to write the restored text to")
 
+    init = commands.add_parser("init", help="create a datanyx.toml of commented settings in this folder")
+    init.add_argument(
+        "--local", action="store_true", help="create datanyx.local.toml instead, for terms to hide that shouldn't be committed"
+    )
+    diff = commands.add_parser(
+        "diff",
+        help="compare two schemas and say what changed and what could break",
+        description=(
+            "Compare two schemas, each a saved one (from `datanyx schema -o schema.json`) or any input "
+            "DataNyx reads, and list what was added, removed or changed, sorted by whether code written "
+            "against the old one could break. Exits with 1 if anything breaking changed."
+        ),
+    )
+    diff.add_argument("old", help="the earlier schema: a saved JSON Schema file, or any input")
+    diff.add_argument("new", help="the later schema, in the same forms")
+    diff.add_argument(
+        "--fail-on",
+        choices=("breaking", "any", "never"),
+        default="breaking",
+        help="when to exit with 1 (default: %(default)s)",
+    )
+    diff.add_argument("--format", choices=("text", "json"), default="text", help="output format (default: %(default)s)")
+    diff.add_argument("-r", "--recursive", action="store_true", help="when an input is a folder, also read its subfolders")
+    diff.add_argument("--schema", help="database schema to use (default: the database's default)")
+    diff.add_argument("--source", choices=source_kinds(), help="input type for live inputs (default: detect)")
+    diff.add_argument("--map-path", action="append", default=[], metavar="PATH", help="hide all keys or columns at a path (repeatable)")
+    diff.add_argument("--keep-name", action="append", default=[], metavar="NAME", help="show this name even if it looks like data (repeatable)")
+
+    audit = commands.add_parser(
+        "audit",
+        help="summarise the audit log an MCP server wrote: which tools were called, on what, and what failed",
+    )
+    audit.add_argument("log", help="the file given to `datanyx mcp --audit-log`")
+    audit.add_argument("--since", metavar="TIME", help="only calls from then on, such as 2025-01-31 or 2025-01-31T09:30:00")
+    audit.add_argument("--format", choices=("text", "json"), default="text", help="output format (default: %(default)s)")
+    show = commands.add_parser("config", help="show the settings in effect and which files they come from")
+    show.add_argument("--reveal", action="store_true", help="also show the terms to hide, which are otherwise only counted")
+
     doctor = commands.add_parser("doctor", help="check which optional packages and models are installed")
     doctor.add_argument("--model", default=DEFAULT_MODEL, help="spaCy NER model to look for (default: %(default)s)")
 
@@ -330,18 +387,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--root", action="append", default=[], metavar="DIR", help="folder the agent may read (repeatable; default: current folder)"
     )
     serve.add_argument("--allow-urls", action="store_true", help="accept database URLs from the agent (they may contain passwords)")
-    serve.add_argument("--model", default=DEFAULT_MODEL, help="spaCy NER model (default: %(default)s)")
+    _add_model_and_detectors(serve)
     serve.add_argument(
-        "--keep-entity", action="append", default=[], choices=ENTITY_KINDS, metavar="KIND",
+        "--keep-entity", action="append", default=[], metavar="KIND",
         help="leave this kind of entity visible in anonymized text (repeatable)",
     )
+    serve.add_argument("--audit-log", metavar="FILE", help="append a record of every tool call, never values, to this file")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        commands = {"scan": _run_scan, "protect": _run_protect, "hook": _run_hook, "check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
+        commands = {"diff": _run_diff, "audit": _run_audit, "init": _run_init, "config": _run_config, "scan": _run_scan, "protect": _run_protect, "hook": _run_hook, "check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
         return commands[args.command](args)
     except SourceError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -352,8 +410,79 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
+def _cfg(args: argparse.Namespace) -> Config:
+    """The settings in effect, loaded once. `hook` never calls this: it must not depend on them."""
+    if not hasattr(args, "_cfg"):
+        args._cfg = Config() if args.no_config else load_config(args.config_file)
+    return args._cfg
+
+
+def _policy(args: argparse.Namespace) -> KeyPolicy:
+    config = _cfg(args)
+    return KeyPolicy(
+        map_paths=frozenset([*config.map_paths, *getattr(args, "map_path", [])]),
+        keep_names=frozenset([*config.keep_names, *getattr(args, "keep_name", [])]),
+    )
+
+
+def _model(args: argparse.Namespace) -> str:
+    return args.model or _cfg(args).model or DEFAULT_MODEL
+
+
+def _custom_detectors(args: argparse.Namespace) -> list[Detector]:
+    config = _cfg(args)
+    detectors = build_detectors(config.detector_entries)
+    for path in [*config.detector_files, *map(Path, args.detectors)]:
+        detectors.extend(load_detector_file(Path(path)))
+    return detectors
+
+
+def _run_init(args: argparse.Namespace) -> int:
+    name = LOCAL_NAME if args.local else CONFIG_NAME
+    target = Path(name)
+    if target.exists():
+        raise SourceError(f"{name} already exists here")
+    target.write_text(STARTER_LOCAL if args.local else STARTER, encoding="utf-8")
+    print(f"Created {name}")
+    if args.local:
+        ignore = Path(".gitignore")
+        existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+        if Path(".git").exists() and name not in existing.splitlines():
+            separator = "" if not existing or existing.endswith(chr(10)) else chr(10)
+            ignore.write_text(existing + separator + name + chr(10), encoding="utf-8")
+            print(f"Added {name} to .gitignore, so the terms in it stay private.")
+    return 0
+
+
+def _run_diff(args: argparse.Namespace) -> int:
+    policy = _policy(args)
+    old = snapshot(args.old, policy, args.source, args.schema, args.recursive)
+    new = snapshot(args.new, policy, args.source, args.schema, args.recursive)
+    differences = diff_schemas(old, new)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    print(render_diff(differences, args.format))
+    failed = {"never": False, "any": bool(differences), "breaking": has_breaking(differences)}[args.fail_on]
+    return 1 if failed else 0
+
+
+def _run_audit(args: argparse.Namespace) -> int:
+    records, unreadable = read_log(args.log, args.since)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    print(summarize_log(records, unreadable, args.format))
+    return 0
+
+
+def _run_config(args: argparse.Namespace) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    print(describe(_cfg(args), args.reveal))
+    return 0
+
+
 def _run_schema(args: argparse.Namespace) -> int:
-    policy = KeyPolicy(map_paths=frozenset(args.map_path), keep_names=frozenset(args.keep_name))
+    policy = _policy(args)
     schema = extract(args.input, source=args.source, policy=policy, namespace=args.schema, recursive=args.recursive)
     output = render(schema, args.format)
 
@@ -374,22 +503,32 @@ def _run_schema(args: argparse.Namespace) -> int:
 def _run_scan(args: argparse.Namespace) -> int:
     from .scan import DEFAULT_KINDS, NER_KINDS, render_report, scan
 
-    if args.max_size <= 0:
+    config = _cfg(args)
+    max_size = args.max_size if args.max_size is not None else (config.scan_max_size or 5.0)
+    if max_size <= 0:
         raise SourceError("--max-size must be above 0")
-    detectors: list[Detector] = [PatternDetector(), SecretDetector()]
-    kinds = set(DEFAULT_KINDS)
-    if args.ner:
-        detectors.append(SpacyDetector(args.model))
-        kinds |= NER_KINDS
-    if args.kinds:
-        kinds = set(ENTITY_KINDS) | {SECRET} if "all" in args.kinds else set(args.kinds)
+    custom = _custom_detectors(args)
+    custom_kinds = kinds_of(custom)
+    ner = args.ner or bool(config.scan_ner)
+    detectors: list[Detector] = [*custom, PatternDetector(), SecretDetector()]  # Custom first: it wins ties.
+    if ner:
+        detectors.append(SpacyDetector(_model(args)))
+    builtin = set(ENTITY_KINDS) | {SECRET}
+    requested = list(args.kinds) or list(config.scan_kinds)
+    if requested:
+        unknown = sorted(set(requested) - builtin - custom_kinds - {"all"})
+        if unknown:
+            raise SourceError(f"unknown kind {unknown[0]!r}; the choices are {sorted(builtin | custom_kinds)} or 'all'")
+        kinds = builtin | custom_kinds if "all" in requested else set(requested)
+    else:
+        kinds = set(DEFAULT_KINDS) | custom_kinds | (set(NER_KINDS) if ner else set())
     report = scan(
         args.path,
         detectors=detectors,
         kinds=kinds,
-        excludes=args.exclude,
-        max_bytes=int(args.max_size * 1024 * 1024),
-        include_examples=args.include_examples,
+        excludes=[*config.scan_exclude, *args.exclude],
+        max_bytes=int(max_size * 1024 * 1024),
+        include_examples=args.include_examples or bool(config.scan_include_examples),
         show_paths=args.show_paths,
     )
     if hasattr(sys.stdout, "reconfigure"):
@@ -458,7 +597,7 @@ def _run_check(args: argparse.Namespace) -> int:
     if args.code == "-" and "-" in args.against:
         raise SourceError("the code and the data can't both come from stdin")
     code = _read_text(args.code)
-    policy = KeyPolicy(map_paths=frozenset(args.map_path), keep_names=frozenset(args.keep_name))
+    policy = _policy(args)
     tables, guessed = load_tables(args.against, args.table, args.source, policy, args.schema, args.recursive)
     findings = check_code(code, tables, language, args.dialect or guessed)
 
@@ -470,13 +609,22 @@ def _run_check(args: argparse.Namespace) -> int:
 
 
 def _scrub_policy(args: argparse.Namespace) -> ScrubPolicy:
-    allowed = set(args.allow)
-    for target in args.names_from:
-        allowed |= visible_names(extract(target))
-    detectors: list[Detector] = [PatternDetector()]
-    if not args.no_ner:
-        detectors.append(SpacyDetector(args.model))
-    return ScrubPolicy(frozenset(allowed), tuple(args.hide), tuple(detectors), not args.keep_numbers)
+    config = _cfg(args)
+    policy = _policy(args)
+    allowed = {*config.scrub_allow, *args.allow}
+    for target in [*map(str, config.scrub_names_from), *args.names_from]:
+        allowed |= visible_names(extract(target, policy=policy))
+    if args.no_ner:
+        use_ner = False
+    elif args.ner:
+        use_ner = True
+    else:
+        use_ner = True if config.scrub_ner is None else config.scrub_ner
+    detectors: list[Detector] = [*_custom_detectors(args), PatternDetector()]  # Custom first: it wins ties.
+    if use_ner:
+        detectors.append(SpacyDetector(_model(args)))
+    keep_numbers = args.keep_numbers or bool(config.scrub_keep_numbers)
+    return ScrubPolicy(frozenset(allowed), (*config.hide, *args.hide), tuple(detectors), not keep_numbers)
 
 
 def _run_scrub(args: argparse.Namespace) -> int:
@@ -539,7 +687,7 @@ def _run_command(args: argparse.Namespace) -> int:
 
 
 def _run_synth(args: argparse.Namespace) -> int:
-    policy = KeyPolicy(map_paths=frozenset(args.map_path), keep_names=frozenset(args.keep_name))
+    policy = _policy(args)
     schema = extract(args.input, source=args.source, policy=policy, namespace=args.schema, recursive=args.recursive)
     if not 0 <= args.rows <= MAX_ROWS:
         raise SourceError(f"--rows must be between 0 and {MAX_ROWS}")
@@ -625,15 +773,34 @@ def _run_doctor(args: argparse.Namespace) -> int:
 def _run_mcp(args: argparse.Namespace) -> int:
     from .mcp_server import run
 
-    run(args.root or ["."], args.allow_urls, args.model, args.keep_entity)
+    config = _cfg(args)
+    audit = args.audit_log or (str(config.audit_log) if config.audit_log else None)
+    run(
+        args.root or [str(root) for root in config.mcp_roots] or ["."],
+        args.allow_urls or bool(config.mcp_allow_urls),
+        _model(args),
+        [*config.keep_entities, *args.keep_entity],
+        hide=config.hide,
+        detectors=_custom_detectors(args),
+        audit_log=audit,
+    )
     return 0
 
 
 def _run_anonymize(args: argparse.Namespace) -> int:
     _check_paths_differ(args.input, args.output, args.mapping)
     text = _read_text(args.input)
-    detectors: list[Detector] = [PatternDetector(), SpacyDetector(args.model)]
-    output, mapping = anonymize_with_mapping(text, detectors, args.hide, args.keep, args.keep_entity)
+    config = _cfg(args)
+    custom = _custom_detectors(args)
+    keep_entity = [*config.keep_entities, *args.keep_entity]
+    allowed = set(ENTITY_KINDS) | {SECRET} | kinds_of(custom)
+    unknown = [kind for kind in keep_entity if kind not in allowed]
+    if unknown:
+        raise SourceError(f"unknown entity kind {unknown[0]!r}; the choices are {sorted(allowed)}")
+    detectors: list[Detector] = [*custom, PatternDetector(), SpacyDetector(_model(args))]  # Custom wins ties.
+    output, mapping = anonymize_with_mapping(
+        text, detectors, [*config.hide, *args.hide], [*config.keep, *args.keep], keep_entity
+    )
 
     # Saved first: anonymized text that can't be restored is worth less than none.
     if args.mapping:
@@ -689,23 +856,7 @@ def _write_mapping(path: str, mapping: dict[str, str]) -> None:
 
 def _restrict_on_windows(path: str) -> None:
     """Leave only the current user with access, since `os.open` modes do nothing on Windows."""
-    if sys.platform != "win32":
-        return
-    user = os.environ.get("USERNAME", "")
-    domain = os.environ.get("USERDOMAIN", "")
-    account = rf"{domain}\{user}" if domain and user else user
-    try:
-        # /reset first: when the folder has nothing to inherit, a new file gets explicit
-        # entries (SYSTEM, Administrators) that /inheritance:r alone would leave in place.
-        steps = (["/reset"], ["/inheritance:r", "/grant:r", f"{account}:(R,W,D)"])
-        results = [
-            subprocess.run(["icacls", path, *step], capture_output=True, timeout=15, check=False)
-            for step in steps
-        ]
-        restricted = all(result.returncode == 0 for result in results) and bool(user)
-    except (OSError, subprocess.SubprocessError):
-        restricted = False
-    if not restricted:
+    if sys.platform == "win32" and not restrict_to_owner(path):
         print("note: couldn't restrict the mapping file's permissions; keep it somewhere private", file=sys.stderr)
 
 

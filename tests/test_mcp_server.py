@@ -38,7 +38,7 @@ def test_lists_only_the_safe_tools(folder):
     async def names():
         return sorted(tool.name for tool in await create_server([folder]).list_tools())
 
-    assert asyncio.run(names()) == ["anonymize_file", "check_code", "describe_data", "scan_folder", "synthetic_sample"]
+    assert asyncio.run(names()) == ["anonymize_file", "check_code", "describe_data", "scan_folder", "schema_diff", "synthetic_sample"]
 
 
 def test_describe_data_returns_schema_without_values(folder):
