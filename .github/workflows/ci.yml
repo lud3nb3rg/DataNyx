@@ -10,12 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -e ".[all]" ruff mypy types-PyYAML
-      - run: ruff check src tests
-      - run: mypy
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras --locked
+      - run: uv run ruff check src tests
+      - run: uv run mypy
 
   test:
     strategy:
@@ -26,23 +24,30 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install -e ".[dev]" hypothesis pytest-cov
-      - run: pytest -m "not server" --cov --cov-report=term
+      - run: uv sync --all-extras --locked
+      - run: uv run pytest -m "not server" --cov --cov-report=term
+
+  # The text tests need the large NER models, so they run once rather than in every cell.
+  text:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras --group models --locked
+      - run: uv run pytest tests/test_text.py tests/test_text_model.py
 
   # Runs the tests that need real database servers, started from docker-compose.
   servers:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -e ".[dev]" hypothesis
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras --locked
       - run: docker compose -f tests/docker-compose.yml up -d --wait
-      - run: pytest -m server
+      - run: uv run pytest -m server
         env:
           DATANYX_TEST_SERVERS: "1"
       - if: always()

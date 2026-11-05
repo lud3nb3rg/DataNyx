@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Licensed under MIT.
+- Development moved to uv: `uv.lock`, a `dev` dependency group and a `models` group for the NER models.
+
 - Added readers for CSV, TSV, Parquet, Excel, YAML and XML, and for whole folders.
 - Large JSON files are streamed when `ijson` is installed.
 - Added `typescript`, `pydantic` and `sql` output formats.

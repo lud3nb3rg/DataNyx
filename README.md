@@ -445,57 +445,38 @@ and connection timeout argument to `sql_source.py`, add the extra to `pyproject.
 and add a server to the live tests. Anything else with a catalog should read it directly
 and build `Object` nodes, with one `Entity` per table, so it never has to query any rows.
 
+## Development
+
+The project uses [uv](https://docs.astral.sh/uv/). `uv sync` creates `.venv` from
+`uv.lock`, so everyone gets the same versions:
+
+```sh
+uv sync --all-extras                # every reader and database driver, plus the dev tools
+uv sync --all-extras --group models # also the large NER models (about 500 MB)
+uv run datanyx doctor               # shows what's installed
+```
+
 ## Tests
 
 ```sh
-pip install -e ".[dev]"
-pytest
-```
-
-Checks that CI also runs:
-
-```sh
-ruff check src tests
-mypy
-pytest --cov                  # coverage report
+uv run pytest                       # needs no services; model tests skip without the models
+uv run ruff check src tests
+uv run mypy
+uv run pytest --cov                 # coverage report
 ```
 
 `tests/test_fuzz_leaks.py` generates documents with a canary planted in every value, in
 JSON, JSON Lines, CSV, YAML and XML, and fails if the canary reaches any output format or
-note. Run it with other seeds using `pytest tests/test_fuzz_leaks.py --hypothesis-seed=N`.
-
-The default run needs no services. Tests that need a server or an NER model are skipped,
-unless the model is installed:
-
-```sh
-python -m spacy download en_core_web_lg
-python -m spacy download fr_core_news_md
-```
+note. Run it with other seeds using `uv run pytest tests/test_fuzz_leaks.py --hypothesis-seed=N`.
 
 To run the server tests against real databases, using Docker:
 
 ```sh
 docker compose -f tests/docker-compose.yml up -d --wait
-DATANYX_TEST_SERVERS=1 pytest -m server
+DATANYX_TEST_SERVERS=1 uv run pytest -m server
 docker compose -f tests/docker-compose.yml down
 ```
 
-In PowerShell, set the variable with `$env:DATANYX_TEST_SERVERS = 1` first.
+## License
 
-The images total about 7.4 GB. On a first run, pulling them all at once can overwhelm
-Docker Desktop, so start services one at a time if it hangs, for example
-`docker compose -f tests/docker-compose.yml up -d --wait postgres`. The live tests use
-PostgreSQL 17, MySQL 8.4, MariaDB 11.4, SQL Server 2022 and Oracle Free 23.
-
-| Test file | Covers |
-|---|---|
-| `test_privacy.py` | Plants a canary string throughout synthetic JSON and checks it never reaches any output, including errors |
-| `test_schema.py` | JSON schemas are accurate enough to code against |
-| `test_sqlite.py` | SQLite structure, read-only access and refused row reads |
-| `test_sql_targets.py` | URLs, `env:NAME`, and failures that never show the password |
-| `test_sql_servers.py` | All of the above against real servers, plus logins without row access |
-| `test_keep_name.py` | `--keep-name` reveals only the names asked for |
-| `test_text.py` | Patterns, placeholders and CLI for text, using a stand-in for the model |
-| `test_text_model.py` | Real NER models on labelled documents from `text_corpus.py` |
-
-Add a canary check for each new source.
+[MIT](LICENSE)

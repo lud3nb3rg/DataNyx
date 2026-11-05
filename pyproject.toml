@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "Turn sensitive data into a value-free schema that AI agents can work from."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["ai-agents", "privacy", "schema", "anonymization", "data"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -35,7 +37,21 @@ streaming = ["ijson>=3.2"]
 mcp = ["mcp>=1.2"]
 all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp]"]
 text = ["spacy>=3.7"]
-dev = ["pytest>=8", "hypothesis>=6", "datanyx[all,text]"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "hypothesis>=6",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-PyYAML",
+]
+# Large NER models, installed from spaCy's releases. Needed only by the text tests.
+models = [
+    "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
+    "fr-core-news-md @ https://github.com/explosion/spacy-models/releases/download/fr_core_news_md-3.8.0/fr_core_news_md-3.8.0-py3-none-any.whl",
+]
 
 [project.scripts]
 datanyx = "datanyx.cli:main"
@@ -84,3 +100,6 @@ skip_covered = true
 module = "datanyx.mcp_server"
 # Which of the two MCP library versions is installed decides which ignores are needed.
 warn_unused_ignores = false
+
+[tool.uv]
+default-groups = ["dev"]
