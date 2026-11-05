@@ -23,11 +23,13 @@ from .check import LANGUAGES, format_diagnostics, load_tables
 from .check import check_code as run_check
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
+from .scan import render_report, scan
 from .sources import SourceError
 from .synth import render_table, synthesize
 from .text import (
     DEFAULT_MODEL,
     ENTITY_KINDS,
+    SECRET,
     Detector,
     PatternDetector,
     SpacyDetector,
@@ -39,6 +41,7 @@ INSTRUCTIONS = (
     "(types and field names, never values) for a file, folder or database. "
     "`synthetic_sample` returns fake rows that match that schema, for trying code out. "
     "`check_code` checks your SQL or pandas code against that schema before you run it. "
+    "`scan_folder` reports which files hold personal data or secrets, never the values. "
     "`anonymize_file` returns text with names and identifiers replaced by placeholders "
     "like <PERSON_1>; it can miss things, so treat it as a draft. Write code against the "
     "schema, and ask the user to run it, rather than asking for the data."
@@ -200,6 +203,21 @@ def create_server(
             [access.check(target)], [table] if table else [], namespace=database_schema
         )
         return format_diagnostics(run_check(code, tables, language, dialect or guessed))
+
+    @server.tool()
+    @_guard
+    def scan_folder(target: str, kinds: list[str] | None = None) -> str:
+        """Which files in a folder hold personal data or secrets, by kind and count, never by value.
+
+        kinds: any of EMAIL, PHONE, CREDIT_CARD, IBAN, IP_ADDRESS, MAC_ADDRESS, ADDRESS, SECRET
+        (the default), or others such as DATE and URL. File names that look like data are shown
+        as file_N. Names of people and companies aren't found.
+        """
+        allowed = {*ENTITY_KINDS, SECRET}
+        if kinds and not set(kinds) <= allowed:
+            raise SourceError(f"kinds must be among {sorted(allowed)}")
+        report = scan(access.check(target), kinds=kinds or None)
+        return render_report(report)
 
     @server.tool()
     @_guard

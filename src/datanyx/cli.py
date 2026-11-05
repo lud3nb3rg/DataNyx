@@ -27,8 +27,10 @@ from .synth import MAX_ROWS, file_name, render_table, synthesize, write_sqlite
 from .text import (
     DEFAULT_MODEL,
     ENTITY_KINDS,
+    SECRET,
     Detector,
     PatternDetector,
+    SecretDetector,
     SpacyDetector,
     anonymize_with_mapping,
     restore,
@@ -134,6 +136,33 @@ def build_parser() -> argparse.ArgumentParser:
             "required for sqlite. Existing files are never overwritten"
         ),
     )
+
+    scan_parser = commands.add_parser(
+        "scan",
+        help="find which files hold personal data or secrets, by kind and count, without showing any",
+        description=(
+            "Look through a folder for emails, phone numbers, card and IBAN numbers, IP addresses, "
+            "addresses and credentials, and report where they are. No value is ever printed. Run it "
+            "before pointing an agent at a folder. Names of people and companies need --ner."
+        ),
+    )
+    scan_parser.add_argument("path", help="folder or file to scan")
+    scan_parser.add_argument(
+        "--kinds",
+        action="append",
+        default=[],
+        choices=[*ENTITY_KINDS, SECRET, "all"],
+        metavar="KIND",
+        help="what to look for (repeatable; default: EMAIL, PHONE, CREDIT_CARD, IBAN, IP_ADDRESS, MAC_ADDRESS, ADDRESS, SECRET; 'all' for every kind)",
+    )
+    scan_parser.add_argument("--ner", action="store_true", help="also find names, organisations and places with the NER model (slow)")
+    scan_parser.add_argument("--model", default=DEFAULT_MODEL, help="spaCy NER model for --ner (default: %(default)s)")
+    scan_parser.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="skip names matching this pattern (repeatable)")
+    scan_parser.add_argument("--max-size", type=float, default=5.0, metavar="MB", help="skip files larger than this (default: %(default)s)")
+    scan_parser.add_argument("--include-examples", action="store_true", help="also count example.com emails and loopback or documentation IPs")
+    scan_parser.add_argument("--show-paths", action="store_true", help="show real file names, even ones that look like data (run it yourself)")
+    scan_parser.add_argument("--format", choices=("text", "json"), default="text", help="output format (default: %(default)s)")
+    scan_parser.add_argument("--fail-on-findings", action="store_true", help="exit with 1 if anything is found, for CI or a pre-commit hook")
 
     protect = commands.add_parser(
         "protect",
@@ -312,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        commands = {"protect": _run_protect, "hook": _run_hook, "check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
+        commands = {"scan": _run_scan, "protect": _run_protect, "hook": _run_hook, "check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
         return commands[args.command](args)
     except SourceError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -340,6 +369,33 @@ def _run_schema(args: argparse.Namespace) -> int:
             sys.stdout.reconfigure(encoding="utf-8")
         print(output)
     return 0
+
+
+def _run_scan(args: argparse.Namespace) -> int:
+    from .scan import DEFAULT_KINDS, NER_KINDS, render_report, scan
+
+    if args.max_size <= 0:
+        raise SourceError("--max-size must be above 0")
+    detectors: list[Detector] = [PatternDetector(), SecretDetector()]
+    kinds = set(DEFAULT_KINDS)
+    if args.ner:
+        detectors.append(SpacyDetector(args.model))
+        kinds |= NER_KINDS
+    if args.kinds:
+        kinds = set(ENTITY_KINDS) | {SECRET} if "all" in args.kinds else set(args.kinds)
+    report = scan(
+        args.path,
+        detectors=detectors,
+        kinds=kinds,
+        excludes=args.exclude,
+        max_bytes=int(args.max_size * 1024 * 1024),
+        include_examples=args.include_examples,
+        show_paths=args.show_paths,
+    )
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    print(render_report(report, args.format))
+    return 1 if args.fail_on_findings and not report.clean else 0
 
 
 def _run_hook(args: argparse.Namespace) -> int:
