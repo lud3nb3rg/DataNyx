@@ -224,3 +224,94 @@ def test_cli_reads_csv(tmp_path, capsys):
     path = write(tmp_path, "d.csv", "a\n1\n")
     assert main(["schema", str(path), "--format", "text"]) == 0
     assert "a: integer" in capsys.readouterr().out
+
+
+# --- Streaming JSON ----------------------------------------------------------
+
+
+def test_streamed_json_matches_the_standard_reader(tmp_path, monkeypatch):
+    pytest.importorskip("ijson")
+    from datanyx.sources import json_source
+
+    document = {
+        "users": [{"id": 1, "mail": "a@x.com", "tags": ["a"], "n": None}, {"id": 2.5, "mail": "b@x.com"}],
+        "meta": {"ok": True, "when": "2024-01-02"},
+        "empty": [],
+    }
+    path = write(tmp_path, "d.json", "﻿" + json.dumps(document))
+    standard = render(extract(str(path)))
+    monkeypatch.setattr(json_source, "STREAM_THRESHOLD_BYTES", 0)
+    assert render(extract(str(path))) == standard
+
+
+def test_streamed_json_errors_do_not_quote_the_text(tmp_path, monkeypatch):
+    pytest.importorskip("ijson")
+    from datanyx.sources import json_source
+
+    monkeypatch.setattr(json_source, "STREAM_THRESHOLD_BYTES", 0)
+    path = write(tmp_path, "d.json", f'{{"a": {CANARY} ]')
+    with pytest.raises(SourceError) as error:
+        extract(str(path))
+    assert CANARY not in str(error.value)
+
+
+# --- Folders -----------------------------------------------------------------
+
+
+def make_folder(tmp_path):
+    folder = tmp_path / "data"
+    folder.mkdir()
+    (folder / "orders.csv").write_text("id,user_id\n1,2\n", encoding="utf-8")
+    (folder / "users.json").write_text('[{"user_id": 2, "name": "x"}]', encoding="utf-8")
+    (folder / "jane doe medical.csv").write_text(f"a\n{CANARY}\n", encoding="utf-8")
+    (folder / "notes.txt").write_text("ignored", encoding="utf-8")
+    (folder / ".hidden.csv").write_text("a\n1\n", encoding="utf-8")
+    (folder / "broken.json").write_text(f"{{{CANARY}", encoding="utf-8")
+    return folder
+
+
+def test_folder_describes_each_readable_file(tmp_path):
+    result = extract(str(make_folder(tmp_path)))
+    names = [entity.name for entity in result.entities]
+    assert "orders.csv" in names and "users.json" in names
+    assert "file_2" in names  # "jane doe medical.csv": the name looks like data.
+    assert not any("jane" in name for name in names)
+    joined = "\n".join(result.notes)
+    assert "orders.csv and users.json share fields: user_id" in joined
+    assert "could not describe broken.json" in joined
+    assert "skipped 1 file(s)" in joined
+    assert CANARY not in joined and CANARY not in render(result) and "jane" not in joined
+
+
+def test_folder_recursion_and_source_filter(tmp_path):
+    folder = make_folder(tmp_path)
+    (folder / "sub").mkdir()
+    (folder / "sub" / "more.csv").write_text("z\n1\n", encoding="utf-8")
+    assert "sub/more.csv" not in [e.name for e in extract(str(folder)).entities]
+    deep = extract(str(folder), recursive=True)
+    assert "sub/more.csv" in [e.name for e in deep.entities]
+    only_json = extract(str(folder), source="json")
+    assert [e.name for e in only_json.entities] == ["users.json"]
+
+
+def test_folder_rejects_namespace_and_cli_works(tmp_path, capsys):
+    folder = make_folder(tmp_path)
+    with pytest.raises(SourceError):
+        extract(str(folder), namespace="x")
+    assert main(["schema", str(folder), "--format", "text"]) == 0
+    assert "orders.csv:" in capsys.readouterr().out
+
+
+def test_folder_with_sqlite_prefixes_table_names(tmp_path):
+    import sqlite3
+
+    folder = tmp_path / "d"
+    folder.mkdir()
+    connection = sqlite3.connect(folder / "shop.db")
+    connection.execute("create table items (id integer primary key)")
+    connection.execute("create table lines (item_id integer references items(id))")
+    connection.close()
+    result = extract(str(folder))
+    assert sorted(e.name for e in result.entities) == ["shop.db#items", "shop.db#lines"]
+    lines = next(e for e in result.entities if e.name.endswith("lines"))
+    assert lines.foreign_keys[0].referenced_entity == "shop.db#items"

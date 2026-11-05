@@ -14,6 +14,12 @@ Lets an AI agent work with your data without seeing what's sensitive in it.
 |---|---|---|
 | Plain text (`anonymize`) | Any UTF-8 file, or `-` for stdin | `pip install -e ".[text]"`, plus a [model](#text-anonymization) |
 | JSON, JSON Lines | `.json`, `.jsonl`, `.ndjson`, or `-` for stdin | `pip install -e .` |
+| CSV, TSV | `.csv`, `.tsv`, `.tab` | `pip install -e .` |
+| XML | `.xml` | `pip install -e .` |
+| YAML | `.yaml`, `.yml` | `pip install -e ".[yaml]"` |
+| Excel | `.xlsx`, `.xlsm` | `pip install -e ".[excel]"` |
+| Parquet | `.parquet`, `.pq` | `pip install -e ".[parquet]"` |
+| A folder | Every readable file in it, with `-r` for subfolders | as for the files in it |
 | SQLite | `.db`, `.sqlite`, `.sqlite3`, or `sqlite:///path` | `pip install -e .` |
 | PostgreSQL | `postgresql://` | `pip install -e ".[postgres]"` |
 | MySQL | `mysql://` | `pip install -e ".[mysql]"` |
@@ -21,7 +27,7 @@ Lets an AI agent work with your data without seeing what's sensitive in it.
 | SQL Server | `mssql://` | `pip install -e ".[mssql]"` |
 | Oracle | `oracle://` | `pip install -e ".[oracle]"` |
 
-Requires Python 3.10+. Use `.[all]` to install every driver. Other SQLAlchemy URLs,
+Requires Python 3.10+. Use `.[all]` to install every driver and reader. Other SQLAlchemy URLs,
 such as `snowflake://`, should work if you install their dialect, but only the
 databases above are tested.
 
@@ -35,11 +41,15 @@ datanyx schema shop.db --format text            # SQLite
 datanyx schema env:DATABASE_URL                 # server database, URL read from the environment
 datanyx schema env:DATABASE_URL --schema sales  # a schema other than the default
 cat customers.json | datanyx schema -           # read stdin
+datanyx schema orders.csv                       # CSV, TSV, YAML, XML, Excel and Parquet work the same way
+datanyx schema ./exports/ -r                    # every readable file in a folder, subfolders too
+datanyx schema orders.csv --format typescript   # or pydantic, or sql
 ```
 
 | Option | Purpose |
 |---|---|
-| `--format` | `json-schema` (default) or `text` |
+| `--format` | `json-schema` (default), `text`, `typescript`, `pydantic` or `sql` |
+| `-r`, `--recursive` | For a folder, also read its subfolders |
 | `-o`, `--output` | Write to a file instead of stdout |
 | `--schema` | Database schema to describe, instead of the database's default |
 | `--source` | Set the input type (`json`, `jsonl`, `sql`) when it can't be detected |
@@ -93,6 +103,29 @@ In JSON Schema output, each table is an entry under `$defs`, with `x-native-type
 `x-primary-key` and `x-foreign-keys` carrying the database details.
 
 Notes about what was hidden go to stderr, so they stay out of the schema.
+
+### Output formats
+
+`--format typescript` writes declarations, `--format pydantic` writes Pydantic v2 models
+(Python source), and `--format sql` writes portable `CREATE TABLE` statements. All three
+carry no values, and keys that were hidden stay hidden: they become `Record<string, T>`,
+`extra="allow"` or a note. Nested data becomes `JSON` columns in SQL, and a database's own
+column types are kept as they are. Names that aren't valid identifiers get a Pydantic
+`alias`, so the model still reads and writes the real keys.
+
+### How each format is read
+
+| Format | How it's described |
+|---|---|
+| CSV, TSV | The first row is the header. Cell text is typed by what it plainly is, but `007` stays a string. A short row makes its missing columns optional. |
+| Excel | One entry per sheet, first row as the header, cached formula results. A sheet name that looks like data becomes `sheet_N`. |
+| Parquet | From the file footer alone: no row is read, and the file's metadata is ignored. Columns, structs, lists and maps are typed from the Arrow schema. |
+| YAML | Read with the safe loader, so no tag can run code. Several documents are described as an array. |
+| XML | Attributes are keys starting with `-` and text is `$text`. An element that repeats becomes an array. Files with a DOCTYPE or entity declarations are refused. |
+| Folder | One entry per file, named after it. A file name that looks like data becomes `file_N`. Fields shared between files are listed in the notes, since they're likely join keys. Links and dotfiles are skipped. |
+
+Files with unusual extensions can be read with `--source csv`, `--source tsv`, `--source xml`
+and so on.
 
 ## Text anonymization
 
@@ -210,6 +243,26 @@ templates. It's a small synthetic test, not a real-world accuracy figure:
 If the agent runs DataNyx itself, its output is still safe to show, as long as you
 accept that `--keep-name` lets it [test guesses](#adjusting-what-gets-hidden).
 
+### As an MCP server
+
+```sh
+pip install -e ".[mcp]"
+datanyx mcp --root ./exports        # stdio; add to your agent's MCP configuration
+```
+
+The agent gets two tools: `describe_data` (a schema for a file, folder or `env:NAME`
+database) and `anonymize_file` (a text file with placeholders). It's limited by design:
+
+- It can only read under `--root` (default: the current folder), and database URLs are
+  refused unless you start the server with `--allow-urls`. Use `env:NAME` instead.
+- There's no `keep` option, because keeping a name visible tests whether it exists. Choose
+  `--keep-entity` when you start the server instead.
+- There's no restore tool and no mapping, since both hold the real values.
+- Errors are fixed messages, never the library's own text.
+
+The server doesn't stop the agent from opening the files itself. Block that in its
+permissions, as above.
+
 ## What protects the data
 
 **Values can't reach the output.** Each value is reduced to a type and a format label
@@ -316,7 +369,9 @@ that can run the tool could also use it to test guesses, such as whether
   because the catalog can't tell text dates from epoch numbers. A declared type
   SQLAlchemy doesn't recognise, such as `ANY`, shows as `NUMERIC`.
 - **Connections time out after 10 seconds** so an unreachable server can't stall a session.
-- **Large JSON documents** are loaded fully into memory. JSON Lines is read line by line.
+- **Large JSON documents** over 64 MB are streamed if `ijson` is installed (`pip install -e ".[streaming]"`); otherwise they're loaded fully into memory. JSON Lines and CSV are read row by row. Error messages for streamed JSON have no line number, since the parser's own text can quote the data.
+- **CSV has no types.** Types come from the text, so a column of numbers with one `n/a` becomes a string, and a header row is assumed.
+- **XML and YAML are loaded fully into memory.**
 
 ## Python API
 
@@ -342,14 +397,24 @@ clean, mapping = anonymize_with_mapping("Jessica Whitfield called.", detectors)
 print(restore(clean, mapping))
 ```
 
+Two shortcuts return text directly:
+
+```python
+import datanyx
+
+print(datanyx.schema_of("orders.csv", "typescript"))
+print(datanyx.anonymize_text("Jessica Whitfield called.", hide=["Acme"]))
+```
+
 Failures raise `SourceError`, with a message that's safe to show.
 
 ## Architecture
 
 ```
 Source         --->  DataSchema (schema.py)  --->  Renderer
-JSON, JSONL,         no values by design           JSON Schema, text
-SQL databases
+JSON, JSONL, CSV,    no values by design           JSON Schema, text,
+YAML, XML, Excel,                                  TypeScript, Pydantic, SQL
+Parquet, SQL, folders
 
 Text  --->  Detectors (patterns, NER)  --->  Placeholders
 ```
@@ -361,7 +426,9 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `inference.py` | Builds nodes from sampled values, for sources without a catalog |
 | `privacy.py` | Decides which names are structure and which are data |
 | `formats.py` | Recognises string formats, returning only a label |
+| `sources/directory.py` | Describes a folder: one entry per file, with file names held to the same rules |
 | `renderers/` | Output formats |
+| `mcp_server.py` | MCP server that only exposes schemas and anonymized text |
 | `text/detectors.py` | Finds sensitive spans: patterns, and spaCy NER through `Detector` |
 | `text/anonymizer.py` | Merges spans, finds repeat mentions and assigns placeholders |
 | `cli.py` | Command line, which reports errors without quoting data |
@@ -369,7 +436,8 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 ### Adding a source
 
 Implement `Source` and add it to the registry in `sources/__init__.py`. Documents, API
-responses and CSV rows can reuse `Observation` from `inference.py`.
+responses and CSV rows can reuse `Observation` from `inference.py`, and sources that
+know their types up front (like Parquet) can use `build_object` from `sources/catalog.py`.
 
 A SQL database with a SQLAlchemy dialect needs no new source. Add its short URL, driver
 and connection timeout argument to `sql_source.py`, add the extra to `pyproject.toml`,

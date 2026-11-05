@@ -36,9 +36,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     schema = commands.add_parser("schema", help="print a value-free schema of the input")
     schema.add_argument("input", help=(
-            'file to describe, "-" for stdin, a database URL, or env:NAME to read the '
+            'file or folder to describe, "-" for stdin, a database URL, or env:NAME to read the '
             "URL from an environment variable (keeps passwords off the command line)"
         ),
+    )
+    schema.add_argument(
+        "-r", "--recursive", action="store_true", help="when the input is a folder, also read its subfolders"
     )
     schema.add_argument("--schema", help="database schema to describe (default: the database's default)")
     schema.add_argument("--source", choices=source_kinds(), help="input type (default: detect)")
@@ -121,13 +124,31 @@ def build_parser() -> argparse.ArgumentParser:
     back.add_argument("--mapping", required=True, metavar="FILE", help="file saved by `anonymize --mapping`")
     # Required so that real values can't land in an agent's view of stdout by default.
     back.add_argument("-o", "--output", required=True, help="file to write the restored text to")
+
+    serve = commands.add_parser(
+        "mcp",
+        help="run an MCP server that gives an agent schemas and anonymized text, not data",
+        description=(
+            "Serve `describe_data` and `anonymize_file` over MCP (stdio). The agent can only "
+            "read files under --root, and never receives values, a mapping, or a restore tool."
+        ),
+    )
+    serve.add_argument(
+        "--root", action="append", default=[], metavar="DIR", help="folder the agent may read (repeatable; default: current folder)"
+    )
+    serve.add_argument("--allow-urls", action="store_true", help="accept database URLs from the agent (they may contain passwords)")
+    serve.add_argument("--model", default=DEFAULT_MODEL, help="spaCy NER model (default: %(default)s)")
+    serve.add_argument(
+        "--keep-entity", action="append", default=[], choices=ENTITY_KINDS, metavar="KIND",
+        help="leave this kind of entity visible in anonymized text (repeatable)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        commands = {"anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
+        commands = {"mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
         return commands[args.command](args)
     except SourceError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -140,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_schema(args: argparse.Namespace) -> int:
     policy = KeyPolicy(map_paths=frozenset(args.map_path), keep_names=frozenset(args.keep_name))
-    schema = extract(args.input, source=args.source, policy=policy, namespace=args.schema)
+    schema = extract(args.input, source=args.source, policy=policy, namespace=args.schema, recursive=args.recursive)
     output = render(schema, args.format)
 
     for note in schema.notes:
@@ -154,6 +175,13 @@ def _run_schema(args: argparse.Namespace) -> int:
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8")
         print(output)
+    return 0
+
+
+def _run_mcp(args: argparse.Namespace) -> int:
+    from .mcp_server import run
+
+    run(args.root or ["."], args.allow_urls, args.model, args.keep_entity)
     return 0
 
 

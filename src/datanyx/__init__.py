@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
+from typing import Iterable
+
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .schema import DataSchema
-from .sources import Source, SourceError, resolve_source
+from .text import DEFAULT_MODEL
+from .sources import Source, SourceError, describe_folder, resolve_source
 
 __version__ = "0.1.0"
 
@@ -15,11 +19,18 @@ def extract(
     source: str | None = None,
     policy: KeyPolicy | None = None,
     namespace: str | None = None,
+    recursive: bool = False,
 ) -> DataSchema:
-    """Build a value-free schema for a file path, "-" for stdin, or a database URL.
+    """Build a value-free schema for a file path, "-" for stdin, a database URL or a folder.
 
     `namespace` picks a database schema; the database's default is used otherwise.
+    For a folder, every readable file in it is described (and in its subfolders,
+    when `recursive` is set); `source` then limits which files are read.
     """
+    if os.path.isdir(target):
+        if namespace is not None:
+            raise SourceError("a schema can only be selected for SQL databases")
+        return describe_folder(target, source, policy or KeyPolicy(), recursive)
     return resolve_source(target, source).extract(target, policy or KeyPolicy(), namespace)
 
 
@@ -28,4 +39,53 @@ def render(schema: DataSchema, output_format: str = "json-schema") -> str:
     return RENDERERS[output_format](schema)
 
 
-__all__ = ["DataSchema", "KeyPolicy", "Source", "SourceError", "extract", "render"]
+def schema_of(
+    target: str,
+    output_format: str = "json-schema",
+    *,
+    source: str | None = None,
+    map_paths: Iterable[str] = (),
+    keep_names: Iterable[str] = (),
+    namespace: str | None = None,
+    recursive: bool = False,
+) -> str:
+    """The schema of `target` as text, in one call.
+
+    >>> print(datanyx.schema_of("customers.csv", "text"))
+
+    Raises `SourceError` with a message that never quotes the data. Use `extract` and
+    `render` instead to get the schema as objects, or to see its `notes`.
+    """
+    policy = KeyPolicy(map_paths=frozenset(map_paths), keep_names=frozenset(keep_names))
+    schema = extract(target, source, policy, namespace, recursive)
+    return render(schema, output_format)
+
+
+def anonymize_text(
+    text: str,
+    *,
+    model: str = DEFAULT_MODEL,
+    hide: Iterable[str] = (),
+    keep: Iterable[str] = (),
+    keep_entity: Iterable[str] = (),
+) -> str:
+    """`text` with names and identifiers replaced by placeholders such as <PERSON_1>.
+
+    Needs `datanyx[text]` and a spaCy model. Best effort: review the result.
+    """
+    from .text import PatternDetector, SpacyDetector, anonymize
+
+    detectors = [PatternDetector(), SpacyDetector(model)]
+    return anonymize(text, detectors, hide, keep, keep_entity)
+
+
+__all__ = [
+    "DataSchema",
+    "KeyPolicy",
+    "Source",
+    "SourceError",
+    "anonymize_text",
+    "extract",
+    "render",
+    "schema_of",
+]

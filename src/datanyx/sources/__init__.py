@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from ..privacy import KeyPolicy
+from ..schema import DataSchema
 from .base import Source, SourceError
+from .directory import describe_directory
 from .delimited_source import DelimitedSource
 from .excel_source import ExcelSource
 from .json_source import JsonLinesSource, JsonSource
@@ -44,4 +47,11 @@ def resolve_source(target: str, kind: str | None = None) -> Source:
     raise SourceError(f"can't tell the input type; pass --source, one of {source_kinds()}")
 
 
-__all__ = ["Source", "SourceError", "resolve_source", "source_kinds"]
+def describe_folder(path: str, kind: str | None, policy: KeyPolicy, recursive: bool = False) -> DataSchema:
+    """Describe every file in a folder that some source can read."""
+    if kind is not None and kind not in _SOURCES:
+        raise SourceError(f"unknown source {kind!r}; choose from {source_kinds()}")
+    return describe_directory(path, _SOURCES, kind, policy, recursive)
+
+
+__all__ = ["Source", "SourceError", "describe_folder", "resolve_source", "source_kinds"]

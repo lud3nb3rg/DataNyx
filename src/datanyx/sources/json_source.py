@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import codecs
 import json
+import os
 
 from ..inference import Observation, infer
 from ..privacy import KeyPolicy
 from ..schema import DataSchema
 from .base import Source, SourceError
 from .files import STDIN, extension, open_text, records_observation, reject_namespace, unnamed
+
+# Above this size a document is read as a stream when ijson is installed, so memory
+# use depends on the document's structure, not its length. Smaller files use the
+# standard library, whose error messages say where a problem is.
+STREAM_THRESHOLD_BYTES = 64 * 1024 * 1024
 
 # Documents stay unnamed: the filename could itself be sensitive
 # ("jane_doe_medical.json"), so it must not appear in the schema.
@@ -22,6 +29,10 @@ class JsonSource(Source):
 
     def extract(self, target: str, policy: KeyPolicy, namespace: str | None = None) -> DataSchema:
         reject_namespace(namespace)
+        streamer = _streamer() if _should_stream(target) else None
+        if streamer is not None:
+            node, notes = infer(_observe_stream(streamer, target), policy)
+            return unnamed(self.kind, node, notes)
         observation = Observation()
         with open_text(target) as stream:
             try:
@@ -58,6 +69,77 @@ class JsonLinesSource(Source):
                 raise SourceError("input is not valid UTF-8") from None
         node, notes = infer(root, policy)
         return unnamed(self.kind, node, notes)
+
+
+def _should_stream(target: str) -> bool:
+    if target == STDIN:
+        return False  # Its size isn't known, and piped documents are rarely huge.
+    try:
+        return os.path.getsize(target) > STREAM_THRESHOLD_BYTES
+    except OSError:
+        return False
+
+
+def _streamer():
+    """The ijson module, or None when it isn't installed."""
+    try:
+        import ijson
+    except ImportError:
+        return None
+    return ijson
+
+
+_BOM = codecs.BOM_UTF8  # Added by some Windows tools; ijson's parser rejects it.
+
+
+def _observe_stream(ijson, path: str) -> Observation:
+    """Observe a document from parser events, without ever building it in memory."""
+    root = Observation()
+    stack: list[list] = []  # [observation of the container, is an object, current key]
+    try:
+        with open(path, "rb") as stream:
+            if stream.read(3) != _BOM:
+                stream.seek(0)
+            for event, value in ijson.basic_parse(stream, use_float=True):
+                _apply(event, value, root, stack)
+    except OSError as error:
+        raise SourceError(f"cannot read input: {error.strerror}") from None
+    except UnicodeDecodeError:
+        raise SourceError("input is not valid UTF-8") from None
+    except ijson.JSONError:
+        # ijson's messages can quote the text around the problem.
+        raise SourceError("invalid JSON") from None
+    return root
+
+
+def _apply(event: str, value: object, root: Observation, stack: list[list]) -> None:
+    if event == "map_key":
+        stack[-1][2] = value
+    elif event in ("end_map", "end_array"):
+        stack.pop()
+    elif event in ("start_map", "start_array"):
+        target = _slot(stack, root)
+        target.seen += 1
+        is_object = event == "start_map"
+        if is_object:
+            target.objects += 1
+        else:
+            target.arrays += 1
+        stack.append([target, is_object, None])
+    else:
+        _slot(stack, root).observe(value)
+
+
+def _slot(stack: list[list], root: Observation) -> Observation:
+    """Where the next value belongs."""
+    if not stack:
+        return root
+    container, is_object, key = stack[-1]
+    if is_object:
+        return container.fields.setdefault(key, Observation())
+    if container.items is None:
+        container.items = Observation()
+    return container.items
 
 
 def _describe_decode_error(error: json.JSONDecodeError) -> str:
