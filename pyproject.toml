@@ -35,8 +35,11 @@ excel = ["openpyxl>=3.1"]
 yaml = ["pyyaml>=6"]
 streaming = ["ijson>=3.2"]
 mcp = ["mcp>=1.2"]
-all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp]"]
+all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp,check]"]
 text = ["spacy>=3.7"]
+check = [
+    "sqlglot>=25",
+]
 
 [dependency-groups]
 dev = [
@@ -46,6 +49,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.10",
     "types-PyYAML",
+    "pandas>=2.3.3",
 ]
 # Large NER models, installed from spaCy's releases. Needed only by the text tests.
 models = [

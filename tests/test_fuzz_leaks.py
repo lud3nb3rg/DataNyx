@@ -113,3 +113,17 @@ def test_synthetic_data_never_leaks(tmp_path_factory, document):
     for table in synthesize(extract(str(path)), rows=20):
         for output_format in ("json", "jsonl", "csv"):
             assert CANARY not in render_table(table, output_format)
+
+
+@FUZZ
+@given(DOCUMENTS)
+def test_checker_output_never_leaks(tmp_path_factory, document):
+    pytest.importorskip("sqlglot")
+    from datanyx.check import check_code, format_diagnostics, load_tables
+
+    path = tmp_path_factory.mktemp("c") / "d.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    tables = load_tables([str(path)])[0]
+    queries = ["SELECT nope, id FROM data WHERE name = 5", "SELECT x FROM missing", "SELECT SUM(email) FROM data"]
+    for query in queries:
+        assert CANARY not in format_diagnostics(check_code(query, tables, "sql"))

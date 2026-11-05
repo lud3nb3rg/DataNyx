@@ -19,6 +19,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from . import extract, render
+from .check import LANGUAGES, format_diagnostics, load_tables
+from .check import check_code as run_check
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .sources import SourceError
@@ -36,6 +38,7 @@ INSTRUCTIONS = (
     "Describes the user's data without revealing it. `describe_data` returns a schema "
     "(types and field names, never values) for a file, folder or database. "
     "`synthetic_sample` returns fake rows that match that schema, for trying code out. "
+    "`check_code` checks your SQL or pandas code against that schema before you run it. "
     "`anonymize_file` returns text with names and identifiers replaced by placeholders "
     "like <PERSON_1>; it can miss things, so treat it as a draft. Write code against the "
     "schema, and ask the user to run it, rather than asking for the data."
@@ -170,6 +173,33 @@ def create_server(
             return render_table(tables[0], "jsonl")
         sections = [f"-- {table.name or 'root'}" + chr(10) + render_table(table, "jsonl") for table in tables]
         return chr(10).join(sections)
+
+    @server.tool()
+    @_guard
+    def check_code(
+        code: str,
+        target: str,
+        language: str = "sql",
+        dialect: str | None = None,
+        table: str | None = None,
+        database_schema: str | None = None,
+    ) -> str:
+        """Check your own SQL or pandas code against the schema of the data it will run on.
+
+        Reports misspelled or unknown columns and tables, ambiguous joins and type mistakes,
+        with line numbers and suggestions. Nothing is run. Hidden names are indistinguishable
+        from names that don't exist, so this can't be used to find them.
+
+        code: the SQL or Python source. language: "sql" or "python".
+        target: a file, folder or env:NAME database, as for describe_data.
+        table: the name your code uses for a single file, such as the table in FROM.
+        """
+        if language not in LANGUAGES:
+            raise SourceError(f"language must be one of {list(LANGUAGES)}")
+        tables, guessed = load_tables(
+            [access.check(target)], [table] if table else [], namespace=database_schema
+        )
+        return format_diagnostics(run_check(code, tables, language, dialect or guessed))
 
     @server.tool()
     @_guard

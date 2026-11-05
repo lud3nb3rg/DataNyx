@@ -14,6 +14,8 @@ import subprocess
 import sys
 
 from . import extract, render
+from .check import LANGUAGES as CHECK_LANGUAGES
+from .check import check_code, detect_language, format_diagnostics, load_tables
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .schema import Array, Object
@@ -132,6 +134,40 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    check = commands.add_parser(
+        "check",
+        help="check SQL or pandas code against a schema before running it",
+        description=(
+            "Find misspelled columns, unknown tables, ambiguous joins and type mistakes in SQL "
+            "or pandas code, using the schema of the data it works on. Nothing is run and no "
+            "data is read by the code. Exits with 1 if there are errors."
+        ),
+    )
+    check.add_argument("code", help='file with the code (.sql or .py), or "-" for stdin')
+    check.add_argument(
+        "--against",
+        action="append",
+        required=True,
+        metavar="INPUT",
+        help="what the code works on: a file, folder, database URL or env:NAME (repeatable)",
+    )
+    check.add_argument(
+        "--table",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="the table name for the matching --against file, in order; a file has no name of its own in a schema",
+    )
+    check.add_argument("--language", choices=CHECK_LANGUAGES, help="sql or python (default: from the file extension)")
+    check.add_argument("--dialect", help="SQL dialect, such as postgres, mysql, tsql, sqlite (default: guessed from --against)")
+    check.add_argument("--format", choices=("text", "json"), default="text", help="output format (default: %(default)s)")
+    check.add_argument("--strict", action="store_true", help="exit with 1 for warnings too")
+    check.add_argument("-r", "--recursive", action="store_true", help="when an input is a folder, also read its subfolders")
+    check.add_argument("--schema", help="database schema to use (default: the database's default)")
+    check.add_argument("--source", choices=source_kinds(), help="input type for --against (default: detect)")
+    check.add_argument("--map-path", action="append", default=[], metavar="PATH", help="hide all keys or columns at a path (repeatable)")
+    check.add_argument("--keep-name", action="append", default=[], metavar="NAME", help="show this name even if it looks like data (repeatable)")
+
     scrub_parser = commands.add_parser(
         "scrub",
         help="remove data from error messages and logs, keeping what's needed to debug",
@@ -245,7 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        commands = {"scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
+        commands = {"check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
         return commands[args.command](args)
     except SourceError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -273,6 +309,24 @@ def _run_schema(args: argparse.Namespace) -> int:
             sys.stdout.reconfigure(encoding="utf-8")
         print(output)
     return 0
+
+
+def _run_check(args: argparse.Namespace) -> int:
+    language = args.language or (detect_language(args.code) if args.code != "-" else None)
+    if language is None:
+        raise SourceError("can't tell the language of the code; pass --language sql or --language python")
+    if args.code == "-" and "-" in args.against:
+        raise SourceError("the code and the data can't both come from stdin")
+    code = _read_text(args.code)
+    policy = KeyPolicy(map_paths=frozenset(args.map_path), keep_names=frozenset(args.keep_name))
+    tables, guessed = load_tables(args.against, args.table, args.source, policy, args.schema, args.recursive)
+    findings = check_code(code, tables, language, args.dialect or guessed)
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    print(format_diagnostics(findings, "<stdin>" if args.code == "-" else args.code, args.format))
+    failed = any(item.severity == "error" for item in findings) or (args.strict and bool(findings))
+    return 1 if failed else 0
 
 
 def _scrub_policy(args: argparse.Namespace) -> ScrubPolicy:
