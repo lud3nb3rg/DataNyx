@@ -15,6 +15,9 @@ nodes directly from it.
 
 from __future__ import annotations
 
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
+
 from .formats import detect_format
 from .privacy import KeyPolicy, looks_like_data
 from .schema import (
@@ -78,14 +81,24 @@ class Observation:
         elif isinstance(value, str):
             self.strings += 1
             self.string_formats.add(detect_format(value))
-        elif isinstance(value, list):
+        elif isinstance(value, (list, tuple, set, frozenset)):
             self.arrays += 1
             for item in value:
                 self.observe_item(item)
         elif isinstance(value, dict):
             self.objects += 1
             for key, child in value.items():
-                self.fields.setdefault(key, Observation()).observe(child)
+                # YAML allows keys that aren't strings; they are named by their text.
+                self.fields.setdefault(key if isinstance(key, str) else str(key), Observation()).observe(child)
+        elif isinstance(value, (datetime, date, time)):  # datetime subclasses date.
+            self.strings += 1
+            label = "date-time" if isinstance(value, datetime) else "date" if isinstance(value, date) else "time"
+            self.string_formats.add(label)
+        elif isinstance(value, (Decimal, timedelta)):
+            self.floats += 1
+        elif isinstance(value, (bytes, bytearray)):
+            self.strings += 1
+            self.string_formats.add("binary")
         else:
             raise TypeError(f"unsupported value type: {type(value).__name__}")
 

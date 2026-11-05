@@ -3,11 +3,27 @@
 from __future__ import annotations
 
 from .base import Source, SourceError
+from .delimited_source import DelimitedSource
+from .excel_source import ExcelSource
 from .json_source import JsonLinesSource, JsonSource
+from .parquet_source import ParquetSource
 from .sql_source import SqlSource
+from .xml_source import XmlSource
+from .yaml_source import YamlSource
 
 _SOURCES: dict[str, Source] = {
-    source.kind: source for source in (SqlSource(), JsonSource(), JsonLinesSource())
+    source.kind: source
+    for source in (
+        SqlSource(),
+        JsonSource(),
+        JsonLinesSource(),
+        DelimitedSource("csv", ",", (".csv",)),
+        DelimitedSource("tsv", "	", (".tsv", ".tab")),
+        ParquetSource(),
+        ExcelSource(),
+        YamlSource(),
+        XmlSource(),
+    )
 }
 
 

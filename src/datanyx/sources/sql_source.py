@@ -45,6 +45,7 @@ from ..schema import (
     Unknown,
 )
 from .base import Source, SourceError
+from .catalog import merge_nodes as _merge_nodes
 
 _FILE_EXTENSIONS = (".db", ".sqlite", ".sqlite3")
 _ENV_PREFIX = "env:"
@@ -328,17 +329,6 @@ def _temporal_node(column_type: TypeEngine) -> Node:
     if isinstance(column_type, sa.DateTime):
         return String("date-time")
     return String("date" if isinstance(column_type, sa.Date) else "time")
-
-
-def _merge_nodes(nodes: list[Node]) -> Node:
-    if any(isinstance(node, Unknown) for node in nodes):
-        return Unknown()
-    options: list[Node] = []
-    for node in nodes:
-        for option in node.options if isinstance(node, Union) else (node,):
-            if option not in options:
-                options.append(option)
-    return options[0] if len(options) == 1 else Union(tuple(options))
 
 
 def _native_type(column_type: TypeEngine, engine: Engine) -> str | None:
