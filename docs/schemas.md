@@ -93,7 +93,7 @@ column types are kept as they are. Names that aren't valid identifiers get a Pyd
 
 | Format | How it's described |
 |---|---|
-| CSV, TSV | The first row is the header, unless it looks like data: then it counts as a record and the columns are `column_N` ([how it decides](security.md#known-limits)). Cell text is typed by what it plainly is, but `007` stays a string. A short row makes its missing columns optional. |
+| CSV, TSV | The first row is the header, unless it looks like data: then it counts as a record and the columns are `column_N` ([how it decides](privacy-model.md#known-limits)). Cell text is typed by what it plainly is, but `007` stays a string. A short row makes its missing columns optional. |
 | Excel | One entry per sheet, first row as the header unless it looks like data, cached formula results. A sheet name that looks like data becomes `sheet_N`. |
 | Parquet | From the file footer alone: no row is read, and the file's metadata is ignored. Columns, structs, lists and maps are typed from the Arrow schema. |
 | YAML | Read with the safe loader, so no tag can run code. Several documents are described as an array. |

@@ -25,7 +25,7 @@ or pick the job you have:
 
 - **[Features](features.md)**: what it does, in one page.
 - **[Supported sources](sources.md)**: file formats and databases, and the extra to install for each.
-- **[Security model](security.md)**: what is guaranteed, what is only best effort, and the known limits.
+- **[Privacy model](privacy-model.md)**: what is guaranteed, what is only best effort, and the known limits.
 - **[Command reference](cli-reference.md)**: every command and option, generated from the code.
 - **[Python API](python-api.md)**: using DataNyx from your own code.
 - **[Contributing](contributing.md)**: the architecture, how to add a source, and how to run the tests.

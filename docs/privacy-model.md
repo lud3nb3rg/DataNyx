@@ -1,4 +1,4 @@
-# Security model
+# Privacy model
 
 **What protects the data**
 

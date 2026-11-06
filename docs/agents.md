@@ -73,7 +73,7 @@ writes them to a file, is not caught), or follow a path built from a variable th
 (`D=data; cat $D/x.csv`), or know what an unfamiliar program does with its arguments or what a pipe feeds it.
 `find . -name '*.csv'` isn't refused either, so file names can still be listed that way. It governs Claude Code's tools only: other agents, a terminal, or someone
 who edits the settings themselves aren't stopped. For hard isolation, use a separate account or
-container with no access to the data, or [a database login that can't read rows](security.md#a-login-that-cant-read-rows).
+container with no access to the data, or [a database login that can't read rows](privacy-model.md#a-login-that-cant-read-rows).
 
 ## As an MCP server
 

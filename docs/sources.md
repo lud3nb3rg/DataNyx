@@ -50,7 +50,7 @@ path can be read from a URL, except DuckDB, SAS, Stata and SPSS, whose readers n
 - For https and S3, a connection times out after ten seconds and a transfer after five minutes.
 - A folder in cloud storage can't be described yet: name the files. `datanyx scan` doesn't read URLs.
 - `datanyx mcp` fetches a URL only when you start it with `--allow-urls` (or name the variable with
-  `--allow-env`), because the server then makes the request on the agent's behalf. See [the security notes](security.md).
+  `--allow-env`), because the server then makes the request on the agent's behalf. See [the privacy model](privacy-model.md).
 
 ## Notes on the newer sources
 

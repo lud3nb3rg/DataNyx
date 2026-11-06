@@ -49,5 +49,5 @@ nav:
   - Reference:
       - Command reference: cli-reference.md
       - Python API: python-api.md
-      - Security model: security.md
+      - Privacy model: privacy-model.md
   - Contributing: contributing.md

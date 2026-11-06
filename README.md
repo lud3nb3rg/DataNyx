@@ -15,7 +15,7 @@ and replaces names and identifiers in free text with placeholders.
 [Getting started](docs/getting-started.md) ·
 [Documentation](docs/index.md) ·
 [Command reference](docs/cli-reference.md) ·
-[Security model](docs/security.md) ·
+[Privacy model](docs/privacy-model.md) ·
 [Changelog](CHANGELOG.md)
 
 </div>
@@ -73,7 +73,7 @@ Python 3.10 or newer. [Supported sources](docs/sources.md) lists the extra for e
 | [Using it with an agent](docs/agents.md) | `datanyx protect`, the guard hook and the MCP server |
 | [Installing and deploying](docs/deployment.md) | PyPI, Docker, a pre-commit hook, a GitHub Action, a shared MCP server |
 | [Team settings](docs/settings.md), [schema diff](docs/schema-diff.md) | Shared policy, and change detection for CI |
-| [Security model](docs/security.md) | What is guaranteed, what isn't, and the known limits |
+| [Privacy model](docs/privacy-model.md) | What is guaranteed, what isn't, and the known limits |
 | [Command reference](docs/cli-reference.md), [Python API](docs/python-api.md) | Every option, and use from code |
 | [Contributing](docs/contributing.md) | Architecture, adding a source, tests |
 
