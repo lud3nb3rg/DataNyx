@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.0 (2026-11-06)
+
+The first release.
+
 - Added opt-in `--scale-hints` (a table's size as an order of magnitude, from the rows read, a file footer or a catalog estimate) and `--infer-keys` (yes/no guesses that a column is unique and that tables join, from names and values), with `scale_hints` and `infer_keys` settings and the same options on `datanyx mcp`. Inferred joins are marked as guesses in every format and drive `synth`.
 - Added sources: Avro (`.[avro]`), ORC (`.[orc]`), DuckDB (`.[duckdb]`), SAS, Stata and SPSS (`.[stats]`), MongoDB (`.[mongodb]`, sampled from documents), FHIR (split by resource type) and HL7 v2 (one entity per segment). Schemas come from headers, footers or catalogs wherever the format has them; enum labels and value labels are never shown.
 - Added a release workflow (PyPI trusted publishing and a `ghcr.io` image on a version tag), a `Dockerfile`, a pre-commit hook (`datanyx-scan`) and a GitHub Action (`scan` or `diff`). `datanyx scan` now takes several paths.
