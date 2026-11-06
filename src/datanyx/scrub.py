@@ -10,9 +10,8 @@ What it does, in order:
 1. Secrets: values of environment variables that look like credentials, and the
    password inside a URL, are replaced.
 2. Paths: your home folder, working folder and username are shortened.
-3. In a Python traceback, the code under a `File` line is left alone apart from terms to
-   hide, and a `File` line loses only what its path gives away. Every other line is treated
-   as a message.
+3. In a Python traceback, `File` lines and the code under them are left alone. Every
+   other line is treated as a message, even an indented one.
 4. In messages, anything in quotes is replaced unless it is a name the schema made
    public: error messages quote values far more often than names.
 5. Detectors (emails, IDs, and names if a NER model is used) replace what they find.
@@ -32,7 +31,8 @@ from dataclasses import dataclass, field
 
 from .credentials import hide_url_credentials
 from .schema import Array, DataSchema, Node, Object, Union
-from .text import Anonymizer, Detector, PatternDetector, SecretDetector
+from .text import Detector, PatternDetector, anonymize
+from .text.secrets import redact_url_credentials
 
 VALUE = "<VALUE>"
 NUMBER = "<NUMBER>"
@@ -44,13 +44,16 @@ _SECRET_NAME = re.compile(
 _MIN_SECRET_LENGTH = 6
 
 _TRACEBACK = re.compile(r"^Traceback \(most recent call last\):\s*$")
+_FILE_LINE = re.compile(r'^\s+File ".*", line \d+')
+_REPEATED_LINE = re.compile(r"^\s+\[Previous line repeated \d+ more times?\]\s*$")
+_CODE_LINE = re.compile(r"^ {4}")
+# Python 3.13 prints a statement that spans lines in full, with the middle cut, so a frame can have a few.
+_MAX_CODE_LINES = 12
 _CHAIN = re.compile(r"^(During handling of the above exception|The above exception was the direct cause)")
 _EXCEPTION_LINE = re.compile(
     r"^((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception|Warning|Exit|Interrupt|Failure))(:\s*)(.*)$"
 )
-_QUOTED = re.compile(r"""(?<!\w)(?:[bBrRuUfF]{1,2})?(['"])((?:(?!\1)[^\n\\]|\\.){0,300})\1(?!\w)""")
-# Longer ones, which the pattern above leaves alone to stay fast on lines full of stray quotes.
-_LONG_QUOTED = re.compile(r"""(['"])[^\n]{301,}?\1""")
+_QUOTED = re.compile(r"""(?<!\w)(?:[bBrRuUfF]{1,2})?(['"])((?:(?!\1)[^\n\\]|\\.){0,100000})\1(?!\w)""")
 _NUMBER = re.compile(r"(?<![\w.])(?:\d{4,}|\d+\.\d+)(?![\w])")
 _TRACEBACK_FILE = re.compile(r"^\s+File \"")
 _FILE_PATH = re.compile(r'^(\s+File ")(.*?)(".*)$')
@@ -140,11 +143,10 @@ def visible_names(schema: DataSchema) -> frozenset[str]:
 
 
 def _hide_secrets(text: str) -> str:
-    # Longest first: a password inside a database URL mustn't break the URL's own match.
-    values = {value for name, value in os.environ.items() if _SECRET_NAME.search(name) and len(value) >= _MIN_SECRET_LENGTH}
-    for value in sorted(values, key=len, reverse=True):
-        text = text.replace(value, SECRET)
-    return hide_url_credentials(text)
+    for name, value in os.environ.items():
+        if _SECRET_NAME.search(name) and len(value) >= _MIN_SECRET_LENGTH:
+            text = text.replace(value, SECRET)
+    return redact_url_credentials(text)
 
 
 def _shorten_paths(text: str) -> str:
@@ -166,20 +168,19 @@ def _classify(lines: list[str]) -> list[str]:
     """Mark each line `structure` (a traceback's own lines) or `message`."""
     kinds = []
     in_traceback = False
-    after_file = False  # The one line under a `File` line is its code.
+    code_lines = _MAX_CODE_LINES  # How many more lines may be code under the last `File` line.
     for line in lines:
         if _TRACEBACK.match(line):
             kinds.append("structure")
-            in_traceback, after_file = True, False
+            in_traceback, code_lines = True, 0
         elif _CHAIN.match(line):
             kinds.append("structure")
-            after_file = False
-        elif in_traceback and _TRACEBACK_FILE.match(line):
+        elif in_traceback and (_FILE_LINE.match(line) or _REPEATED_LINE.match(line)):
             kinds.append("structure")
-            after_file = True
-        elif in_traceback and (after_file or _CARETS.match(line)) and line.startswith(" "):
-            kinds.append("structure")
-            after_file = False
+            code_lines = _MAX_CODE_LINES
+        elif in_traceback and code_lines and _CODE_LINE.match(line):
+            kinds.append("structure")  # The code line, and the ^^^^ markers.
+            code_lines -= 1
         else:
             kinds.append("message")
             after_file = False

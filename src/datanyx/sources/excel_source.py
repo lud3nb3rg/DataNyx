@@ -11,10 +11,13 @@ from ..schema import DataSchema, Entity
 from .base import Source, SourceError
 from .files import (
     EMPTY_TABLE,
+    HEADERLESS_NOTE,
     column_names,
     extension,
+    first_row_is_data,
     items_seen,
     missing_extra,
+    positional_names,
     records_observation,
     reject_namespace,
     require_path,
@@ -66,8 +69,12 @@ def _describe(workbook, policy: KeyPolicy, kind: str) -> DataSchema:
             if all(cell is None or cell == "" for cell in row):
                 continue
             if names is None:
-                names = column_names(list(row))
-                continue
+                if not first_row_is_data(row, policy.keep_names):
+                    names = column_names(list(row))
+                    continue
+                names = positional_names(len(row))
+                if HEADERLESS_NOTE not in notes:
+                    notes.append(HEADERLESS_NOTE)
             record = {n: (None if v == "" else v) for n, v in zip(names, row)}
             root.observe_item(record)
             if evidence is not None:

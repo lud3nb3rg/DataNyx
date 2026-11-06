@@ -159,8 +159,8 @@ class OllamaDetector:
     uses_model = True
 
     def __init__(self, model: str = DEFAULT_OLLAMA_MODEL, url: str = DEFAULT_OLLAMA_URL, timeout: float = 180.0) -> None:
-        host = urllib.parse.urlparse(url).hostname or ""
-        if host.lower() not in _LOOPBACK:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() not in _LOOPBACK:
             raise SourceError("only an Ollama server on this computer can be used: the text would otherwise leave it")
         self._model = model
         self._url = url.rstrip("/") + "/api/generate"
@@ -197,6 +197,8 @@ class OllamaDetector:
         # No proxy: with HTTP_PROXY set, the text would otherwise go to the proxy, off this computer.
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
+            # No proxy, whatever the environment says: urllib would otherwise send "localhost" through one.
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(request, timeout=self._timeout) as response:
                 answer = json.loads(response.read().decode("utf-8"))
             items = json.loads(answer["response"])["items"]

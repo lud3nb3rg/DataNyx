@@ -67,9 +67,10 @@ def test_errors_never_quote_the_data(folder):
     assert CANARY not in message and "invalid JSON" in message
 
 
-def test_access_allows_env_names_that_hold_a_database_url(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@db.internal/app")
-    assert Access(["."]).check("env:DATABASE_URL") == "env:DATABASE_URL"
+def test_access_allows_only_the_env_names_it_was_given():
+    assert Access(["."], allow_env=["DATABASE_URL"]).check("env:DATABASE_URL") == "env:DATABASE_URL"
+    with pytest.raises(SourceError):
+        Access(["."]).check("env:DATABASE_URL")
 
 
 # --- Library API -------------------------------------------------------------

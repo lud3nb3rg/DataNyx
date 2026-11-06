@@ -21,6 +21,16 @@ _LONG_DIGIT_RUN = re.compile(r"\d{4,}")
 _HEX_TOKEN = re.compile(r"[0-9a-fA-F]{16,}")
 _MAX_KEY_LENGTH = 64
 _TOKEN_MIN_LENGTH = 20
+_WORDS = re.compile(r"[a-z]+")
+# Words that say what a document is about. Beside other words they usually name whose it is, as in
+# jane_doe_medical.csv. On its own (medical.csv) such a word is a topic, and stays visible.
+_SENSITIVE_SUBJECTS = frozenset(
+    {
+        "medical", "health", "diagnosis", "therapy", "psych", "psychiatric", "prescription", "hiv", "cancer", "pregnancy",
+        "salary", "payslip", "paystub", "bank", "statement", "tax", "passport", "visa", "ssn", "divorce", "custody",
+        "criminal", "disciplinary", "resume", "cv", "contract", "invoice", "personal", "private", "confidential",
+    }
+)
 
 
 def looks_like_data(key: str) -> bool:
@@ -42,6 +52,13 @@ def _is_opaque_token(key: str) -> bool:
     has_digit = any(c.isdigit() for c in key)
     # A long unbroken run mixing digits with letters reads as an ID or API key.
     return has_digit and any(c.isalpha() for c in key)
+
+
+def file_name_looks_personal(name: str) -> bool:
+    """A file name that names a subject and something more, such as a person: jane_doe_medical.csv."""
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    words = _WORDS.findall(stem.lower())
+    return len(words) >= 2 and any(word in _SENSITIVE_SUBJECTS for word in words)
 
 
 @dataclass(frozen=True)
@@ -75,3 +92,7 @@ class KeyPolicy:
     def shows_name(self, name: str) -> bool:
         """Whether a catalog name, such as a table or column, may be shown."""
         return name in self.keep_names or not looks_like_data(name)
+
+    def shows_file_name(self, name: str) -> bool:
+        """Whether a file or folder name may be shown. They say more than a column name can."""
+        return name in self.keep_names or not (looks_like_data(name) or file_name_looks_personal(name))

@@ -71,8 +71,8 @@ has a file of the same name, is refused.
 | Format | Result |
 |---|---|
 | Text, Markdown, logs, CSV, JSON and similar | The same file, with placeholders. Line endings are kept |
-| HTML | The same page: tags and layout stay. Text, comments, strings and comments in scripts and stylesheets, and descriptive attributes (`title`, `alt`, `href`, `src`, `value`, `data-*`, `aria-*`...) change, quoted or not. Text with nothing to hide keeps its original spelling |
-| Word (`.docx`) | The same document: styles, tables and layout stay. A paragraph with something to hide loses the formatting *inside* it. Text boxes, tracked deletions, alt text and links out of the document are anonymized, the authors of changes and comments replaced, and author, company, title, custom properties and embedded data cleared |
+| HTML | The same page: tags and layout stay, text and attributes change, except the ones about layout (`class`, `style`, `width`...); comments and scripts are removed. Text with nothing to hide keeps its original spelling |
+| Word (`.docx`) | The same document: styles, tables and layout stay. A paragraph with something to hide loses the formatting *inside* it, and author, company and title are cleared. Who made each comment and revision is replaced, alt text and labels are anonymized, tracked deletions are removed, and custom properties, custom XML and embedded files are emptied |
 | Email (`.eml`) | A text file of the headers and body. People become placeholders (a sender is `<PERSON_1> (<EMAIL_1>)`), routing headers and attachments are left out, and attachment names are listed |
 | PDF | A text file of the pages, with page markers (needs `.[pdf]`) |
 | WhatsApp export | The same chat, each sender one placeholder, so who said what is still clear. Continuation lines and system messages are handled |
@@ -89,8 +89,8 @@ tail -f app.log | datanyx anonymize - --stream --mapping app.mapping.json
 ```
 
 **What these don't do.** Each line of a stream is judged on its own, so a name split across lines isn't
-joined. Inside HTML only the strings and comments of a `<script>` or `<style>` are read, so a value written
-into the code itself stays: check scripts yourself. Images and embedded objects in Word files and the pictures in a PDF aren't read, and a
+joined. Inside HTML, comments and the contents of `<script>` are removed, since code can't be anonymized and still
+mean anything, and `<style>` is left alone. Images in Word files and the pictures in a PDF aren't read, and a
 scanned PDF has no text to find; the notes printed after a run say when that happened. Changed HTML
 text is re-escaped, so `&nbsp;` becomes a plain non-breaking space. WhatsApp's two usual layouts are
 recognised, and other chat apps aren't. A person is matched by exact name across documents: "Whitfield"

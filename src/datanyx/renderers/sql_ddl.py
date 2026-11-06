@@ -7,6 +7,8 @@ types are kept when a schema came from a database. Other sources' type names (Av
 
 from __future__ import annotations
 
+import re
+
 from ..schema import (
     Array,
     Boolean,
@@ -23,7 +25,8 @@ from ..schema import (
     Unknown,
 )
 
-_SQL_TYPED_SOURCES = frozenset({"sql", "duckdb"})
+# Only what a type name needs: this text goes into SQL that may be run, and it can come from the input.
+_SAFE_NATIVE_TYPE = re.compile(r"[A-Za-z_][\w .]*(\(\s*\w+(\s*,\s*\w+)*\s*\))?[\w \[\]]*")
 _STRING_TYPES = {
     "date": "DATE",
     "date-time": "TIMESTAMP",
@@ -76,7 +79,8 @@ def _table(entity: Entity, native: bool) -> str:
 def _column(name: str, field: Field, native: bool) -> str:
     node = field.node
     nullable = not field.required or _allows_null(node)
-    kind = (field.native_type if native else None) or _column_type(node)
+    native = field.native_type
+    kind = native if native and _SAFE_NATIVE_TYPE.fullmatch(native) else _column_type(node)
     return f"{_quote(name)} {kind}" + ("" if nullable else " NOT NULL")
 
 

@@ -11,10 +11,11 @@ from ..schema import DataSchema
 from .base import Source, SourceError
 from .files import (
     EMPTY_TABLE,
-    FIRST_ROW_IS_DATA,
+    HEADERLESS_NOTE,
     coerce_text,
     column_names,
     extension,
+    first_row_is_data,
     items_seen,
     open_text,
     positional_names,
@@ -44,7 +45,7 @@ class DelimitedSource(Source):
         evidence = policy.evidence.table(None) if policy.evidence is not None else None
         with open_text(target) as stream:
             try:
-                names = _read_rows(csv.reader(stream, delimiter=self._delimiter), root, notes, evidence)
+                names = _read_rows(csv.reader(stream, delimiter=self._delimiter), root, notes, evidence, policy.keep_names)
             except csv.Error:
                 raise SourceError(f"input isn't valid {self.kind.upper()}") from None
             except UnicodeDecodeError:
@@ -55,18 +56,18 @@ class DelimitedSource(Source):
         return unnamed(self.kind, node, tuple(notes) + inferred, scale_for(policy, items_seen(root)))
 
 
-def _read_rows(reader, root: Observation, notes: list[str], evidence=None) -> list[str] | None:
+def _read_rows(reader, root: Observation, notes: list[str], evidence=None, keep_names=frozenset()) -> list[str] | None:
     names: list[str] | None = None
     wide = False
     for row in reader:
         if names is None:
             if not any(cell.strip() for cell in row):
                 continue
-            if not row_is_data(row):
+            if not first_row_is_data(row, keep_names):
                 names = column_names(row)
                 continue
-            names = positional_names(row)
-            notes.append(FIRST_ROW_IS_DATA)
+            names = positional_names(len(row))
+            notes.append(HEADERLESS_NOTE)
         if not row:
             continue
         wide = wide or len(row) > len(names)

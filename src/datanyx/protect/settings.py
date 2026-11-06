@@ -15,7 +15,9 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import re
 import shlex
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,8 @@ from .config import CONFIG_DIR, config_path, load_config, stored_form
 from .guard import DENY_TOOLS
 
 HOOK_LABEL = "DataNyx guard"
+#: `onFailure: "block"` needs this version. Before it, a hook that fails to start lets the tool call through.
+MINIMUM_CLAUDE_CODE = (2, 1, 295)
 MCP_NAME = "datanyx"
 _RULE_TOOLS = ("Read", "Edit")  # Edit is the rule name for every tool that writes a file.
 
@@ -125,6 +129,24 @@ def self_test(project: Path, command: list[str], target: Path) -> str | None:
     return None if decision == "deny" else "the guard hook ran but didn't refuse a protected file"
 
 
+def claude_code_warning() -> str | None:
+    """A warning if the Claude Code on this machine is too old for the hook to fail closed."""
+    wanted = ".".join(map(str, MINIMUM_CLAUDE_CODE))
+    program = shutil.which("claude")
+    if program is None:
+        return f"the guard only blocks tool calls when it fails on Claude Code {wanted} or later; check yours with `claude --version`"
+    try:
+        output = subprocess.run([program, "--version"], capture_output=True, text=True, timeout=15, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        output = ""
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", output)
+    if match is None:
+        return f"couldn't read the version of Claude Code; the guard only blocks tool calls when it fails on {wanted} or later"
+    if tuple(map(int, match.groups())) < MINIMUM_CLAUDE_CODE:
+        return f"Claude Code {match.group(0)} is older than {wanted}: if the guard fails to start, tool calls go through. Update it"
+    return None
+
+
 # --- settings.json -------------------------------------------------------------------
 
 
@@ -145,7 +167,7 @@ def _add_settings(data: dict, project: Path, targets: list[Path], known: list[Pa
             {
                 "type": "command",
                 "command": command[0],
-                "args": [*command[1:], "hook"],
+                "args": [*command[1:], "hook", "--require-config"],
                 "onFailure": "block",
                 "statusMessage": HOOK_LABEL,
             }
@@ -288,4 +310,4 @@ def _remove_if_empty(folder: Path) -> None:
             pass
 
 
-__all__ = ["Change", "apply", "plan_protect", "plan_remove", "self_test", "split_command"]
+__all__ = ["Change", "apply", "claude_code_warning", "plan_protect", "plan_remove", "self_test", "split_command"]

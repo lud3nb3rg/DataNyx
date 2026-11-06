@@ -137,19 +137,18 @@ def test_html_keeps_the_markup_and_replaces_text_and_descriptive_attributes():
     assert '<p class="x">' in out and '<img src="p.png"' in out and "<br/>" in out and "<!DOCTYPE html>" in out
 
 
-def test_html_leaves_unchanged_text_and_code_exactly_and_hides_what_is_in_scripts_and_comments():
+def test_html_leaves_unchanged_text_exactly_and_styles_alone_and_removes_scripts_and_comments():
     out = anonymize_bytes(PAGE.encode(), ".html", make_anonymizer()).data.decode()
     assert "Nothing here &amp; &eacute;." in out  # Nothing to hide: the entities are as they were.
-    assert ".a { color: red }" in out and 'var e = "<EMAIL_' in out  # The code stays, the value goes.
-    assert "js@acme-corp.io" not in out and JESSICA not in out and "in comment" in out
+    assert ".a { color: red }" in out
+    assert "js@acme-corp.io" not in out and "<script>" in out and "</script>" in out
+    assert JESSICA not in out and "<!--" not in out
 
 
 def test_html_output_keeps_every_tag_balanced():
     out = anonymize_bytes(PAGE.encode(), ".html", make_anonymizer()).data.decode()
     assert out.count("<p") == PAGE.count("<p") and out.count("</p>") == PAGE.count("</p>")
-    # Placeholders are escaped in the page's text, so no raw tag was added there.
-    without_code = re.sub(r"<!--.*?-->|<script.*?</script>", "", out, flags=re.DOTALL)
-    assert without_code.count("<") == re.sub(r"<!--.*?-->|<script.*?</script>", "", PAGE, flags=re.DOTALL).count("<")
+    assert out.count("<") == PAGE.count("<") - PAGE.count("<!--")  # Placeholders are escaped, so no raw tag was added.
 
 
 # --- Email -----------------------------------------------------------------------------------------------------------

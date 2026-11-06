@@ -82,12 +82,19 @@ def write_sqlite(tables: list[Table], path: str) -> None:
     except sqlite3.Error:
         raise SourceError("cannot create the database file") from None
     try:
+        connection.set_authorizer(_refuse_other_databases)  # The script only ever needs this one.
         connection.executescript(render_sql_ddl(schema))
         for table in tables:
             _insert(connection, table)
         connection.commit()
+    except sqlite3.Error as error:
+        raise SourceError(f"this schema couldn't be written as SQLite ({type(error).__name__})") from None
     finally:
         connection.close()
+
+
+def _refuse_other_databases(action: int, *_rest: object) -> int:
+    return sqlite3.SQLITE_DENY if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH) else sqlite3.SQLITE_OK
 
 
 def _insert(connection: sqlite3.Connection, table: Table) -> None:
