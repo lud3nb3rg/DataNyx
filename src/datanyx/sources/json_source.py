@@ -11,7 +11,17 @@ from ..privacy import KeyPolicy
 from ..scale import scale_for
 from ..schema import DataSchema
 from .base import Source, SourceError
-from .files import STDIN, extension, items_seen, open_text, records_observation, reject_namespace, unnamed
+from .files import (
+    STDIN,
+    binary_stream,
+    extension,
+    is_remote,
+    items_seen,
+    open_text,
+    records_observation,
+    reject_namespace,
+    unnamed,
+)
 
 # Above this size a document is read as a stream when ijson is installed, so memory
 # use depends on the document's structure, not its length. Smaller files use the
@@ -87,6 +97,8 @@ class JsonLinesSource(Source):
 def _should_stream(target: str) -> bool:
     if target == STDIN:
         return False  # Its size isn't known, and piped documents are rarely huge.
+    if is_remote(target):
+        return True  # Streaming never holds the document, and a URL's size isn't known without asking.
     try:
         return os.path.getsize(target) > STREAM_THRESHOLD_BYTES
     except OSError:
@@ -110,7 +122,7 @@ def _observe_stream(ijson, path: str) -> Observation:
     root = Observation()
     stack: list[list] = []  # [observation of the container, is an object, current key]
     try:
-        with open(path, "rb") as stream:
+        with binary_stream(path) as stream:
             if stream.read(3) != _BOM:
                 stream.seek(0)
             for event, value in ijson.basic_parse(stream, use_float=True):
@@ -128,7 +140,7 @@ def _observe_stream(ijson, path: str) -> Observation:
 def _feed_evidence(ijson, path: str, table) -> None:
     """Key evidence is gathered per record, so the records of a top-level list are read one at a time."""
     try:
-        with open(path, "rb") as stream:
+        with binary_stream(path) as stream:
             if stream.read(3) != _BOM:
                 stream.seek(0)
             for record in ijson.items(stream, "item", use_float=True):

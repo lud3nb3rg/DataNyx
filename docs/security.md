@@ -61,6 +61,18 @@ schema, and its attempt to `SELECT` from a table is refused.
 
 On Oracle, a table without the grant doesn't appear in the schema.
 
+# Files at a URL
+
+`datanyx schema` and the other commands that describe data can read a file from `https://` and cloud storage
+(see [Files at a URL](sources.md#files-at-a-url)). The URL is the only thing that leaves your machine, and nothing
+is sent but the request for the file. Messages never quote it, because it may carry a password or a signed token.
+`file://` URLs are not accepted, so a URL can't be used to get around the folders an MCP server is limited to.
+
+When `datanyx mcp` runs with `--allow-urls`, the *server* makes the request the agent asks for, from wherever it runs.
+An agent could point it at an internal address (a metadata service, an admin page) and learn from the error
+type whether something answered. Run the server with `--allow-urls` only where that is acceptable, or keep
+the URLs you want it to use in environment variables and allow only those with `--allow-env`.
+
 # Known limits
 
 - **Field names are shown.** They're what make the schema useful, so a sensitive name

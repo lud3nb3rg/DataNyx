@@ -6,7 +6,7 @@ from ..privacy import KeyPolicy
 from ..scale import scale_for
 from ..schema import DataSchema
 from .base import Source, SourceError
-from .files import extension, missing_extra, reject_namespace, require_path, unnamed
+from .files import extension, missing_extra, path_or_stream, reject_namespace, require_path, unnamed
 from .parquet_source import arrow_table_node
 
 
@@ -25,9 +25,10 @@ class OrcSource(Source):
         except ImportError:
             raise missing_extra("ORC", "orc") from None
         try:
-            orc_file = orc.ORCFile(target)
-            arrow_schema = orc_file.schema  # From the file footer; no row is decoded.
-            rows = orc_file.nrows
+            with path_or_stream(target) as source:
+                orc_file = orc.ORCFile(source)
+                arrow_schema = orc_file.schema  # From the file footer; no row is decoded.
+                rows = orc_file.nrows
         except FileNotFoundError:
             raise SourceError("cannot read input: no such file") from None
         except Exception as error:

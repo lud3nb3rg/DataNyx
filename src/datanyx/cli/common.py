@@ -44,8 +44,8 @@ def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "input",
         help=(
-            'file or folder to describe, "-" for stdin, a database URL, or env:NAME to read the '
-            "URL from an environment variable (keeps passwords off the command line)"
+            'file or folder to describe, "-" for stdin, a database URL, the URL of a file (s3://, gs://, az:// or '
+            "https://), or env:NAME to read a URL from an environment variable (keeps passwords off the command line)"
         ),
     )
     parser.add_argument(

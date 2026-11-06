@@ -47,7 +47,7 @@ from ..schema import (
 from ..selection import choose
 from .base import Source, SourceError
 from .catalog import build_object
-from .files import sqlite_read_only_uri
+from .files import remote_url, sqlite_read_only_uri
 
 _FILE_EXTENSIONS = (".db", ".sqlite", ".sqlite3")
 _ENV_PREFIX = "env:"
@@ -105,8 +105,8 @@ class SqlSource(Source):
     kind = "sql"
 
     def matches(self, target: str) -> bool:
-        if is_mongodb_url(target):
-            return False  # MongoDB has its own source.
+        if is_mongodb_url(target) or remote_url(target):
+            return False  # MongoDB has its own source, and a file at a URL is read as a file.
         return (
             target.startswith(_ENV_PREFIX)
             or "://" in target

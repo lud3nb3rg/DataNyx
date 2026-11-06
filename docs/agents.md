@@ -104,7 +104,8 @@ secrets, by kind and count), `schema_diff` (what changed between two schemas) an
 It's limited by design:
 
 - It can only read under `--root` (default: the current folder), and database URLs are
-  refused unless you start the server with `--allow-urls`. For a database, put its URL in an environment
+  refused unless you start the server with `--allow-urls`, which also lets the agent name the URL of a file
+  (`https://`, `s3://`, ...) for the server to fetch; leave it off if the server can reach things the agent shouldn't. For a database, put its URL in an environment
   variable and name that variable: `datanyx mcp --allow-env DATABASE_URL`, and the agent can then use
   `env:DATABASE_URL`. No other variable can be used, and one that holds a path or a `sqlite:///` URL stays
   limited to `--root`, as does a `sqlite:///` URL under `--allow-urls`.

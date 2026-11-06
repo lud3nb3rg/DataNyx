@@ -20,7 +20,7 @@ datanyx schema input [options]
 
 | Argument | Meaning |
 |---|---|
-| `input` | file or folder to describe, "-" for stdin, a database URL, or env:NAME to read the URL from an environment variable (keeps passwords off the command line) |
+| `input` | file or folder to describe, "-" for stdin, a database URL, the URL of a file (s3://, gs://, az:// or https://), or env:NAME to read a URL from an environment variable (keeps passwords off the command line) |
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
 | `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
@@ -46,7 +46,7 @@ datanyx synth input [options]
 
 | Argument | Meaning |
 |---|---|
-| `input` | file or folder to describe, "-" for stdin, a database URL, or env:NAME to read the URL from an environment variable (keeps passwords off the command line) |
+| `input` | file or folder to describe, "-" for stdin, a database URL, the URL of a file (s3://, gs://, az:// or https://), or env:NAME to read a URL from an environment variable (keeps passwords off the command line) |
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
 | `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
@@ -364,7 +364,7 @@ datanyx mcp [options]
 | Argument | Meaning |
 |---|---|
 | `--root` `DIR` | folder the agent may read (repeatable; default: current folder) |
-| `--allow-urls` | accept database URLs from the agent (they may contain passwords) |
+| `--allow-urls` | accept database and file URLs from the agent (they may hold passwords or tokens, and the server fetches them) |
 | `--allow-env` `NAME` | let the agent use this environment variable as a database URL, as env:NAME (repeatable); no other variable can be used |
 | `--model` `MODEL` | spaCy NER model (default: the config's, else en_core_web_lg). Repeat it, or separate with commas, to use several, such as one per language |
 | `--pack` `NAME` | a pack of detectors for a field: finance, healthcare (repeatable) |

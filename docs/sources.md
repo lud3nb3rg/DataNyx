@@ -23,8 +23,34 @@
 | MariaDB | `mariadb://` | `.[mysql]` |
 | SQL Server | `mssql://` | `.[mssql]` |
 | Oracle | `oracle://` | `.[oracle]` |
+| A file at a URL | `https://`, `s3://`, `gs://`, `az://` (also `abfs://`) and a file type above | `.[remote]`, `.[s3]`, `.[gcs]` or `.[azure]` |
 | A folder | Every readable file in it, with `-r` for subfolders | as for the files in it |
 | Text and documents (`anonymize`) | Text, HTML, `.eml`, `.docx`, `.pdf`, WhatsApp and Slack exports, a folder of them, or `-` for stdin | `.[text]`, plus a [model](anonymization.md#text-anonymization); PDF needs `.[pdf]` |
+
+## Files at a URL
+
+```sh
+datanyx schema s3://my-bucket/exports/customers.parquet --format text
+datanyx schema "https://example.com/data/report.csv?X-Amz-Signature=..."
+export EXPORT_URL=gs://my-bucket/orders.jsonl && datanyx schema env:EXPORT_URL
+```
+
+A URL is described exactly as the same file on disk would be. Every file type that can be read from a
+path can be read from a URL, except DuckDB, SAS, Stata and SPSS, whose readers need a file on your computer
+(download it first). The type comes from the end of the URL's path, so a signed link's query string is ignored.
+
+- **Parquet and ORC are read by range requests**: the file's footer, not the whole file, is fetched, so a
+  schema of a huge Parquet file costs a few kilobytes. CSV, JSON, XML and the other row formats have to
+  be read through, as they are on disk; JSON is streamed (`.[streaming]`) so it is never held in memory.
+- **Credentials come from the environment and the cloud's usual places**: `AWS_*` variables or `~/.aws`
+  for S3, `GOOGLE_APPLICATION_CREDENTIALS` for Google Cloud, `AZURE_STORAGE_*` for Azure. Never put a
+  secret on the command line. A URL with a password or a signed token can instead be kept in an environment variable
+  and passed as `env:NAME`.
+- **A message never quotes the URL**, which may hold a password or a token; it names the kind of error only.
+- For https and S3, a connection times out after ten seconds and a transfer after five minutes.
+- A folder in cloud storage can't be described yet: name the files. `datanyx scan` doesn't read URLs.
+- `datanyx mcp` fetches a URL only when you start it with `--allow-urls` (or name the variable with
+  `--allow-env`), because the server then makes the request on the agent's behalf. See [the security notes](security.md).
 
 ## Notes on the newer sources
 

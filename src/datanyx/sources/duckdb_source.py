@@ -29,7 +29,7 @@ from ..schema import (
 )
 from .base import Source, SourceError
 from .catalog import build_object
-from .files import extension, missing_extra
+from .files import extension, missing_extra, require_local
 
 _EXTENSIONS = (".duckdb", ".ddb")
 _INTEGERS = {
@@ -48,6 +48,7 @@ class DuckDbSource(Source):
         return extension(target) in _EXTENSIONS
 
     def extract(self, target: str, policy: KeyPolicy, namespace: str | None = None) -> DataSchema:
+        require_local(target, "DuckDB")
         try:
             import duckdb
         except ImportError:

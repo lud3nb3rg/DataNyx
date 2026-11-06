@@ -23,7 +23,7 @@ from ..schema import (
 )
 from .base import Source, SourceError
 from .catalog import build_object, child_path
-from .files import extension, missing_extra, reject_namespace, require_path, unnamed
+from .files import binary_stream, extension, missing_extra, reject_namespace, require_path, unnamed
 
 _MAX_DEPTH = 40
 _PRIMITIVES: dict[str, Node] = {
@@ -64,7 +64,7 @@ class AvroSource(Source):
         except ImportError:
             raise missing_extra("Avro", "avro") from None
         try:
-            with open(target, "rb") as stream:
+            with binary_stream(target) as stream:
                 writer_schema = fastavro.reader(stream).writer_schema  # Parsed from the header.
         except FileNotFoundError:
             raise SourceError("cannot read input: no such file") from None

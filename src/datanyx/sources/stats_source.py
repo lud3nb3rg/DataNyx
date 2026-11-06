@@ -13,7 +13,7 @@ from ..privacy import KeyPolicy
 from ..schema import Array, DataSchema, Integer, Node, Null, Number, String, Union
 from .base import Source, SourceError
 from .catalog import build_object
-from .files import extension, missing_extra, reject_namespace, require_path, unnamed
+from .files import extension, missing_extra, reject_namespace, require_local, unnamed
 
 _SAFE_FORMAT = re.compile(r"[%$A-Za-z0-9.\-]{1,20}")
 
@@ -33,7 +33,7 @@ class _StatsSource(Source):
 
     def extract(self, target: str, policy: KeyPolicy, namespace: str | None = None) -> DataSchema:
         reject_namespace(namespace)
-        require_path(target, self.label)
+        require_local(target, self.label)
         try:
             import pyreadstat
         except ImportError:

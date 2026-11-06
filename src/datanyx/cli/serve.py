@@ -67,7 +67,7 @@ def add_mcp(commands: argparse._SubParsersAction) -> None:
     serve.add_argument(
         "--root", action="append", default=[], metavar="DIR", help="folder the agent may read (repeatable; default: current folder)"
     )
-    serve.add_argument("--allow-urls", action="store_true", help="accept database URLs from the agent (they may contain passwords)")
+    serve.add_argument("--allow-urls", action="store_true", help="accept database and file URLs from the agent (they may hold passwords or tokens, and the server fetches them)")
     serve.add_argument(
         "--allow-env", action="append", default=[], metavar="NAME",
         help="let the agent use this environment variable as a database URL, as env:NAME (repeatable); no other variable can be used",

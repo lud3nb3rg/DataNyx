@@ -42,7 +42,12 @@ duckdb = ["duckdb>=1.0"]
 # the extra is empty on that one platform and SAS, Stata and SPSS files report that they need it.
 stats = ["pyreadstat>=1.2; sys_platform != 'win32' or python_version >= '3.11'"]
 mongodb = ["pymongo>=4.6"]
-all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp,check,pdf,presidio,avro,orc,duckdb,stats,mongodb]"]
+# Files at a URL: https needs aiohttp, and each cloud store has its own fsspec package.
+remote = ["fsspec>=2024.2", "aiohttp>=3.9"]
+s3 = ["fsspec>=2024.2", "s3fs>=2024.2"]
+gcs = ["fsspec>=2024.2", "gcsfs>=2024.2"]
+azure = ["fsspec>=2024.2", "adlfs>=2024.2"]
+all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp,check,pdf,presidio,avro,orc,duckdb,stats,mongodb,remote,s3,gcs,azure]"]
 text = ["spacy>=3.7"]
 check = [
     "sqlglot>=25",

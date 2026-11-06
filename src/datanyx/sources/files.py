@@ -8,7 +8,8 @@ import sys
 from collections.abc import Collection, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
+from urllib.parse import urlsplit
 
 from ..formats import detect_format
 from ..inference import Observation
@@ -16,10 +17,35 @@ from ..schema import Array, DataSchema, Entity, Node
 from .base import SourceError
 
 STDIN = "-"
+_ENV_PREFIX = "env:"
+#: Where a file can be read from over the network, by the library that reads it (fsspec). A local path
+#: or `file://` URL is deliberately not here, so a URL can't get around the folders an MCP server is limited to.
+REMOTE_SCHEMES = {
+    "http": "remote", "https": "remote", "memory": "remote",
+    "s3": "s3", "s3a": "s3",
+    "gs": "gcs", "gcs": "gcs",
+    "az": "azure", "abfs": "azure", "abfss": "azure", "adl": "azure",
+}
+_REMOTE_TIMEOUT_SECONDS = 300
+_REMOTE_CONNECT_SECONDS = 10
+
+
+def is_remote(target: str) -> bool:
+    """Whether this is a URL of a file on a web server or in cloud storage."""
+    scheme, separator, _ = target.partition("://")
+    return bool(separator) and scheme.lower() in REMOTE_SCHEMES
+
+
+def remote_url(target: str) -> str | None:
+    """The URL if `target` is one, or is `env:NAME` and the variable holds one. Keeps credentials off the command line."""
+    value = os.environ.get(target[len(_ENV_PREFIX) :], "") if target.startswith(_ENV_PREFIX) else target
+    return value if is_remote(value) else None
 
 
 def extension(target: str) -> str:
-    return os.path.splitext(target)[1].lower()
+    # A URL can end in a query string (a signed link), which isn't part of the file name.
+    path = urlsplit(target).path if is_remote(target) else target
+    return os.path.splitext(path)[1].lower()
 
 
 def reject_namespace(namespace: str | None) -> None:
@@ -33,8 +59,75 @@ def require_path(target: str, what: str) -> None:
         raise SourceError(f"{what} can't be read from stdin; pass a file path")
 
 
+def require_local(target: str, what: str) -> None:
+    """For formats whose reader needs a file on this computer: not stdin, and not a URL."""
+    require_path(target, what)
+    if is_remote(target):
+        raise SourceError(f"{what} can't be read from a URL; download the file and pass its path")
+
+
+def _storage_options(scheme: str) -> dict[str, Any]:
+    """Time limits, so an unreachable server can't stall an agent's session."""
+    if scheme in ("http", "https"):
+        try:
+            import aiohttp
+        except ImportError:
+            return {}
+        timeout = aiohttp.ClientTimeout(total=_REMOTE_TIMEOUT_SECONDS, connect=_REMOTE_CONNECT_SECONDS)
+        return {"client_kwargs": {"timeout": timeout}}
+    if scheme in ("s3", "s3a"):
+        return {"config_kwargs": {"connect_timeout": _REMOTE_CONNECT_SECONDS, "read_timeout": 60, "retries": {"max_attempts": 2}}}
+    return {}
+
+
+@contextmanager
+def _open_remote(url: str, mode: str, **options: Any) -> Iterator[Any]:
+    """A file at a URL, opened with fsspec. Only fixed messages and exception names leave: a URL can hold a password or token."""
+    scheme = url.partition("://")[0].lower()
+    extra = REMOTE_SCHEMES[scheme]
+    try:
+        import fsspec
+    except ImportError:
+        raise missing_extra("a file at a URL", "remote") from None
+    try:
+        stream = fsspec.open(url, mode, **options, **_storage_options(scheme)).open()
+    except ImportError:
+        raise SourceError(f"reading {scheme}:// URLs needs an extra package; install datanyx[{extra}]") from None
+    except Exception as error:
+        raise SourceError(f"cannot read the file at that URL ({type(error).__name__})") from None
+    try:
+        yield stream
+    finally:
+        stream.close()
+
+
+@contextmanager
+def binary_stream(target: str) -> Iterator[IO[bytes]]:
+    """A binary file object for a path or a URL. A path that can't be opened raises OSError, as `open` does."""
+    if is_remote(target):
+        with _open_remote(target, "rb") as stream:
+            yield stream
+        return
+    with open(target, "rb") as stream:
+        yield stream
+
+
+@contextmanager
+def path_or_stream(target: str) -> Iterator[Any]:
+    """What a library that takes either should be given: the path itself, or a file object for a URL."""
+    if is_remote(target):
+        with _open_remote(target, "rb") as stream:
+            yield stream
+        return
+    yield target
+
+
 @contextmanager
 def open_text(target: str) -> Iterator[IO[str]]:
+    if is_remote(target):
+        with _open_remote(target, "rt", encoding="utf-8-sig") as stream:
+            yield stream
+        return
     if target == STDIN:
         # Windows consoles and pipes rarely default to UTF-8, so decode explicitly.
         stream = open(sys.stdin.fileno(), encoding="utf-8-sig", closefd=False)
@@ -49,6 +142,9 @@ def open_text(target: str) -> Iterator[IO[str]]:
 
 
 def read_bytes(target: str) -> bytes:
+    if is_remote(target):
+        with _open_remote(target, "rb") as stream:
+            return stream.read()
     try:
         if target == STDIN:
             return sys.stdin.buffer.read()

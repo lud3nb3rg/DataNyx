@@ -17,6 +17,7 @@ from .files import (
     first_row_is_data,
     items_seen,
     missing_extra,
+    path_or_stream,
     positional_names,
     records_observation,
     reject_namespace,
@@ -41,11 +42,12 @@ class ExcelSource(Source):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # openpyxl's warnings can name sheets and styles.
                 # Read-only streams rows; data_only gives cached results, not formulas.
-                workbook = load_workbook(target, read_only=True, data_only=True)
-                try:
-                    return _describe(workbook, policy, self.kind)
-                finally:
-                    workbook.close()
+                with path_or_stream(target) as source:
+                    workbook = load_workbook(source, read_only=True, data_only=True)
+                    try:
+                        return _describe(workbook, policy, self.kind)
+                    finally:
+                        workbook.close()
         except SourceError:
             raise
         except FileNotFoundError:

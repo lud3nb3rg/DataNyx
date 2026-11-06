@@ -12,6 +12,7 @@ from .renderers import RENDERERS
 from .schema import DataSchema
 from .selection import apply_selection
 from .sources import Source, SourceError, describe_folder, resolve_source
+from .sources.files import remote_url
 from .text import DEFAULT_MODEL
 
 __version__ = "0.1.0"
@@ -31,6 +32,7 @@ def extract(
     when `recursive` is set); `source` then limits which files are read.
     """
     policy = policy or KeyPolicy()
+    target = remote_url(target) or target  # A URL may be named by an environment variable.
     if policy.infer_keys and policy.evidence is None:
         policy = replace(policy, evidence=Evidence())
     try:

@@ -21,7 +21,7 @@ from ..schema import (
 )
 from .base import Source, SourceError
 from .catalog import build_object, child_path
-from .files import extension, missing_extra, reject_namespace, require_path, unnamed
+from .files import extension, missing_extra, path_or_stream, reject_namespace, require_path, unnamed
 
 # What Arrow's own type names look like. A type can carry text from the file (a timezone, an extension
 # type's name), and whatever is in the file must not reach the schema or the SQL made from it.
@@ -46,9 +46,10 @@ class ParquetSource(Source):
         try:
             # schema_arrow comes from the footer. Its metadata (which pandas fills
             # with column names and index details) is never looked at.
-            parquet_file = pq.ParquetFile(target)
-            arrow_schema = parquet_file.schema_arrow
-            rows = parquet_file.metadata.num_rows  # Also from the footer.
+            with path_or_stream(target) as source:  # A URL is read by range: the footer, not the file.
+                parquet_file = pq.ParquetFile(source)
+                arrow_schema = parquet_file.schema_arrow
+                rows = parquet_file.metadata.num_rows  # Also from the footer.
         except FileNotFoundError:
             raise SourceError("cannot read input: no such file") from None
         except Exception as error:
