@@ -37,6 +37,7 @@ max_size = 5
 [mcp]
 roots = ["data"]
 audit_log = "datanyx-audit.jsonl"
+allow_env = ["DATABASE_URL"]             # environment variables the agent may use as env:NAME
 ```
 
 | Section | Used by |

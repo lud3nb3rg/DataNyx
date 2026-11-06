@@ -297,7 +297,7 @@ def test_dry_run_changes_nothing_and_write_creates_the_setup(project):
     assert hook["hooks"][0] == {
         "type": "command",
         "command": "datanyx",
-        "args": ["hook"],
+        "args": ["hook", "--require-config"],
         "onFailure": "block",
         "statusMessage": "DataNyx guard",
     }
@@ -311,7 +311,7 @@ def test_dry_run_changes_nothing_and_write_creates_the_setup(project):
 def test_a_launcher_with_arguments_is_split_into_command_and_args(project):
     apply(plan_protect(project, [project / "data"], split_command("uv run datanyx")))
     hook = read_json(project / ".claude" / "settings.json")["hooks"]["PreToolUse"][0]["hooks"][0]
-    assert (hook["command"], hook["args"]) == ("uv", ["run", "datanyx", "hook"])
+    assert (hook["command"], hook["args"]) == ("uv", ["run", "datanyx", "hook", "--require-config"])
     assert read_json(project / ".mcp.json")["mcpServers"]["datanyx"]["args"][:3] == ["run", "datanyx", "mcp"]
     assert split_command('"C:/Program Files/uv/uv.exe" run datanyx') == ["C:/Program Files/uv/uv.exe", "run", "datanyx"]
     with pytest.raises(SourceError):

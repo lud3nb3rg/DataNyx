@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from ..privacy import KeyPolicy
 from ..scale import scale_for
 from ..schema import (
@@ -18,8 +20,13 @@ from ..schema import (
     Unknown,
 )
 from .base import Source, SourceError
-from .catalog import build_object
+from .catalog import build_object, child_path
 from .files import extension, missing_extra, reject_namespace, require_path, unnamed
+
+# What Arrow's own type names look like. A type can carry text from the file (a timezone, an extension
+# type's name), and whatever is in the file must not reach the schema or the SQL made from it.
+_TYPE_NAME = re.compile(r"[a-z0-9_]+(\[[a-z0-9_, ]+\]|\(\d+(, ?-?\d+)?\))?")
+_TIME_ZONE = re.compile(r"[A-Za-z0-9_+/:-]{1,40}")
 
 
 class ParquetSource(Source):
@@ -58,7 +65,7 @@ def arrow_table_node(arrow_schema, policy: KeyPolicy, notes: list[str], pa) -> N
 
 def _struct(fields, path: str, policy: KeyPolicy, notes: list[str], pa) -> Object:
     entries = [
-        (f.name, _field_node(f, f"{path}.{f.name}", policy, notes, pa), _native(f.type, pa)) for f in fields
+        (f.name, _field_node(f, child_path(path, f.name, policy), policy, notes, pa), _native(f.type, pa)) for f in fields
     ]
     return build_object(entries, path, policy, notes)
 
@@ -110,4 +117,7 @@ def _native(t, pa) -> str | None:
         return "dictionary"
     if pa.types.is_nested(t):
         return "struct" if pa.types.is_struct(t) else "map" if pa.types.is_map(t) else "list"
-    return str(t)
+    if pa.types.is_timestamp(t):
+        return f"timestamp[{t.unit}, tz={t.tz}]" if t.tz and _TIME_ZONE.fullmatch(t.tz) else f"timestamp[{t.unit}]"
+    text = str(t)
+    return text if _TYPE_NAME.fullmatch(text) else None

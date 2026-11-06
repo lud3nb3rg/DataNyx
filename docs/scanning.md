@@ -44,7 +44,8 @@ datanyx scan ./project --exclude 'fixtures' --exclude '*.lock'
 | `--max-size MB` | Skip larger files (default 5) |
 | `--include-examples` | Also count `example.com` emails and loopback or documentation IP addresses, which are ignored by default |
 | `--show-paths` | Show real file names, including ones that look like data |
-| `--fail-on-findings` | Exit with 1 if anything is found |
+| `--fail-on-findings` | Exit with 1 if anything is found, or if a file that may hold data couldn't be read |
+| `--allow-unscanned` | With `--fail-on-findings`, don't fail for a file that was too large or couldn't be read |
 
 **Secrets** are found by their shape: private key headers, AWS, GitHub, Slack, Google and Stripe
 keys, JWTs, the password in a `scheme://user:password@host` URL, and values assigned to names

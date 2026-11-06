@@ -1,8 +1,10 @@
 """Describe every readable file in a folder as one schema.
 
 File names can be as sensitive as what's inside ("jane_doe_medical.csv"), so a
-name is shown only if the same rules that apply to a column name accept it. Any
-other file is called `file_N`, where N is its place in the sorted listing.
+name is shown only if the rules for a column name accept it and it doesn't pair a
+sensitive subject with other words. Any other file is called `file_N`, where N is its
+place in the sorted listing. This is a heuristic: "jane_doe.csv" looks like any other
+name, so point the tool at folders whose file names you are willing to show.
 """
 
 from __future__ import annotations
@@ -49,7 +51,7 @@ def describe_directory(
         handled += 1
 
         name = relative.replace(os.sep, "/")
-        if not all(policy.shows_name(part) for part in name.split("/")):
+        if not all(policy.shows_file_name(part) for part in name.split("/")):
             name, hidden_names = f"file_{position}", hidden_names + 1
         if policy.evidence is not None:
             policy.evidence.scope = name

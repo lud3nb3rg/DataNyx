@@ -11,7 +11,7 @@ What it does, in order:
    password inside a URL, are replaced.
 2. Paths: your home folder, working folder and username are shortened.
 3. In a Python traceback, `File` lines and the code under them are left alone. Every
-   other line is treated as a message.
+   other line is treated as a message, even an indented one.
 4. In messages, anything in quotes is replaced unless it is a name the schema made
    public: error messages quote values far more often than names.
 5. Detectors (emails, IDs, and names if a NER model is used) replace what they find.
@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 
 from .schema import Array, DataSchema, Node, Object, Union
 from .text import Detector, PatternDetector, anonymize
+from .text.secrets import redact_url_credentials
 
 VALUE = "<VALUE>"
 NUMBER = "<NUMBER>"
@@ -40,14 +41,18 @@ _SECRET_NAME = re.compile(
     r"(?i)(key|token|secret|passw|credential|auth|dsn|connection|database_url|_url$|^url$)"
 )
 _MIN_SECRET_LENGTH = 6
-_URL_CREDENTIALS = re.compile(r"(?<=://)[^/\s:@'\"]+:[^@\s'\"]+(?=@)")
 
 _TRACEBACK = re.compile(r"^Traceback \(most recent call last\):\s*$")
+_FILE_LINE = re.compile(r'^\s+File ".*", line \d+')
+_REPEATED_LINE = re.compile(r"^\s+\[Previous line repeated \d+ more times?\]\s*$")
+_CODE_LINE = re.compile(r"^ {4}")
+# Python 3.13 prints a statement that spans lines in full, with the middle cut, so a frame can have a few.
+_MAX_CODE_LINES = 12
 _CHAIN = re.compile(r"^(During handling of the above exception|The above exception was the direct cause)")
 _EXCEPTION_LINE = re.compile(
     r"^((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception|Warning|Exit|Interrupt|Failure))(:\s*)(.*)$"
 )
-_QUOTED = re.compile(r"""(?<!\w)(?:[bBrRuUfF]{1,2})?(['"])((?:(?!\1)[^\n\\]|\\.){0,300})\1(?!\w)""")
+_QUOTED = re.compile(r"""(?<!\w)(?:[bBrRuUfF]{1,2})?(['"])((?:(?!\1)[^\n\\]|\\.){0,100000})\1(?!\w)""")
 _NUMBER = re.compile(r"(?<![\w.])(?:\d{4,}|\d+\.\d+)(?![\w])")
 
 # Words that are about how the data is stored rather than what is in it.
@@ -124,7 +129,7 @@ def _hide_secrets(text: str) -> str:
     for name, value in os.environ.items():
         if _SECRET_NAME.search(name) and len(value) >= _MIN_SECRET_LENGTH:
             text = text.replace(value, SECRET)
-    return _URL_CREDENTIALS.sub("<CREDENTIALS>", text)
+    return redact_url_credentials(text)
 
 
 def _shorten_paths(text: str) -> str:
@@ -146,14 +151,19 @@ def _classify(lines: list[str]) -> list[str]:
     """Mark each line `structure` (a traceback's own lines) or `message`."""
     kinds = []
     in_traceback = False
+    code_lines = _MAX_CODE_LINES  # How many more lines may be code under the last `File` line.
     for line in lines:
         if _TRACEBACK.match(line):
             kinds.append("structure")
-            in_traceback = True
+            in_traceback, code_lines = True, 0
         elif _CHAIN.match(line):
             kinds.append("structure")
-        elif in_traceback and line.startswith(" "):
-            kinds.append("structure")  # `File ...`, the code line, and the ^^^^ markers.
+        elif in_traceback and (_FILE_LINE.match(line) or _REPEATED_LINE.match(line)):
+            kinds.append("structure")
+            code_lines = _MAX_CODE_LINES
+        elif in_traceback and code_lines and _CODE_LINE.match(line):
+            kinds.append("structure")  # The code line, and the ^^^^ markers.
+            code_lines -= 1
         else:
             kinds.append("message")
             in_traceback = False

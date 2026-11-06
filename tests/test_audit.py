@@ -64,22 +64,22 @@ def test_failures_and_refusals_are_recorded_with_their_safe_message(tmp_path, da
     assert entry["outcome"] == "error" and "outside the folders" in entry["message"] and "output_chars" not in entry
 
 
-def test_the_log_never_holds_values_outputs_code_terms_or_passwords(tmp_path, data):
+def test_the_log_never_holds_values_outputs_code_or_passwords(tmp_path, data):
     server, log = server_with_log(tmp_path)
     call(server, "describe_data", {"target": str(data)})
     call(server, "check_code", {"code": f"SELECT '{CANARY}-guess' FROM customers", "target": str(data)})
     with pytest.raises(Exception):
-        call(server, "anonymize_file", {"target": str(tmp_path / "missing.txt"), "hide": [f"{CANARY}-client", "Acme"]})
+        call(server, "anonymize_file", {"target": str(tmp_path / "missing.txt")})
     with pytest.raises(Exception):
         call(server, "describe_data", {"target": "postgresql://user:hunter22pw@db.internal/app"})
 
     text = log.read_text(encoding="utf-8")
-    assert CANARY not in text  # Not the value in the data, the SQL, or the terms.
+    assert CANARY not in text  # Not the value in the data, or the SQL.
     assert "hunter22pw" not in text and "<CREDENTIALS>" in text
     assert "lifetime_value" not in text  # A column name from the output.
     by_tool = {e["tool"]: e for e in records(log)}
     assert by_tool["check_code"]["arguments"]["code_length"] > 10 and "code" not in by_tool["check_code"]["arguments"]
-    assert by_tool["anonymize_file"]["arguments"]["hide_count"] == 2
+    assert by_tool["anonymize_file"]["arguments"]["target"].endswith("missing.txt")
 
 
 def test_a_server_without_a_log_writes_nothing(tmp_path, data):

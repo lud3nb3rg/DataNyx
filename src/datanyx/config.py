@@ -43,7 +43,7 @@ SPEC: dict[str, dict[str, str]] = {
     },
     "scrub": {"allow": _LIST, "names_from": _PATHS, "keep_numbers": _BOOL, "ner": _BOOL},
     "scan": {"exclude": _LIST, "kinds": _LIST, "max_size": _NUMBER, "include_examples": _BOOL, "ner": _BOOL},
-    "mcp": {"roots": _PATHS, "allow_urls": _BOOL, "audit_log": _PATH},
+    "mcp": {"roots": _PATHS, "allow_urls": _BOOL, "allow_env": _LIST, "audit_log": _PATH},
 }
 DETECTOR_ARRAYS = ("pattern", "dictionary")
 
@@ -77,6 +77,7 @@ class Config:
     scan_ner: bool | None = None
     mcp_roots: tuple[Path, ...] = ()
     mcp_allow_urls: bool | None = None
+    mcp_allow_env: tuple[str, ...] = ()
     audit_log: Path | None = None
 
     @property
@@ -240,6 +241,7 @@ def _build(files: list[Path], data: dict[str, Any]) -> Config:
         scan_ner=get("scan", "ner"),
         mcp_roots=paths("mcp", "roots"),
         mcp_allow_urls=get("mcp", "allow_urls"),
+        mcp_allow_env=tuple(get("mcp", "allow_env", [])),
         audit_log=Path(audit) if audit else None,
     )
 
@@ -279,7 +281,7 @@ def describe(config: Config, reveal: bool = False) -> str:
             (("exclude", config.scan_exclude), ("kinds", config.scan_kinds), ("max_size", config.scan_max_size),
              ("include_examples", config.scan_include_examples), ("ner", config.scan_ner)),
         ),
-        ("mcp", (("roots", config.mcp_roots), ("allow_urls", config.mcp_allow_urls), ("audit_log", config.audit_log))),
+        ("mcp", (("roots", config.mcp_roots), ("allow_urls", config.mcp_allow_urls), ("allow_env", config.mcp_allow_env), ("audit_log", config.audit_log))),
     )
     secret_keys = {"hide", "keep"}
     for name, items in sections:

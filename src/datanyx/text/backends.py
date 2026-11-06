@@ -149,8 +149,8 @@ class OllamaDetector:
     """A language model on this computer, asked to quote what is sensitive in each passage."""
 
     def __init__(self, model: str = DEFAULT_OLLAMA_MODEL, url: str = DEFAULT_OLLAMA_URL, timeout: float = 180.0) -> None:
-        host = urllib.parse.urlparse(url).hostname or ""
-        if host.lower() not in _LOOPBACK:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() not in _LOOPBACK:
             raise SourceError("only an Ollama server on this computer can be used: the text would otherwise leave it")
         self._model = model
         self._url = url.rstrip("/") + "/api/generate"
@@ -185,7 +185,9 @@ class OllamaDetector:
         body = json.dumps({"model": self._model, "prompt": prompt, "stream": False, "format": schema, "options": {"temperature": 0}})
         request = urllib.request.Request(self._url, body.encode("utf-8"), {"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            # No proxy, whatever the environment says: urllib would otherwise send "localhost" through one.
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(request, timeout=self._timeout) as response:
                 answer = json.loads(response.read().decode("utf-8"))
             items = json.loads(answer["response"])["items"]
             return [item for item in items if isinstance(item, dict) and isinstance(item.get("text"), str)]

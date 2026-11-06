@@ -22,6 +22,11 @@ def merge_nodes(nodes: list[Node]) -> Node:
     return options[0] if len(options) == 1 else Union(tuple(options))
 
 
+def child_path(path: str, name: str, policy: KeyPolicy) -> str:
+    """Where a nested field sits, for notes. A hidden field's name must not end up in the path."""
+    return f"{path}.{name}" if path not in policy.map_paths and policy.shows_name(name) else f"{path}.{{*}}"
+
+
 def build_object(
     entries: list[tuple[str, Node, str | None]], path: str, policy: KeyPolicy, notes: list[str]
 ) -> Object:

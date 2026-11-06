@@ -61,9 +61,12 @@ database, its name, then what its values look like. The kinds are `name`, `first
 - **Free text** goes through [text anonymization](anonymization.md#text-anonymization), so names inside it become
   placeholders like `<PERSON_1>` (these don't match the fake name in the `name` column).
 - **JSON keys** work the same as columns, wherever the key appears. A key that is itself data, such as
-  an email used as a key, is replaced, and agrees with the same email used as a value.
+  an email used as a key, is replaced, and agrees with the same email used as a value. Text under such a
+  key is replaced too, as is a CSV cell past the last column: there's no name to judge either by.
 - **SQLite**: tables, keys and indexes are copied, and views too. **Triggers are left out**, since they
-  can hold data or change values, and virtual tables are skipped; the notes at the end say so.
+  can hold data or change values, and virtual tables are skipped. So are column defaults, `CHECK` constraints,
+  comments, and any view or index with a literal in it, as those are text that can hold real values. Binary
+  values are emptied unless you name the column with `--keep-column`. The notes at the end say what happened.
 
 **What it can't promise.** *Pseudonymized is not anonymous.* Look at the plan before you share the copy.
 

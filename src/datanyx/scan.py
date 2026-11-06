@@ -2,7 +2,8 @@
 
 For checking a repository or an export folder before an agent is pointed at it. The
 report says which files hold what kinds of sensitive text, how many, and on which
-lines. It never contains a value.
+lines. It never contains a value. A file that couldn't be read is listed too, because "nothing
+found" means little for a file nobody looked at.
 
 File names can be sensitive too, so a name is shown only if it passes the same test as
 a column name; others appear as `file_N`. Pass `show_paths` when you are reading the
@@ -16,6 +17,8 @@ as text, so they are listed as not scanned.
 
 from __future__ import annotations
 
+import bisect
+import codecs
 import fnmatch
 import ipaddress
 import os
@@ -55,7 +58,15 @@ _DATA_EXTENSIONS = frozenset(
     {".xlsx", ".xlsm", ".xls", ".parquet", ".pq", ".feather", ".orc", ".avro", ".db", ".sqlite", ".sqlite3", ".mdb",
      ".accdb", ".sav", ".dta", ".sas7bdat", ".pkl", ".pickle", ".npy", ".npz", ".h5", ".hdf5", ".zip", ".gz", ".7z", ".tar"}
 )
-_EXAMPLE_DOMAIN = re.compile(r"(?i)@(?:[\w.-]*\.)?(?:example\.(?:com|org|net)|example|test|invalid|localhost)$|@localhost$|noreply")
+# Binary files that can't hold records as text. Any other file that can't be read is reported.
+_MEDIA_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4",
+     ".wav", ".ogg", ".webm", ".mov", ".avi", ".pyc", ".pyo", ".so", ".dll", ".dylib", ".exe", ".o", ".a", ".class", ".wasm"}
+)
+_BOMS = ((codecs.BOM_UTF32_LE, "utf-32"), (codecs.BOM_UTF32_BE, "utf-32"), (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16"))
+_CONTROL_BYTES = frozenset({*range(0, 9), *range(14, 32), 127})
+_MAX_CONTROL_SHARE = 0.05
+_EXAMPLE_DOMAIN = re.compile(r"(?i)@(?:[\w.-]*\.)?(?:example\.(?:com|org|net)|example|test|invalid|localhost)$|^no-?reply@")
 _DOCUMENTATION_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32"))
 
 
@@ -80,6 +91,8 @@ class ScanReport:
     not_scanned_data: list[str] = field(default_factory=list)
     hidden_names: int = 0
     shows_paths: bool = False
+    #: Every file that may hold data but couldn't be read: too large, or binary of an unknown kind.
+    unscanned: list[str] = field(default_factory=list)
 
     @property
     def totals(self) -> Counter:
@@ -91,6 +104,10 @@ class ScanReport:
     @property
     def clean(self) -> bool:
         return not self.findings
+
+    @property
+    def complete(self) -> bool:
+        return not self.unscanned
 
 
 def scan(
@@ -144,7 +161,7 @@ def _excluded(name: str, patterns: Sequence[str]) -> bool:
 
 
 def _display(relative: str, position: int, policy: KeyPolicy, show_paths: bool) -> str:
-    if show_paths or all(policy.shows_name(part) for part in relative.split("/")):
+    if show_paths or all(policy.shows_file_name(part) for part in relative.split("/")):
         return relative
     return f"file_{position}"
 
@@ -158,23 +175,29 @@ def _scan_file(
     include_examples: bool,
     report: ScanReport,
 ) -> None:
+    extension = os.path.splitext(path)[1].lower()
     try:
         size = os.path.getsize(path)
         if size > max_bytes:
             report.too_large += 1
+            if extension not in _MEDIA_EXTENSIONS:
+                report.unscanned.append(display)
             return
         with open(path, "rb") as stream:
             data = stream.read()
     except OSError:
+        report.unscanned.append(display)
         return
-    if b"\x00" in data[:8192]:
+    text = _decode(data)
+    if text is None:
         report.binary += 1
-        if os.path.splitext(path)[1].lower() in _DATA_EXTENSIONS:
+        if extension in _DATA_EXTENSIONS:
             report.not_scanned_data.append(display)
+        if extension not in _MEDIA_EXTENSIONS:
+            report.unscanned.append(display)
         return
 
     report.scanned += 1
-    text = data.decode("utf-8", errors="replace")
     spans = _resolve(
         [span for detector in detectors for span in detector.find(text) if span.kind in kinds],
         text,
@@ -184,13 +207,33 @@ def _scan_file(
         return
     counts: Counter = Counter()
     lines: dict[str, list[int]] = {}
+    breaks = [match.start() for match in re.finditer("\n", text)]
     for span in spans:
         counts[span.kind] += 1
-        line = text.count("\n", 0, span.start) + 1
+        line = bisect.bisect_left(breaks, span.start) + 1
         listed = lines.setdefault(span.kind, [])
         if line not in listed and len(listed) < MAX_LINES_LISTED:
             listed.append(line)
     report.findings.append(FileFinding(path, display, dict(counts), lines))
+
+
+def _decode(data: bytes) -> str | None:
+    """The file as text, or None if it is binary. UTF-16 and UTF-32 are text, and common in Windows
+    exports, though they are full of NUL bytes. So is a text file with a stray NUL in it."""
+    for mark, encoding in _BOMS:
+        if data.startswith(mark):
+            return data.decode(encoding, errors="replace")
+    sample = data[:8192]
+    if b"\x00" not in sample:
+        return data.decode("utf-8", errors="replace")
+    half = max(len(sample) // 2, 1)
+    if sample[1::2].count(0) > 0.8 * half and sample[0::2].count(0) < 0.2 * half:
+        return data.decode("utf-16-le", errors="replace")
+    if sample[0::2].count(0) > 0.8 * half and sample[1::2].count(0) < 0.2 * half:
+        return data.decode("utf-16-be", errors="replace")
+    if sum(byte in _CONTROL_BYTES for byte in sample) <= _MAX_CONTROL_SHARE * len(sample):
+        return data.decode("utf-8", errors="replace")
+    return None
 
 
 def _resolve(spans: list[Span], text: str, include_examples: bool) -> list[Span]:
@@ -269,6 +312,12 @@ def _text(report: ScanReport) -> str:
     if report.not_scanned_data:
         shown = ", ".join(report.not_scanned_data[:12]) + (" …" if len(report.not_scanned_data) > 12 else "")
         lines += ["", f"Not scanned, but these binary data files may hold personal data: {shown}"]
+    others = [name for name in report.unscanned if name not in report.not_scanned_data]
+    if others:
+        shown = ", ".join(others[:12]) + (" …" if len(others) > 12 else "")
+        lines += ["", f"Not scanned, because they are too large or couldn't be read: {shown}"]
+    if report.unscanned:
+        lines.append("--fail-on-findings fails until these are excluded, or --max-size is raised, or --allow-unscanned is passed.")
     if report.hidden_names:
         lines += [
             "",
@@ -294,6 +343,7 @@ def _json(report: ScanReport) -> str:
             "totals": dict(report.totals),
             "files": [{"path": item.display, "counts": item.counts, "lines": item.lines} for item in report.findings],
             "not_scanned_data_files": report.not_scanned_data,
+            "unscanned_files": report.unscanned,
             "hidden_file_names": report.hidden_names,
         },
         indent=2,
