@@ -55,6 +55,10 @@ def _entity(entity: Entity) -> dict:
             }
             for key in entity.foreign_keys
         ]
+    if entity.unique_keys:
+        result["x-unique-keys"] = [list(columns) for columns in entity.unique_keys]
+    if entity.view:
+        result["x-view"] = True
     if entity.scale:
         result["x-scale"] = entity.scale
     return result
@@ -66,6 +70,8 @@ def _field(field: Field) -> dict:
         result["x-native-type"] = field.native_type
     if field.unique:
         result["x-unique"] = True
+        if field.unique_declared:
+            result["x-unique-declared"] = True
     return result
 
 

@@ -17,6 +17,7 @@ from ..schema import (
     Union,
     Unknown,
 )
+from .naming import entity_facts, unique_label
 
 _INDENT = "  "
 
@@ -27,6 +28,7 @@ def render_text(schema: DataSchema) -> str:
 
 def _entity(entity: Entity) -> str:
     lines = [f"{entity.name or 'root'}: {_node(entity.node, 0)}"]
+    lines.extend(f"{_INDENT}{fact}" for fact in entity_facts(entity))
     if entity.primary_key:
         lines.append(f"{_INDENT}primary key ({', '.join(entity.primary_key)})")
     for key in entity.foreign_keys:
@@ -43,7 +45,7 @@ def _entity(entity: Entity) -> str:
 def _field(name: str, field: Field, depth: int) -> str:
     marker = "" if field.required else "?"
     line = f"{name}{marker}: {_node(field.node, depth)}"
-    notes = [item for item in (field.native_type, "unique (inferred)" if field.unique else None) if item]
+    notes = [item for item in (field.native_type, unique_label(field)) if item]
     return f"{line}  -- {', '.join(notes)}" if notes else line
 
 

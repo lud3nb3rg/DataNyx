@@ -173,6 +173,8 @@ def create_server(
     infer_keys: bool = False,
     allow_env: Sequence[str] = (),
     scan_settings: Mapping[str, Any] | None = None,
+    views: bool = False,
+    max_tables: int | None = 200,
 ):
     """Build the server.
 
@@ -181,7 +183,8 @@ def create_server(
     gets a record of every tool call (never values). `scale_hints` and `infer_keys` add size buckets
     and key guesses to schemas; the agent can't switch them on or off. `allow_env` names the
     environment variables the agent may use as `env:NAME`. `scan_settings` are options for `scan`
-    (`excludes`, `max_bytes`, `include_examples`).
+    (`excludes`, `max_bytes`, `include_examples`). `views` lets agents see database views. `max_tables` caps
+    how many tables `describe_data` returns at once (the summary format is not capped).
     """
     try:
         from mcp.server.mcpserver import MCPServer as Server  # type: ignore[import-not-found]  # mcp 2.x
@@ -201,9 +204,13 @@ def create_server(
     audit = AuditLog(audit_log)
     hide_terms = list(hide)
 
-    def key_policy(map_paths: Sequence[str] | None = None) -> KeyPolicy:
-        """One policy for every tool, so they all describe the data alike. Only the owner sets the hints."""
-        return KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys)
+    def key_policy(map_paths: Sequence[str] | None = None, **selection: Any) -> KeyPolicy:
+        """One policy for every tool, so they all describe the data alike. Only the owner sets the hints.
+
+        A selection of tables is only for describe_data: code checked against a trimmed schema would report
+        tables that exist as unknown.
+        """
+        return KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys, views=views, **selection)
 
     def tool(function: Callable[..., str]) -> Callable[..., str]:
         """Register a tool: refusals and failures become fixed messages, and every call is recorded."""
@@ -229,20 +236,29 @@ def create_server(
         recursive: bool = False,
         map_paths: list[str] | None = None,
         database_schema: str | None = None,
+        tables: list[str] | None = None,
+        exclude: list[str] | None = None,
+        limit: int | None = None,
     ) -> str:
         """Describe the structure of a file, folder or database, with no values.
 
         target: a path to a file, a folder of files, or env:NAME naming an environment
             variable that holds a database URL. Files: CSV, TSV, JSON, JSON Lines, YAML, XML,
             Excel, Parquet, ORC, Avro, SAS, Stata, SPSS, SQLite, DuckDB, FHIR and HL7 v2.
-        format: "text" (compact) or "json-schema".
+        format: "text" (compact), "json-schema", or "summary" (one line per table: a first look at a big database).
+        tables: only tables or files whose names match one of these globs, such as ["sales_*"].
+        exclude: leave out names matching these globs.
+        limit: most tables to describe; the server has its own cap, and a note says how many were left out.
         recursive: for a folder, include subfolders.
         map_paths: paths such as "$.users" whose keys should all be hidden.
         database_schema: a database schema other than the default.
         """
         if format not in RENDERERS:
             raise SourceError(f"format must be one of {sorted(RENDERERS)}")
-        policy = key_policy(map_paths)
+        if limit is not None and limit < 1:
+            raise SourceError("limit must be at least 1")
+        cap = None if format == "summary" else min(n for n in (limit, max_tables) if n is not None) if (limit or max_tables) else None
+        policy = key_policy(map_paths, include=tuple(tables or ()), exclude=tuple(exclude or ()), max_tables=cap)
         schema = extract(
             access.check(target), policy=policy, namespace=database_schema, recursive=recursive
         )
@@ -441,12 +457,17 @@ def run(
     infer_keys: bool = False,
     allow_env: Sequence[str] = (),
     scan_settings: Mapping[str, Any] | None = None,
+    views: bool = False,
+    max_tables: int | None = 200,
 ) -> None:
     allowed = {*ENTITY_KINDS, SECRET, *kinds_of(list(detectors))}
     unknown = set(keep_entity) - allowed
     if unknown:
         raise SourceError(f"unknown entity kinds: {sorted(unknown)}")
-    server = create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys, allow_env, scan_settings)
+    server = create_server(
+        roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys, allow_env, scan_settings,
+        views=views, max_tables=max_tables,
+    )
     if http is None:
         server.run("stdio")
         return

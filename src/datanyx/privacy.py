@@ -77,6 +77,10 @@ class KeyPolicy:
     scale_hints: also record each table's row count as an order of magnitude.
     infer_keys: also flag key-looking columns that are unique, and joins between tables.
     delimiter: the one-character separator of CSV and TSV input, instead of the usual one.
+    views: also describe database views (names and columns only; a view's definition is never read).
+    include, exclude: glob patterns on table (or file) names; only matching names are described, minus
+        the excluded ones. They apply to names that may be shown, so they can't be used to find hidden ones.
+    max_tables: describe at most this many tables, and say how many were left out.
     """
 
     map_paths: frozenset[str] = frozenset()
@@ -88,6 +92,10 @@ class KeyPolicy:
     scale_hints: bool = False
     infer_keys: bool = False
     delimiter: str | None = None
+    views: bool = False
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
+    max_tables: int | None = None
     #: Collects key evidence while a source reads (`datanyx.keys.Evidence`); made by `extract`.
     evidence: Any = field(default=None, compare=False, repr=False)
 

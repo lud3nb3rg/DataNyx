@@ -37,3 +37,17 @@ def python_field_name(name: str) -> str:
     if keyword.iskeyword(cleaned) or cleaned in _PYDANTIC_RESERVED or cleaned.startswith("model_"):
         cleaned += "_"
     return cleaned
+
+
+def unique_label(field) -> str | None:
+    """How a field's uniqueness is described: a declared one is a fact, an inferred one a guess."""
+    if not field.unique:
+        return None
+    return "unique" if field.unique_declared else "unique (inferred)"
+
+
+def entity_facts(entity) -> list[str]:
+    """What an entity adds beyond its columns, as plain phrases for comment lines."""
+    facts = ["view"] if entity.view else []
+    facts += [f"unique ({', '.join(columns)})" for columns in entity.unique_keys]
+    return facts

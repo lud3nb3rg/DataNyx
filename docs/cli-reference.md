@@ -27,9 +27,13 @@ datanyx schema input [options]
 | `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
 | `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
+| `--views` | also describe database views (names and columns only) |
+| `--include` `PATTERN` | describe only tables (or files) whose names match this glob, such as 'sales_*' (repeatable) |
+| `--exclude` `PATTERN` | leave out tables (or files) whose names match this glob (repeatable) |
+| `--max-tables` `N` | describe at most N tables and say how many were left out; use --format summary to list them all |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
 | `--keep-name` `NAME` | show this exact key, table or column name even if it looks like data (repeatable); --map-path still hides it |
-| `--format` `FORMAT` | output format (default: json-schema). Choices: `json-schema`, `pydantic`, `sql`, `text`, `typescript`. |
+| `--format` `FORMAT` | output format (default: json-schema). Choices: `json-schema`, `pydantic`, `sql`, `summary`, `text`, `typescript`. |
 | `-o`, `--output` `OUTPUT` | write to this file instead of stdout |
 
 ## `datanyx synth`
@@ -49,6 +53,10 @@ datanyx synth input [options]
 | `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
 | `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
+| `--views` | also describe database views (names and columns only) |
+| `--include` `PATTERN` | describe only tables (or files) whose names match this glob, such as 'sales_*' (repeatable) |
+| `--exclude` `PATTERN` | leave out tables (or files) whose names match this glob (repeatable) |
+| `--max-tables` `N` | describe at most N tables and say how many were left out; use --format summary to list them all |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
 | `--keep-name` `NAME` | show this exact key, table or column name even if it looks like data (repeatable); --map-path still hides it |
 | `--rows` `ROWS` | rows per table (default: 100) |
@@ -182,6 +190,7 @@ datanyx check code [options]
 | `--schema` `SCHEMA` | database schema to use (default: the database's default) |
 | `--source` `SOURCE` | input type for --against (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
+| `--views` | also know the database's views (names and columns only) |
 | `--map-path` `PATH` | hide all keys or columns at a path (repeatable) |
 | `--keep-name` `NAME` | show this name even if it looks like data (repeatable) |
 
@@ -302,6 +311,7 @@ datanyx diff old new [options]
 | `--schema` `SCHEMA` | database schema to use (default: the database's default) |
 | `--source` `SOURCE` | input type for live inputs (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
+| `--views` | also compare the database's views (names and columns only) |
 | `--map-path` `PATH` | hide all keys or columns at a path (repeatable) |
 | `--keep-name` `NAME` | show this name even if it looks like data (repeatable) |
 
@@ -363,6 +373,8 @@ datanyx mcp [options]
 | `--keep-entity` `KIND` | leave this kind of entity visible in anonymized text (repeatable) |
 | `--scale-hints` | give agents each table's size as an order of magnitude |
 | `--infer-keys` | give agents yes/no guesses about unique columns and joins |
+| `--views` | let agents see database views (names and columns only) |
+| `--max-tables` `N` | most tables describe_data returns at once, so a huge database can't flood the agent (default: 200) |
 | `--http` `HOST:PORT` | serve over HTTP at /mcp instead of stdio, so a team can share one server; needs a token (--token-env) |
 | `--token-env` `NAME` | environment variable holding the bearer token HTTP clients must send (default: DATANYX_MCP_TOKEN) |
 | `--audit-log` `FILE` | append a record of every tool call, never values, to this file |

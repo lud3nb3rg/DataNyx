@@ -19,7 +19,7 @@ from ..schema import (
     Union,
     Unknown,
 )
-from .naming import pascal_case, unique
+from .naming import entity_facts, pascal_case, unique, unique_label
 
 _INDENT = "  "
 _PLAIN_KEY = re.compile(r"[A-Za-z_$][\w$]*")
@@ -38,6 +38,7 @@ def _entity(entity: Entity, name: str) -> str:
     comments = []
     if entity.name and pascal_case(entity.name) != entity.name:
         comments.append(f"// {entity.name}")
+    comments.extend(f"// {fact}" for fact in entity_facts(entity))
     if entity.primary_key:
         comments.append(f"// primary key: {', '.join(entity.primary_key)}")
     for key in entity.foreign_keys:
@@ -83,7 +84,7 @@ def _object(node: Object, depth: int) -> str:
     for name, field in node.fields.items():
         key = name if _PLAIN_KEY.fullmatch(name) else json.dumps(name)
         marker = "" if field.required else "?"
-        notes = [item for item in (field.native_type, "unique (inferred)" if field.unique else None) if item]
+        notes = [item for item in (field.native_type, unique_label(field)) if item]
         comment = f" // {', '.join(notes)}" if notes else ""
         lines.append(f"{pad}{key}{marker}: {_node(field.node, depth + 1)};{comment}")
     body = "{\n" + "\n".join(lines) + "\n" + _INDENT * depth + "}"

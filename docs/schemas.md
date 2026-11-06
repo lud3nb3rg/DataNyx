@@ -82,6 +82,7 @@ hidden go to stderr, so they stay out of the schema.
 | `typescript` | `export interface` and `export type` declarations |
 | `pydantic` | Pydantic v2 models, as Python source |
 | `sql` | Portable `CREATE TABLE` statements |
+| `summary` | One line per table: its column count, keys and size. A first look at a database too big to read in full |
 
 None carry values, and keys that were hidden stay hidden: they become `Record<string, T>`,
 `extra="allow"` or a note. Nested data becomes `JSON` columns in SQL, and a database's own
@@ -180,3 +181,33 @@ and as comments rather than constraints in the SQL output, so nothing pretends t
 Set both once for a project with `scale_hints = true` and `infer_keys = true` under `[schema]` in
 `datanyx.toml`. For the MCP server they are options of whoever starts it (`datanyx mcp --scale-hints
 --infer-keys`), and an agent can't turn them on or off.
+
+## Keys the database declares
+
+For SQL databases, a column the database itself keeps unique (a `UNIQUE` constraint or a unique index) is shown as
+`unique`, with no "inferred" next to it, because it is a fact and not a guess. A set of columns that are unique
+together appears as `unique (a, b)`, and in the SQL output as a real `UNIQUE` constraint. The primary key is
+listed as before. A unique key that involves a hidden column is left out, as a partial key would mislead, and so is a
+partial index (PostgreSQL's `WHERE`), which only makes some rows unique. `datanyx synth` keeps declared unique columns
+unique.
+
+## Views
+
+`--views` also describes a database's views (and PostgreSQL's materialized views): their names and columns, marked
+`view`, and in JSON Schema `x-view`. A view's definition is never read, and it has no keys of its own. They are off by
+default so existing output doesn't change; set `views = true` under `[schema]` to turn them on for a project.
+
+## Big databases
+
+A database with thousands of tables would flood an agent. These options keep the answer a useful size:
+
+```sh
+datanyx schema $DATABASE_URL --format summary                  # one line per table
+datanyx schema $DATABASE_URL --include 'sales_*' --exclude '*_old'
+datanyx schema $DATABASE_URL --max-tables 50                   # and a note says how many were left out
+```
+
+`--include` and `--exclude` take glob patterns on table names (on file names for a folder), and can be repeated.
+`--max-tables` stops at N tables and the note says how many more there are. Foreign keys to a table outside the
+selection are left out. These work on names that may be shown only, so a pattern can't be used to find out whether a
+hidden name exists, and the counts in the notes never include one.

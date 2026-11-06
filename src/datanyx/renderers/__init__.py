@@ -8,6 +8,7 @@ from ..schema import DataSchema
 from .json_schema import render_json_schema
 from .pydantic import render_pydantic
 from .sql_ddl import render_sql_ddl
+from .summary import render_summary
 from .text import render_text
 from .typescript import render_typescript
 
@@ -17,6 +18,7 @@ RENDERERS: dict[str, Callable[[DataSchema], str]] = {
     "typescript": render_typescript,
     "pydantic": render_pydantic,
     "sql": render_sql_ddl,
+    "summary": render_summary,
 }
 
 __all__ = ["RENDERERS"]

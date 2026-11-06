@@ -10,6 +10,7 @@ from .keys import Evidence, apply_evidence
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .schema import DataSchema
+from .selection import apply_selection
 from .sources import Source, SourceError, describe_folder, resolve_source
 from .text import DEFAULT_MODEL
 
@@ -41,6 +42,7 @@ def extract(
             schema = resolve_source(target, source).extract(target, policy, namespace)
     except RecursionError:
         raise SourceError("input is too deeply nested") from None
+    schema = apply_selection(schema, policy)
     if policy.infer_keys and policy.evidence is not None:
         schema = apply_evidence(schema, policy.evidence)
         if not any(e.foreign_keys or _has_unique(e) for e in schema.entities):

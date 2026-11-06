@@ -9,6 +9,7 @@ import pytest
 
 from datanyx import SourceError, extract
 from datanyx.cli import main
+from datanyx.schema import DataSchema
 
 CANARY = "CANARY"
 
@@ -72,12 +73,12 @@ def test_missing_driver_is_explained(monkeypatch):
 def test_library_warnings_are_not_passed_on(tmp_path, monkeypatch):
     def warn_like_sqlalchemy(*_args):
         warnings.warn("Did not recognize type 'x' of column 'CANARY@example.com'")
-        return "described"
+        return DataSchema("sql", ())
 
     monkeypatch.setattr("datanyx.sources.sql_source._describe", warn_like_sqlalchemy)
     with warnings.catch_warnings(record=True) as seen:
         warnings.simplefilter("always")
-        assert extract(make_db(tmp_path)) == "described"
+        assert extract(make_db(tmp_path)) == DataSchema("sql", ())
     assert seen == []
 
 

@@ -16,7 +16,7 @@ from ..schema import (
     Union,
     Unknown,
 )
-from .naming import pascal_case, python_field_name, unique
+from .naming import entity_facts, pascal_case, python_field_name, unique, unique_label
 
 _FORMAT_TYPES = {
     "date": "_dt.date",
@@ -59,7 +59,9 @@ class _Builder:
             self._class(node, name, entity)
             return []
         alias = f"{name} = {self._type(node, name)}"
-        notes = [f"# primary key: {', '.join(entity.primary_key)}"] if entity.primary_key else []
+        notes = [f"# {fact}" for fact in entity_facts(entity)]
+        if entity.primary_key:
+            notes.append(f"# primary key: {', '.join(entity.primary_key)}")
         for key in entity.foreign_keys:
             label = "inferred join" if key.inferred else "foreign key"
             notes.append(f"# {label}: {', '.join(key.columns)} -> {key.referenced_entity} ({', '.join(key.referenced_columns)})")
@@ -108,7 +110,7 @@ class _Builder:
                 default = f" = Field({''.join(arguments)})"
             else:
                 default = "" if field.required else " = None"
-            tag = "  # unique (inferred)" if field.unique else ""
+            tag = f"  # {unique_label(field)}" if field.unique else ""
             lines.append(f"    {attribute}: {annotation}{default}{tag}")
 
         settings = []
@@ -117,6 +119,8 @@ class _Builder:
         if renamed:
             settings.append("populate_by_name=True")
         docs = [f"    # Other keys are allowed: {self._type(node.extra, name + 'Value')}"] if node.extra else []
+        if entity is not None:
+            docs.extend(f"    # {fact}" for fact in entity_facts(entity))
         if entity is not None and entity.primary_key:
             docs.append(f"    # primary key: {', '.join(entity.primary_key)}")
         if entity is not None:

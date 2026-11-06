@@ -110,6 +110,7 @@ It's limited by design:
   limited to `--root`, as does a `sqlite:///` URL under `--allow-urls`.
 - `anonymize_file` also hides credentials, and refuses files that exist to hold them or real values:
   `.env`, `*.key`, `*.pem`, mapping files and `datanyx.local.toml`. It reads up to 5 MB.
+- `describe_data` returns at most 200 tables at once (`--max-tables N` changes it), and says how many were left out. The agent can narrow it with `tables` and `exclude` (glob patterns, which only ever match names it may see) and `limit`, or ask for `format="summary"`, one line per table with no cap. `--views` lets it see database views. `check_code` and `schema_diff` always use every table.
 - There's no `keep` or `hide` option, because either one tests whether a name exists. Choose
   `--keep-entity` and the terms to hide when you start the server instead.
 - `scan_folder` uses the custom detectors, packs and `[scan]` settings the server was started with.

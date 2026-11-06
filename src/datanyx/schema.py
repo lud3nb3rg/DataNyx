@@ -58,6 +58,8 @@ class Field:
     native_type: str | None = None
     #: Set only by `--infer-keys`: the values seen were all different. A guess, not a constraint.
     unique: bool = False
+    #: True when the source itself declares the column unique (a constraint or a unique index), so it is no guess.
+    unique_declared: bool = False
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,10 @@ class Entity:
     is_table: bool = False
     #: Set only by `--scale-hints`: the row count as an order of magnitude, such as "10^3 to 10^4 rows".
     scale: str | None = None
+    #: Sets of columns the source declares unique together (a constraint or unique index); one column is on its `Field`.
+    unique_keys: tuple[tuple[str, ...], ...] = ()
+    #: True for a database view: it has columns but no keys of its own, and holds no data itself.
+    view: bool = False
 
 
 @dataclass(frozen=True)

@@ -65,7 +65,10 @@ def _table(entity: Entity, native: bool) -> str:
             guesses.append(f"-- inferred join (not enforced): ({', '.join(map(_quote, key.columns))}) -> {target}")
         else:
             lines.append(f"FOREIGN KEY ({', '.join(map(_quote, key.columns))}) REFERENCES {target}")
-    unique = [column for column, field in node.fields.items() if field.unique]
+    lines.extend(f"UNIQUE ({', '.join(map(_quote, columns))})" for columns in entity.unique_keys)
+    unique = [column for column, field in node.fields.items() if field.unique and not field.unique_declared]
+    if entity.view:
+        guesses.append("-- a view in the source, shown here as a table")
     if unique:
         guesses.append(f"-- inferred unique (not enforced): {', '.join(map(_quote, unique))}")
     if entity.scale:
@@ -85,7 +88,7 @@ def _column(name: str, field: Field, native: bool) -> str:
     nullable = not field.required or _allows_null(node)
     declared = field.native_type if native and field.native_type not in _NOT_SQL_TYPES else None
     kind = declared if declared and _SAFE_NATIVE_TYPE.fullmatch(declared) else _column_type(node)
-    return f"{_quote(name)} {kind}" + ("" if nullable else " NOT NULL")
+    return f"{_quote(name)} {kind}" + ("" if nullable else " NOT NULL") + (" UNIQUE" if field.unique_declared else "")
 
 
 def _allows_null(node: Node) -> bool:

@@ -39,10 +39,12 @@ from ..schema import (
     Node,
     Null,
     Number,
+    Object,
     String,
     Union,
     Unknown,
 )
+from ..selection import choose
 from .base import Source, SourceError
 from .catalog import build_object
 from .files import sqlite_read_only_uri
@@ -93,6 +95,8 @@ class _Table:
     visible: frozenset[str]
     key_columns: frozenset[str]
     primary_key: tuple[str, ...]  # Empty when the key involves a hidden column.
+    unique: tuple[tuple[str, ...], ...] = ()  # Declared unique sets of visible columns, beyond the primary key.
+    view: bool = False
 
 
 class SqlSource(Source):
@@ -199,18 +203,22 @@ def _authorize_sqlite(action: int, arg1: str | None, *_rest: object) -> int:
 def _describe(engine: Engine, policy: KeyPolicy, namespace: str | None, kind: str) -> DataSchema:
     inspector = sa.inspect(engine)
     names = list(inspector.get_table_names(schema=namespace))
+    notes: list[str] = []
+    views = _view_names(inspector, namespace, notes) if policy.views else set()
+    names += sorted(views - set(names))
     visible_names = [name for name in names if policy.shows_name(name)]
 
-    notes: list[str] = []
     if not names:
         notes.append("no tables found")
     if len(visible_names) != len(names):
         notes.append("hid data-like table names (key shape)")
+    visible_names, chosen_notes = choose(visible_names, policy)
+    notes.extend(chosen_notes)
 
     tables: dict[str, _Table] = {}
     for name in visible_names:
         try:
-            tables[name] = _read_table(inspector, name, namespace, policy)
+            tables[name] = _read_table(inspector, name, namespace, policy, name in views)
         except Exception:
             # Inspecting a SQLite virtual table runs its module's own queries, which
             # the authorizer refuses; a server may deny access to a single table.
@@ -262,7 +270,52 @@ def _row_estimates(engine: Engine, namespace: str | None) -> dict[str, int] | No
         return {str(name): int(count) for name, count in rows if count is not None}
 
 
-def _read_table(inspector: Inspector, name: str, namespace: str | None, policy: KeyPolicy) -> _Table:
+def _view_names(inspector: Inspector, namespace: str | None, notes: list[str]) -> set[str]:
+    """Views, and materialized views where the database has them. Only their names and columns are read."""
+    found: set[str] = set()
+    for method in ("get_view_names", "get_materialized_view_names"):
+        try:
+            found.update(getattr(inspector, method)(schema=namespace))
+        except NotImplementedError:
+            continue
+        except Exception:
+            notes.append("could not list the views")
+            break
+    return found
+
+
+def _declared_uniques(
+    inspector: Inspector, name: str, namespace: str | None, visible: frozenset[str], primary_key: Sequence[str]
+) -> tuple[tuple[str, ...], ...]:
+    """Sets of columns the database itself keeps unique: constraints and unique indexes, other than the primary key.
+
+    One that involves a hidden column is left out, as a partial key would mislead. So is a partial index, which
+    only makes some rows unique.
+    """
+    found: list[tuple[str, ...]] = []
+    try:
+        constraints = [tuple(item.get("column_names") or ()) for item in inspector.get_unique_constraints(name, schema=namespace)]
+        indexes = [
+            tuple(item.get("column_names") or ())
+            for item in inspector.get_indexes(name, schema=namespace)
+            if item.get("unique") and not _partial_index(item) and not item.get("expressions")
+        ]
+    except Exception:  # NotImplementedError on some dialects, or a server that denies the query.
+        return ()
+    for columns in [*constraints, *indexes]:
+        if columns and all(column is not None and column in visible for column in columns):
+            names = tuple(str(column) for column in columns)
+            if names not in found and set(names) != set(primary_key):
+                found.append(names)
+    return tuple(found)
+
+
+def _partial_index(index: Mapping[str, Any]) -> bool:
+    options = index.get("dialect_options") or {}
+    return any(key.endswith("_where") and value is not None for key, value in options.items())
+
+
+def _read_table(inspector: Inspector, name: str, namespace: str | None, policy: KeyPolicy, view: bool = False) -> _Table:
     columns = inspector.get_columns(name, schema=namespace)
     hide_all = f"$.{name}" in policy.map_paths
     visible = frozenset(
@@ -270,10 +323,13 @@ def _read_table(inspector: Inspector, name: str, namespace: str | None, policy: 
         for column in columns
         if not hide_all and policy.shows_name(column["name"])
     )
+    if view:  # A view has no keys of its own.
+        return _Table(name, columns, visible, frozenset(), (), (), True)
     key = inspector.get_pk_constraint(name, schema=namespace).get("constrained_columns") or []
     # A partial key would mislead, so a key with a hidden column isn't shown at all.
     primary_key = tuple(key) if all(column in visible for column in key) else ()
-    return _Table(name, columns, visible, frozenset(key), primary_key)
+    unique = _declared_uniques(inspector, name, namespace, visible, key)
+    return _Table(name, columns, visible, frozenset(key), primary_key, unique)
 
 
 def _foreign_keys_or_note(
@@ -343,7 +399,15 @@ def _build_entity(
         for column in table.columns
     ]
     node = build_object(entries, f"$.{table.name}", policy, notes)
-    return Entity(table.name, node, table.primary_key, foreign_keys, True)
+    single = {columns[0] for columns in table.unique if len(columns) == 1}
+    if single:
+        node = Object(
+            {name: replace(f, unique=True, unique_declared=True) if name in single else f for name, f in node.fields.items()},
+            node.extra,
+            node.key_format,
+        )
+    composite = tuple(columns for columns in table.unique if len(columns) > 1)
+    return Entity(table.name, node, table.primary_key, foreign_keys, True, unique_keys=composite, view=table.view)
 
 
 def _column_node(column: Mapping[str, Any], table: _Table, enforced: bool) -> Node:

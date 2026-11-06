@@ -4,6 +4,8 @@
 
 **Added**
 
+- SQL databases now show columns the database declares unique (constraints and unique indexes) as facts, not guesses, and sets of columns unique together as `unique (a, b)`.
+- `--views` describes database views (names and columns only). `--include`, `--exclude` and `--max-tables` choose which tables to describe, and `--format summary` lists one line per table. The MCP server caps `describe_data` at 200 tables (`datanyx mcp --max-tables`), and the agent can narrow it with `tables`, `exclude` and `limit`.
 - `--delimiter` for `schema`, `synth`, `check`, `diff` and `pseudonymize`: read CSV and TSV files that use `;`, `|` or another separator. It takes a character or one of `comma`, `semicolon`, `tab`, `pipe`, `space`.
 
 **Fixed**

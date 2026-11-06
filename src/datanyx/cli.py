@@ -89,6 +89,19 @@ def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
         "--infer-keys", action="store_true",
         help="also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel)",
     )
+    parser.add_argument("--views", action="store_true", help="also describe database views (names and columns only)")
+    parser.add_argument(
+        "--include", action="append", default=[], metavar="PATTERN",
+        help="describe only tables (or files) whose names match this glob, such as 'sales_*' (repeatable)",
+    )
+    parser.add_argument(
+        "--exclude", action="append", default=[], metavar="PATTERN",
+        help="leave out tables (or files) whose names match this glob (repeatable)",
+    )
+    parser.add_argument(
+        "--max-tables", type=int, metavar="N",
+        help="describe at most N tables and say how many were left out; use --format summary to list them all",
+    )
     parser.add_argument(
         "--map-path",
         action="append",
@@ -357,6 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--schema", help="database schema to use (default: the database's default)")
     check.add_argument("--source", choices=source_kinds(), help="input type for --against (default: detect)")
     _add_delimiter(check)
+    check.add_argument("--views", action="store_true", help="also know the database's views (names and columns only)")
     check.add_argument("--map-path", action="append", default=[], metavar="PATH", help="hide all keys or columns at a path (repeatable)")
     check.add_argument("--keep-name", action="append", default=[], metavar="NAME", help="show this name even if it looks like data (repeatable)")
 
@@ -491,6 +505,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("--schema", help="database schema to use (default: the database's default)")
     diff.add_argument("--source", choices=source_kinds(), help="input type for live inputs (default: detect)")
     _add_delimiter(diff)
+    diff.add_argument("--views", action="store_true", help="also compare the database's views (names and columns only)")
     diff.add_argument("--map-path", action="append", default=[], metavar="PATH", help="hide all keys or columns at a path (repeatable)")
     diff.add_argument("--keep-name", action="append", default=[], metavar="NAME", help="show this name even if it looks like data (repeatable)")
 
@@ -530,6 +545,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--scale-hints", action="store_true", help="give agents each table's size as an order of magnitude")
     serve.add_argument("--infer-keys", action="store_true", help="give agents yes/no guesses about unique columns and joins")
+    serve.add_argument("--views", action="store_true", help="let agents see database views (names and columns only)")
+    serve.add_argument(
+        "--max-tables", type=int, default=200, metavar="N",
+        help="most tables describe_data returns at once, so a huge database can't flood the agent (default: %(default)s)",
+    )
     serve.add_argument(
         "--http", metavar="HOST:PORT",
         help="serve over HTTP at /mcp instead of stdio, so a team can share one server; needs a token (--token-env)",
@@ -602,6 +622,10 @@ def _policy(args: argparse.Namespace) -> KeyPolicy:
         scale_hints=bool(getattr(args, "scale_hints", False) or config.scale_hints),
         infer_keys=bool(getattr(args, "infer_keys", False) or config.infer_keys),
         delimiter=getattr(args, "delimiter", None),
+        views=bool(getattr(args, "views", False) or config.views),
+        include=tuple(getattr(args, "include", None) or ()),
+        exclude=tuple(getattr(args, "exclude", None) or ()),
+        max_tables=getattr(args, "max_tables", None),
     )
 
 
@@ -1002,6 +1026,8 @@ def _run_mcp(args: argparse.Namespace) -> int:
         token=token,
         scale_hints=bool(args.scale_hints or config.scale_hints),
         infer_keys=bool(args.infer_keys or config.infer_keys),
+        views=bool(args.views or config.views),
+        max_tables=args.max_tables,
         allow_env=[*config.mcp_allow_env, *args.allow_env],
         scan_settings={
             "excludes": list(config.scan_exclude),
