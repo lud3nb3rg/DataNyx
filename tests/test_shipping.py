@@ -1,6 +1,7 @@
 """The files that ship DataNyx (action, hook, image, workflows) stay valid and in step with the program."""
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -74,3 +75,55 @@ def test_http_mode_is_in_the_command_reference_and_needs_a_token(monkeypatch, ca
     monkeypatch.delenv("DATANYX_MCP_TOKEN", raising=False)
     assert main(["--no-config", "mcp", "--http", "127.0.0.1:1"]) == 1
     assert "DATANYX_MCP_TOKEN" in capsys.readouterr().err
+
+
+def test_every_action_is_pinned_to_a_commit():
+    pinned = re.compile(r"uses:\s*[\w./-]+@[0-9a-f]{40}\b")
+    for path in WORKFLOWS:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "uses:" in line and "./" not in line.split("uses:")[1].split()[0]:
+                assert pinned.search(line), f"{path.name}: pin this to a commit: {line.strip()}"
+
+
+def test_release_workflow_attests_signs_and_publishes_a_release_only_from_a_tag():
+    release = load(ROOT / ".github" / "workflows" / "release.yml")
+    jobs = release["jobs"]
+    assert "workflow_dispatch" in release[True]  # A dry run builds everything and publishes nothing.
+    for name in ("pypi", "attest", "release"):
+        assert jobs[name]["if"] == "github.ref_type == 'tag'", name
+    assert jobs["attest"]["permissions"] == {"contents": "read", "id-token": "write", "attestations": "write"}
+    assert jobs["release"]["permissions"] == {"contents": "write"}
+    docker = str(jobs["docker"])
+    assert "provenance" in docker and "sbom" in docker and "cosign sign" in docker
+    assert jobs["docker"]["permissions"]["id-token"] == "write"
+    assert set(jobs["release"]["needs"]) == {"build", "pypi", "attest", "docker"}  # Nothing is announced before it is all out.
+
+
+def test_the_docs_site_is_built_strictly_and_deployed_from_main():
+    pages = load(ROOT / ".github" / "workflows" / "pages.yml")
+    assert pages[True]["push"]["branches"] == ["main"]
+    assert pages["jobs"]["deploy"]["permissions"] == {"pages": "write", "id-token": "write"}
+    assert "mkdocs build --strict" in str(pages["jobs"]["build"])
+    assert "site_url: https://lud3nb3rg.github.io/DataNyx/" in (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+
+
+def test_release_notes_come_from_the_changelog():
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        from release_notes import notes_for
+    finally:
+        sys.path.pop(0)
+    text = "# Changelog\n\n## Unreleased\n\n- next\n\n## 1.2.0 (2030-01-01)\n\nIntro.\n\n- one\n- two\n\n## 1.1.0\n\n- old\n"
+    assert notes_for("1.2.0", text) == "Intro.\n\n- one\n- two"
+    assert notes_for("1.1.0", text) == "- old"
+    assert notes_for("1.3.0", text) == ""  # Missing: the script refuses, so no release goes out blank.
+    assert notes_for("1.2", text) == ""  # Not a prefix match.
+    real = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert notes_for("0.1.0", real).startswith("The first release.")
+    assert real.count("\n## 0.1.0") == 1  # One section per version.
+
+
+def test_the_package_points_at_its_documentation():
+    urls = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["urls"]
+    assert urls["Documentation"].startswith("https://lud3nb3rg.github.io/DataNyx")
+    assert urls["Changelog"].endswith("CHANGELOG.md")

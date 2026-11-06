@@ -1,5 +1,8 @@
 site_name: DataNyx
 site_description: Let an AI agent work with your data without ever seeing it.
+site_url: https://lud3nb3rg.github.io/DataNyx/
+repo_url: https://github.com/lud3nb3rg/DataNyx
+repo_name: lud3nb3rg/DataNyx
 docs_dir: docs
 theme:
   name: material

@@ -16,6 +16,7 @@ and replaces names and identifiers in free text with placeholders.
 [Documentation](docs/index.md) ·
 [Command reference](docs/cli-reference.md) ·
 [Privacy model](docs/privacy-model.md) ·
+[Website](https://lud3nb3rg.github.io/DataNyx/) ·
 [Changelog](CHANGELOG.md)
 
 </div>

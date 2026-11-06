@@ -2,7 +2,7 @@
 
 ## Install
 
-Install it from a clone. Once a release is published, `pip install datanyx` works too, and there is also a [container image, a pre-commit hook and a GitHub Action](deployment.md).
+`pip install datanyx` installs the latest release from PyPI. To work on it, or to run the newest code, install from a clone. There is also a [container image, a pre-commit hook and a GitHub Action](deployment.md).
 
 ```sh
 git clone <this repository> datanyx && cd datanyx

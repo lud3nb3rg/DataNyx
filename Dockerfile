@@ -16,7 +16,7 @@ COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir uv==0.10.7 \
     && uv build --wheel --out-dir /wheels \
-    && uv export --frozen --no-default-groups --no-emit-project --extra mcp --extra yaml --extra excel --extra parquet --extra orc --extra avro --extra duckdb --extra stats --extra mongodb --extra streaming --extra check --extra pdf --extra text -o /wheels/requirements.txt
+    && uv export --frozen --no-default-groups --no-emit-project --extra mcp --extra yaml --extra excel --extra parquet --extra orc --extra avro --extra duckdb --extra stats --extra mongodb --extra streaming --extra check --extra pdf --extra text --extra zstd --extra remote --extra s3 -o /wheels/requirements.txt
 
 FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
 ARG MODEL=""

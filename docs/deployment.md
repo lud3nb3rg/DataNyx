@@ -5,7 +5,7 @@ Actions, and as a server a team shares.
 
 ## From PyPI
 
-Releases are published to PyPI from a version tag, so once a release exists:
+Releases are published to [PyPI](https://pypi.org/project/datanyx/) from a version tag:
 
 ```sh
 pip install datanyx                    # CSV, JSON, XML and SQLite
@@ -28,6 +28,26 @@ docker run --rm -v "$PWD:/data:ro" datanyx schema /data/customers.csv --format t
 The spaCy models are large and left out. To add one, build with `--build-arg MODEL=en_core_web_sm`
 and pass `--model en_core_web_sm`. Tagged releases are also pushed to `ghcr.io`. The base image is pinned
 by digest and the dependencies by the hashes in `uv.lock`, so a build installs exactly what was tested.
+
+## Checking a release
+
+Every release is built by [a workflow in this repository](https://github.com/lud3nb3rg/DataNyx/blob/main/.github/workflows/release.yml),
+and what it publishes can be checked against that workflow, so you don't have to take the files on trust. Each check
+needs a tool you may not have: [`pypi-attestations`](https://pypi.org/project/pypi-attestations/), the
+[GitHub CLI](https://cli.github.com/) and [cosign](https://docs.sigstore.dev/cosign/).
+
+| What | Check |
+|---|---|
+| The wheel and sdist on PyPI came from this repository | `pypi-attestations verify pypi --repository https://github.com/lud3nb3rg/DataNyx pypi:datanyx-X.Y.Z-py3-none-any.whl` |
+| A file you downloaded was built by the release workflow | `gh attestation verify datanyx-X.Y.Z-py3-none-any.whl --repo lud3nb3rg/DataNyx` |
+| The container image was built and signed by it | `gh attestation verify oci://ghcr.io/lud3nb3rg/datanyx:X.Y.Z --repo lud3nb3rg/DataNyx` |
+| The same, with cosign | `cosign verify ghcr.io/lud3nb3rg/datanyx:X.Y.Z --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/lud3nb3rg/DataNyx/\.github/workflows/release\.yml@refs/tags/v'` |
+
+Two lists of what is inside come with a release. The GitHub Release has `datanyx-X.Y.Z.cdx.json`, a
+[CycloneDX](https://cyclonedx.org/) list of the package's locked dependencies. The image carries its own SBOM and its
+build provenance in the registry: `docker buildx imagetools inspect ghcr.io/lud3nb3rg/datanyx:X.Y.Z --format '{{ json .SBOM }}'`.
+The verification of the PyPI attestation was run against 0.1.0 when this was written; the GitHub attestations, the signature
+and the SBOM start with the first release made after they were added.
 
 ## As a pre-commit hook
 

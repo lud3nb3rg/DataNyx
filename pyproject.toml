@@ -86,6 +86,13 @@ models = [
     "fr-core-news-md @ https://github.com/explosion/spacy-models/releases/download/fr_core_news_md-3.8.0/fr_core_news_md-3.8.0-py3-none-any.whl",
 ]
 
+[project.urls]
+Homepage = "https://github.com/lud3nb3rg/DataNyx"
+Documentation = "https://lud3nb3rg.github.io/DataNyx/"
+Source = "https://github.com/lud3nb3rg/DataNyx"
+Changelog = "https://github.com/lud3nb3rg/DataNyx/blob/main/CHANGELOG.md"
+Issues = "https://github.com/lud3nb3rg/DataNyx/issues"
+
 [project.scripts]
 datanyx = "datanyx.cli:main"
 
