@@ -91,9 +91,9 @@ def anonymize_text(
 
     Needs `datanyx[text]` and a spaCy model. Best effort: review the result.
     """
-    from .text import Detector, PatternDetector, SpacyDetector, anonymize
+    from .text import Detector, PatternDetector, SecretDetector, SpacyDetector, anonymize
 
-    detectors: list[Detector] = [PatternDetector(), SpacyDetector(model)]
+    detectors: list[Detector] = [PatternDetector(), SecretDetector(), SpacyDetector(model)]
     return anonymize(text, detectors, hide, keep, keep_entity)
 
 

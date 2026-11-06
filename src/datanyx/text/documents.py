@@ -3,8 +3,8 @@
 | Format | Result |
 |---|---|
 | text, Markdown, logs, CSV, JSON and similar | the same file, with placeholders |
-| HTML | the same page: tags and layout stay, text and some attributes change |
-| Word (.docx) | the same document: styles, tables and layout stay; a paragraph that had something to hide loses the formatting inside it; author and company are cleared |
+| HTML | the same page: tags and layout stay, text and attributes change; comments and scripts are removed |
+| Word (.docx) | the same document: styles, tables and layout stay; a paragraph that had something to hide loses the formatting inside it; author and company are cleared, tracked deletions are removed, and custom properties and embedded files are emptied |
 | email (.eml) | a text file of the headers and the body, with the people replaced and attachments left out |
 | PDF | a text file of the pages (needs `datanyx[pdf]`); scanned pages with no text can't be read |
 | WhatsApp export | the same chat, with each sender replaced by one placeholder |
@@ -62,7 +62,8 @@ def anonymize_file(path: str | Path, anonymizer: Anonymizer) -> Output:
 
 def anonymize_bytes(data: bytes, suffix: str, anonymizer: Anonymizer) -> Output:
     if suffix in (".html", ".htm"):
-        return Output(_html(_decode(data), anonymizer).encode("utf-8"), suffix)
+        page, notes = _html(_decode(data), anonymizer)
+        return Output(page.encode("utf-8"), suffix, notes)
     if suffix == ".eml":
         return Output(_eml(data, anonymizer).encode("utf-8"), ".txt")
     if suffix == ".docx":
@@ -91,16 +92,21 @@ def _decode(data: bytes) -> str:
 # --- HTML ------------------------------------------------------------------------------------------
 
 _TAG = re.compile(r"<!--.*?-->|<![^>]*>|<[^>]*>", re.DOTALL)
-_ATTRIBUTE = re.compile(
-    r"""(\s(?:title|alt|placeholder|value|content|href|aria-label|label|summary)\s*=\s*)(["'])(.*?)\2""",
-    re.IGNORECASE | re.DOTALL,
+_ATTRIBUTE = re.compile(r"""(\s([\w:.-]+)\s*=\s*)(?:(["'])(.*?)\3|([^\s"'>]+))""", re.DOTALL)
+# Attributes about layout and behaviour. Any other can hold data: data-*, id, name, src, onclick...
+_LAYOUT_ATTRIBUTES = frozenset(
+    ["class", "style", "type", "rel", "lang", "dir", "width", "height", "align", "valign", "border", "charset", "media", "target", "role", "colspan", "rowspan", "method", "http-equiv", "xmlns", "hidden", "disabled", "checked", "selected", "readonly", "required", "tabindex", "enctype", "loading", "crossorigin", "integrity", "as", "sizes", "bgcolor", "color", "cellpadding", "cellspacing", "span", "scope", "maxlength", "min", "max", "step", "rows", "cols", "autocomplete", "spellcheck", "draggable", "accesskey", "xml:lang"]
 )
 _SKIPPED_TAG = re.compile(r"<(script|style)\b[^>]*>|</(script|style)\s*>", re.IGNORECASE)
 _SLOT = re.compile("(\\d+)")
 
 
-def _html(text: str, anonymizer: Anonymizer) -> str:
-    """Anonymize the text and the descriptive attributes of a page, leaving the markup alone."""
+def _html(text: str, anonymizer: Anonymizer) -> tuple[str, list[str]]:
+    """Anonymize the text and the attributes of a page, leaving the markup alone.
+
+    Comments and scripts are removed: nothing in them is shown to a reader, and code can't be
+    anonymized and still mean anything. Styles stay, as they hold no text of the page.
+    """
     raws: list[str] = []  # What each slot held, unescaped.
     originals: list[str] = []
     quoted: list[bool] = []
@@ -112,28 +118,41 @@ def _html(text: str, anonymizer: Anonymizer) -> str:
         return f"{len(raws) - 1}"
 
     def attribute(match: re.Match[str]) -> str:
-        prefix, quote, value = match.groups()
-        return f"{prefix}{quote}{slot(value, value, True)}{quote}"
+        prefix, name, quote, quoted_value, bare_value = match.groups()
+        if name.lower() in _LAYOUT_ATTRIBUTES:
+            return match.group(0)
+        if quote:
+            return f"{prefix}{quote}{slot(quoted_value, quoted_value, True)}{quote}"
+        return f"{prefix}{slot(bare_value, bare_value, True)}"
 
     out: list[str] = []
     position = 0
-    skipping = False
+    skipping = dropping = False
+    comments = scripts = 0
     for match in _TAG.finditer(text):
         between = text[position : match.start()]
-        if skipping or not between.strip():
+        if dropping:
+            scripts += bool(between.strip())
+        elif skipping or not between.strip():
             out.append(between)
         else:
             lead = between[: len(between) - len(between.lstrip())]
             trail = between[len(between.rstrip()) :]
             out.append(lead + slot(between.strip(), between.strip(), False) + trail)
         tag = match.group()
+        position = match.end()
+        if tag.startswith("<!--"):
+            comments += 1
+            continue
         skipper = _SKIPPED_TAG.fullmatch(tag)
         if skipper and not tag.endswith("/>"):
             skipping = skipper.group(1) is not None
+            dropping = skipping and skipper.group(1).lower() == "script"
         out.append(_ATTRIBUTE.sub(attribute, tag))
-        position = match.end()
     tail = text[position:]
-    if tail.strip() and not skipping:
+    if dropping:
+        scripts += bool(tail.strip())
+    elif tail.strip() and not skipping:
         out.append(tail[: len(tail) - len(tail.lstrip())] + slot(tail.strip(), tail.strip(), False))
         out.append(tail[len(tail.rstrip()) :])
     else:
@@ -147,7 +166,12 @@ def _html(text: str, anonymizer: Anonymizer) -> str:
             return originals[index]  # Unchanged, so the original spelling (and entities) stay.
         return html.escape(results[index], quote=quoted[index])
 
-    return _SLOT.sub(fill, "".join(out))
+    notes = []
+    if comments:
+        notes.append(f"{comments} HTML comment(s) were removed")
+    if scripts:
+        notes.append(f"the contents of {scripts} script(s) were removed")
+    return _SLOT.sub(fill, "".join(out)), notes
 
 
 def _html_to_text(markup: str) -> str:
@@ -203,11 +227,23 @@ def _eml(data: bytes, anonymizer: Anonymizer) -> str:
 _PARAGRAPH = re.compile(r"(<w:p(?:\s[^>]*)?>)(.*?)(</w:p>)", re.DOTALL)
 _RUN_TEXT = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.DOTALL)
 _FIELD_CODE = re.compile(r"(<w:instrText(?:\s[^>]*)?>)(.*?)(</w:instrText>)", re.DOTALL)
-_TEXT_PART = re.compile(r"word/(document|header\d*|footer\d*|comments|footnotes|endnotes)\.xml")
+_TEXT_PART = re.compile(r"word/(?:glossary/)?(document|header\d*|footer\d*|comments|footnotes|endnotes)\.xml")
 _PERSONAL_PROPERTIES = re.compile(
-    r"(<(?:dc:creator|cp:lastModifiedBy|dc:title|dc:subject|cp:keywords|dc:description|Company|Manager)\b[^>]*>).*?(</)",
+    r"(<(?:dc:creator|cp:lastModifiedBy|dc:title|dc:subject|cp:keywords|dc:description|cp:category|cp:contentStatus|Company|Manager|HyperlinkBase|Template)\b[^>]*>).*?(</)",
     re.DOTALL,
 )
+# Text a reader no longer sees, kept in the file by tracked changes.
+_TRACKED_REMOVALS = re.compile(r"<w:(del|moveFrom)(?:\s[^>]*[^/>])?>.*?</w:\1>", re.DOTALL)
+_REVISION_AUTHOR = re.compile(r'(\s(?:\w+:)?(?:author|lastModifiedBy)=")([^"]*)(")')
+_REVISION_IDENTITY = re.compile(r'(\s(?:\w+:)?(?:initials|userId|providerId)=")[^"]*(")')
+_DESCRIPTIVE = re.compile(r'(\s(?:\w+:)?(?:descr|title|tooltip)="|<w:(?:alias|tag)\s+w:val=")([^"]*)(")')
+_CUSTOM_XML = re.compile(r"customXml/item\d+\.xml")
+_XML_HEADER = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+# Parts emptied rather than removed: the rest of the package refers to them, and Word complains if they go.
+_EMPTY_PARTS = {
+    "word/people.xml": _XML_HEADER + '<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"/>',
+    "docProps/custom.xml": _XML_HEADER + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"/>',
+}
 _MAILTO = re.compile(r'(Target=")(mailto:[^"]*)(")', re.IGNORECASE)
 
 
@@ -220,15 +256,26 @@ def _docx(data: bytes, anonymizer: Anonymizer) -> Output:
         if sum(info.file_size for info in source.infolist()) > _MAX_UNZIPPED_BYTES:
             raise SourceError("the .docx file is too large to read safely")
         buffer = io.BytesIO()
-        images = 0
+        images = embedded = removals = 0
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
             for info in source.infolist():
                 content = source.read(info.filename)
                 name = info.filename
                 if name.startswith("word/media/"):
                     images += 1
+                elif name.startswith("word/embeddings/"):
+                    embedded += 1
+                    content = b""
+                elif name in _EMPTY_PARTS:
+                    content = _EMPTY_PARTS[name].encode("utf-8")
+                elif _CUSTOM_XML.fullmatch(name):
+                    content = (_XML_HEADER + "<root/>").encode("utf-8")
                 elif _TEXT_PART.fullmatch(name):
-                    content = _docx_text_part(content.decode("utf-8"), anonymizer).encode("utf-8")
+                    xml, removed = _TRACKED_REMOVALS.subn("", content.decode("utf-8"))
+                    removals += removed
+                    content = _docx_text_part(_docx_attributes(xml, anonymizer), anonymizer).encode("utf-8")
+                elif name.startswith("word/") and name.endswith(".xml"):
+                    content = _docx_attributes(content.decode("utf-8"), anonymizer).encode("utf-8")
                 elif name in ("docProps/core.xml", "docProps/app.xml"):
                     content = _PERSONAL_PROPERTIES.sub(r"\1\2", content.decode("utf-8")).encode("utf-8")
                 elif name.startswith("word/_rels/") and name.endswith(".rels"):
@@ -237,7 +284,28 @@ def _docx(data: bytes, anonymizer: Anonymizer) -> Output:
     notes = ["document properties such as author and company were cleared"]
     if images:
         notes.append(f"{images} embedded image(s) were not processed")
+    if embedded:
+        notes.append(f"{embedded} embedded file(s) were emptied")
+    if removals:
+        notes.append(f"{removals} tracked deletion(s) were removed")
     return Output(buffer.getvalue(), ".docx", notes)
+
+
+def _docx_attributes(xml: str, anonymizer: Anonymizer) -> str:
+    """Who made each revision and comment, and the descriptions on pictures and content controls."""
+
+    def author(match: re.Match[str]) -> str:
+        value = html.unescape(match.group(2))
+        if not value.strip():
+            return match.group()
+        return match.group(1) + xml_escape(anonymizer.placeholder_for("PERSON", value)) + match.group(3)
+
+    def descriptive(match: re.Match[str]) -> str:
+        return match.group(1) + xml_escape(anonymizer.anonymize(html.unescape(match.group(2))), {'"': "&quot;"}) + match.group(3)
+
+    xml = _REVISION_AUTHOR.sub(author, xml)
+    xml = _REVISION_IDENTITY.sub(r"\1\2", xml)
+    return _DESCRIPTIVE.sub(descriptive, xml)
 
 
 def _docx_text_part(xml: str, anonymizer: Anonymizer) -> str:

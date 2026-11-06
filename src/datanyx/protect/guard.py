@@ -5,13 +5,18 @@ This runs as a Claude Code `PreToolUse` hook. It is a guardrail, not a sandbox:
 - It stops the agent *looking at* the protected files with its own tools: Read, Grep,
   Glob, and shell commands that name them. Running a script that reads them is fine,
   and is the intended way to work: `datanyx run -- python report.py`.
-- It can't see inside a script, or follow a path built at run time ($DATA/x.csv).
+- It can't see inside a script, or follow a path built at run time from a variable the
+  command sets itself (D=data; cat $D/x.csv).
 - It lets `datanyx schema`, `synth`, `check`, `scrub`, `anonymize` and `run` through,
   because those are the ways to work with protected data that don't reveal it.
-- It also refuses edits to the files that set the protection up.
+- It also refuses changes to the files that set the protection up.
 
 Claude Code's own deny rules (written by `datanyx protect`) cover Read, Edit and Write
 too; this hook adds Bash, Grep and Glob, and fails closed if it breaks.
+
+Shell commands are parsed the way a shell reads them (quotes, escapes, redirections,
+substitutions and nested shells) rather than matched as text, and paths are compared after
+resolving them, so `da''ta/x.csv` and `./.claude/./settings.json` mean what they would mean.
 """
 
 from __future__ import annotations
@@ -20,36 +25,54 @@ import glob
 import json
 import os
 import re
-import shlex
-from collections.abc import Mapping
+import sys
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 
-from .config import ProtectConfig, find_config
+from .config import CONFIG_DIR, ProtectConfig, find_config
 
-_SPLIT = re.compile(r"\s*(?:&&|\|\||;|\||\r?\n)\s*")
 _GLOB_CHARACTERS = re.compile(r"[*?\[]")
 _ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
-_WRAPPERS = frozenset({"sudo", "env", "time", "nohup", "command", "exec", "nice"})
+# Words that come before the program. They run what follows, so they aren't the program themselves.
+_WRAPPERS = frozenset({"sudo", "env", "time", "nohup", "command", "exec", "nice", "{", "!", "then", "do", "else", "elif", "if", "while", "until"})
 _READ_TOOLS = {"Read": "file_path", "NotebookRead": "notebook_path"}
 _WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 _SHELLS = frozenset({"Bash", "PowerShell"})
+_SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish", "powershell", "pwsh", "cmd"})
+_SHELL_CODE_FLAGS = frozenset({"-c", "-lc", "-ic", "-command", "/c", "/k"})
 _RECURSIVE_SEARCH = frozenset({"rg", "ag", "ack"})
 _GREPS = frozenset({"grep", "egrep", "fgrep"})
+_CHANGE_DIRECTORY = frozenset({"cd", "pushd", "chdir", "set-location", "sl"})
 # DataNyx commands that work with protected data without showing it.
 _SAFE_COMMANDS = frozenset(
     {"schema", "synth", "check", "scrub", "anonymize", "run", "scan", "diff", "audit", "config", "doctor", "hook", "mcp"}
 )
 # Options that loosen what the user decided: they show names the rules hid, leave terms visible,
-# or point at a settings file the agent wrote. Each also works as a way to test guesses.
+# choose weaker detectors, or point at a settings file the agent wrote. Many also work as a way
+# to test guesses. `--hide` is here for that reason: whether a term comes back as <TERM_1> says
+# whether it is in the data.
 _WEAKENING = frozenset(
     {
-        "--keep-name", "--keep", "--keep-entity", "--allow", "--keep-numbers", "--no-ner", "--show-paths",
-        "--reveal", "--config", "--no-config", "--allow-urls", "--include-examples",
+        "--keep-name", "--keep-names", "--keep", "--keep-entity", "--allow", "--keep-numbers", "--no-ner", "--show-paths",
+        "--reveal", "--config", "--no-config", "--allow-urls", "--allow-env", "--include-examples", "--allow-unscanned",
+        "--hide", "--model", "--backend", "--detectors",
     }
 )
+_OUTPUT_OPTIONS = ("-o", "--output", "--audit-log")
 _READ_ONLY_PROGRAMS = frozenset(
-    {"cat", "head", "tail", "less", "more", "type", "grep", "egrep", "fgrep", "rg", "ls", "dir", "wc", "diff", "git", "jq", "stat"}
+    {"cat", "head", "tail", "less", "more", "type", "grep", "egrep", "fgrep", "rg", "ls", "dir", "wc", "diff", "jq", "stat", "get-content", "gc", "get-childitem"}
 )
+_READ_ONLY_GIT = frozenset({"status", "diff", "log", "show", "blame", "ls-files", "ls-tree", "rev-parse", "describe", "grep", "shortlog", "cat-file"})
+_GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+_DESTRUCTIVE_PROGRAMS = frozenset({"rm", "rmdir", "del", "erase", "rd", "ri", "mv", "move", "ren", "rename", "remove-item", "move-item", "rename-item", "rsync", "shred", "unlink", "trash"})
+_SETTINGS_NAMES = frozenset({"datanyx.toml", "datanyx.local.toml"})
+_PYTHONS = re.compile(r"(python|pypy)[\d.]*|py")
+_UV_VALUE_OPTIONS = frozenset({"--project", "--directory", "--python", "-p", "--env-file"})
+_PACKAGE = Path(__file__).resolve().parent.parent  # The code of this very hook.
+_MAX_NESTING = 6
+_MAX_GLOB_MATCHES = 20_000
 
 DENY_TOOLS = "Read|Grep|Glob|Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|NotebookRead"
 
@@ -74,8 +97,18 @@ def decide(payload: dict, config: ProtectConfig) -> str | None:
     return None
 
 
-def run_hook(stdin_text: str, environment: Mapping[str, str] | None = None, fallback: Path | None = None) -> str:
-    """The hook's whole job: read the payload, return the JSON to print (empty to allow)."""
+def run_hook(
+    stdin_text: str,
+    environment: Mapping[str, str] | None = None,
+    fallback: Path | None = None,
+    require_config: bool = False,
+) -> str:
+    """The hook's whole job: read the payload, return the JSON to print (empty to allow).
+
+    `datanyx protect` installs the hook with `require_config`: the hook being there means the
+    project is protected, so a missing settings file means someone removed it, not that there
+    is nothing to protect. Claude Code also keeps a session's hooks when their settings go.
+    """
     environment = os.environ if environment is None else environment
     try:
         payload = json.loads(stdin_text)
@@ -87,6 +120,11 @@ def run_hook(stdin_text: str, environment: Mapping[str, str] | None = None, fall
         start = Path(environment.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or fallback or Path.cwd())
         config = find_config(start.resolve())
         if config is None:
+            if require_config:
+                return _deny(
+                    "DataNyx's protection settings (.datanyx/protect.json) are missing, so this was blocked to be safe. "
+                    "Ask the user to run `datanyx protect` again, or to restart Claude Code if protection was removed on purpose."
+                )
             return ""  # Not a protected project.
         reason = decide(payload, config)
     except Exception:
@@ -98,6 +136,207 @@ def _deny(reason: str) -> str:
     return json.dumps(
         {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}
     )
+
+
+# --- reading a shell command -------------------------------------------------------
+
+
+@dataclass
+class _Segment:
+    """One simple command: its words with the shell's quoting removed, and what it redirects."""
+
+    text: str
+    words: list[str] = field(default_factory=list)
+    reads: list[str] = field(default_factory=list)
+    writes: list[str] = field(default_factory=list)
+
+
+def _closing(text: str, start: int) -> int:
+    """Where the parenthesis opened just before `start` closes, or the end of the text."""
+    depth, position = 1, start
+    quote = None
+    while position < len(text):
+        char = text[position]
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "\\":
+            position += 1
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return position
+        position += 1
+    return len(text)
+
+
+def _parse_shell(command: str) -> tuple[list[_Segment], list[str]]:
+    """The simple commands in `command`, and the code inside any `$(...)`, backticks or `<(...)`."""
+    segments: list[_Segment] = []
+    inner: list[str] = []
+    current = _Segment("")
+    buffer: list[str] = []
+    in_word = False
+    pending: str | None = None  # What the next word is: "read", "write" or "ignore" (a heredoc's tag).
+    start = position = 0
+    length = len(command)
+
+    def end_word() -> None:
+        nonlocal in_word, pending
+        if in_word:
+            word = "".join(buffer)
+            if pending == "read":
+                current.reads.append(word)
+            elif pending == "write":
+                current.writes.append(word)
+            elif pending is None:
+                current.words.append(word)
+            pending = None
+        buffer.clear()
+        in_word = False
+
+    def end_segment(at: int) -> None:
+        nonlocal current, start, pending
+        end_word()
+        pending = None
+        if current.words or current.reads or current.writes:
+            current.text = command[start:at]
+            segments.append(current)
+        current = _Segment("")
+        start = at + 1
+
+    while position < length:
+        char = command[position]
+        if char == "'":
+            closing = command.find("'", position + 1)
+            if closing == -1:  # An apostrophe in plain text, not a quote.
+                buffer.append(char)
+                position += 1
+            else:
+                buffer.append(command[position + 1 : closing])
+                position = closing + 1
+            in_word = True
+        elif char == '"':
+            position = _double_quoted(command, position, buffer, inner)
+            in_word = True
+        elif char == "\\":
+            if command[position + 1 : position + 2] in ("\n", "\r"):
+                position += 2  # A line continuation.
+            else:
+                buffer.append(command[position : position + 2])  # Kept: on Windows it separates a path.
+                position += 2
+                in_word = True
+        elif char == "`":
+            closing = command.find("`", position + 1)
+            if closing == -1:
+                buffer.append(char)
+                position += 1
+            else:
+                inner.append(command[position + 1 : closing])
+                buffer.append(command[position : closing + 1])
+                position = closing + 1
+            in_word = True
+        elif command.startswith("$(", position):
+            closing = _closing(command, position + 2)
+            inner.append(command[position + 2 : closing])
+            buffer.append(command[position : closing + 1])
+            position = closing + 1
+            in_word = True
+        elif command.startswith(("<(", ">("), position):
+            end_word()
+            closing = _closing(command, position + 2)
+            inner.append(command[position + 2 : closing])
+            position = closing + 1
+        elif char in " \t":
+            end_word()
+            position += 1
+        elif command.startswith("&>", position):
+            end_word()
+            pending = "write"
+            position += 3 if command.startswith("&>>", position) else 2
+        elif char in "\r\n;|&()":
+            end_segment(position)
+            position += 1
+        elif char in "<>":
+            if in_word and "".join(buffer).isdigit():  # The descriptor in 2>file or 0<file.
+                buffer.clear()
+                in_word = False
+            end_word()
+            stop = position
+            while stop < length and command[stop] in "<>":
+                stop += 1
+            operator = command[position:stop]
+            if command[stop : stop + 1] == "&":  # 2>&1, or a descriptor with no file.
+                stop += 1
+                while stop < length and (command[stop].isdigit() or command[stop] == "-"):
+                    stop += 1
+                position = stop
+                continue
+            if command[stop : stop + 1] == "|":
+                stop += 1
+            pending = "ignore" if operator.startswith("<<") else "read" if operator == "<" else "write"
+            position = stop
+        else:
+            buffer.append(char)
+            in_word = True
+            position += 1
+    end_segment(length)
+    return segments, inner
+
+
+def _double_quoted(command: str, start: int, buffer: list[str], inner: list[str]) -> int:
+    """Read a double-quoted stretch into `buffer`. Returns the position after it."""
+    closing = _closing_quote(command, start + 1)
+    if closing == -1:  # Not really a quote.
+        buffer.append('"')
+        return start + 1
+    position = start + 1
+    while position < closing:
+        char = command[position]
+        if char == "\\" and command[position + 1 : position + 2] in ('"', "\\", "$", "`"):
+            buffer.append(command[position + 1])
+            position += 2
+        elif command.startswith("$(", position):
+            end = _closing(command, position + 2)
+            inner.append(command[position + 2 : end])
+            buffer.append(command[position : end + 1])
+            position = end + 1
+        elif char == "`":
+            end = command.find("`", position + 1)
+            end = closing if end == -1 else end
+            inner.append(command[position + 1 : end])
+            buffer.append(command[position : end + 1])
+            position = end + 1
+        else:
+            buffer.append(char)
+            position += 1
+    return closing + 1
+
+
+def _closing_quote(command: str, position: int) -> int:
+    while position < len(command):
+        char = command[position]
+        if char == "\\":
+            position += 2
+            continue
+        if char == '"':
+            return position
+        if command.startswith("$(", position):
+            position = _closing(command, position + 2) + 1
+            continue
+        position += 1
+    return -1
+
+
+def _without_wrappers(words: list[str]) -> list[str]:
+    tokens = list(words)
+    while tokens and (_ASSIGNMENT.match(tokens[0]) or _prog(tokens[0]) in _WRAPPERS):
+        tokens.pop(0)
+    return tokens
 
 
 # --- paths ---------------------------------------------------------------------
@@ -118,7 +357,7 @@ class _Guard:
         self.base = base
 
     def resolve(self, text: str, base: Path | None = None) -> Path:
-        path = Path(os.path.expanduser(text))
+        path = Path(os.path.expanduser(os.path.expandvars(text)))
         return path if path.is_absolute() else (base or self.base) / path
 
     def protected_hit(self, path: Path) -> Path | None:
@@ -139,6 +378,37 @@ class _Guard:
             "against the real data and see only a scrubbed error."
         )
 
+    # --- what sets the protection up ------------------------------------------------
+
+    def is_setup_file(self, path: Path) -> bool:
+        """A file that sets the protection up. A settings file counts wherever it is, since
+        a command reads the nearest one, so a new one in a sub-folder would replace the real one."""
+        if path.name.lower() in _SETTINGS_NAMES or any(_key(path) == _key(guarded) for guarded in self.config.guarded_files):
+            return True
+        return _inside(path, _PACKAGE) or (_prog(sys.argv[0]) == "datanyx" and _key(path) == _key(sys.argv[0]))
+
+    def is_setup_folder(self, path: Path) -> bool:
+        key = _key(path)
+        return any(key == _key(folder) for folder in (self.config.root / ".claude", self.config.root / CONFIG_DIR, Path.home() / ".claude"))
+
+    def holds_setup(self, path: Path) -> bool:
+        return any(_inside(guarded, path) for guarded in self.config.guarded_files)
+
+    def touches_setup(self, token: str, current: Path, destructive: bool) -> bool:
+        for candidate in _candidates(token):
+            paths = self.expand(candidate, current)
+            for path in paths:
+                if self.is_setup_file(path) or self.is_setup_folder(path) or _inside(path, self.config.root / CONFIG_DIR):
+                    return True
+                if destructive and self.holds_setup(path):
+                    return True
+        return False
+
+    def expand(self, candidate: str, current: Path) -> list[Path]:
+        if _GLOB_CHARACTERS.search(candidate):
+            return [self.resolve(match, current) for match in self.glob_matches(candidate, current)]
+        return [self.resolve(candidate, current)]
+
     # --- tools -------------------------------------------------------------------
 
     def file(self, path: str | None, verb: str) -> str | None:
@@ -152,7 +422,7 @@ class _Guard:
         return self.message(hit)
 
     def tamper(self, path: str | None) -> str | None:
-        if path and any(_inside(self.resolve(path), guarded) for guarded in self.config.guarded_files):
+        if path and self.is_setup_file(self.resolve(path)):
             return "That file sets up DataNyx's protection. Ask the user to change it."
         return None
 
@@ -175,37 +445,75 @@ class _Guard:
     def glob(self, path: str | None, pattern: str) -> str | None:
         root = self.resolve(path) if path else self.base
         hit = self.protected_hit(root) or self.protected_hit(self.resolve(pattern.split("*")[0] or "."))
-        return self.message(hit) if hit is not None else self.embedded(pattern)
+        if hit is not None:
+            return self.message(hit)
+        return self.embedded(pattern) or self.glob_hit(pattern, root)
 
     # --- shell commands ----------------------------------------------------------
 
-    def shell(self, command: str) -> str | None:
-        current = self.base
-        for segment in _SPLIT.split(command):
-            tokens = _tokens(segment)
-            if not tokens:
-                continue
-            if _prog(tokens[0]) == "cd" and len(tokens) > 1:
-                current = self.resolve(tokens[1], current)
+    def shell(self, command: str, base: Path | None = None, depth: int = 0) -> str | None:
+        if depth > _MAX_NESTING:
+            return "That command is nested too deeply for DataNyx to check, so it was blocked to be safe."
+        if "DATANYX_CONFIG" in command.upper():
+            return "`DATANYX_CONFIG` points DataNyx at another settings file, so the agent can't set it. Ask the user."
+        current = base or self.base
+        segments, inner = _parse_shell(command)
+        for segment in segments:
+            tokens = _without_wrappers(segment.words)
+            reason = self.redirections(segment, current)
+            if reason:
+                return reason
+            if tokens and _prog(tokens[0]) in _CHANGE_DIRECTORY and len(tokens) > 1:
+                current = self.resolve(_plain(tokens[1]), current)
                 hit = self.protected_hit(current)
                 if hit is not None:
                     return self.message(hit)
                 continue
-            reason = self.segment(segment, tokens, current)
+            if not tokens:
+                continue
+            reason = self.nested(tokens, current, depth) or self.segment(segment, tokens, current)
+            if reason:
+                return reason
+        for code in inner:
+            reason = self.shell(code, current, depth + 1)
             if reason:
                 return reason
         return None
 
-    def segment(self, text: str, tokens: list[str], current: Path) -> str | None:
+    def nested(self, tokens: list[str], current: Path, depth: int) -> str | None:
+        """Code handed to another shell, or to eval, is checked as a command of its own."""
         program = _prog(tokens[0])
-        guarded = self.guard_files_mentioned(text)
-        if guarded and program not in _READ_ONLY_PROGRAMS:
-            return "That command changes a file that sets up DataNyx's protection. Ask the user to change it."
+        if program == "eval":
+            return self.shell(" ".join(tokens[1:]), current, depth + 1)
+        if program in _SHELL_PROGRAMS:
+            for position, token in enumerate(tokens[1:], start=1):
+                if token.lower() in _SHELL_CODE_FLAGS:
+                    return self.shell(" ".join(tokens[position + 1 :]), current, depth + 1)
+        return None
 
-        if "$(" not in text and "`" not in text:
+    def redirections(self, segment: _Segment, current: Path) -> str | None:
+        for target in segment.writes:
+            if self.touches_setup(target, current, destructive=True):
+                return "That command changes a file that sets up DataNyx's protection. Ask the user to change it."
+            hit = self.protected_hit(self.resolve(_plain(target), current))
+            if hit is not None:
+                return f"{self.config.display(hit)} is protected by DataNyx: the real data shouldn't be changed from here."
+        return self.references(segment.reads, current)
+
+    def segment(self, segment: _Segment, tokens: list[str], current: Path) -> str | None:
+        program = _prog(tokens[0])
+        if program == "git" and _is_git_cleanup(tokens):
+            return "`git clean` and `git stash --include-untracked` can delete DataNyx's protection files. Ask the user to run it."
+        if not _is_read_only(tokens):
+            destructive = program in _DESTRUCTIVE_PROGRAMS
+            mentioned = self.guard_files_mentioned(segment.text) or any(self.touches_setup(token, current, destructive) for token in tokens[1:])
+            if mentioned:
+                return "That command changes a file that sets up DataNyx's protection. Ask the user to change it."
+
+        if "$(" not in segment.text and "`" not in segment.text:
             sub = _datanyx_subcommand(tokens)
             if sub is not None:
-                return self.datanyx(sub, tokens, current)
+                return self.datanyx(sub, current)
         return self.references(tokens, current) or self.recursive_search(program, tokens, current)
 
     def guard_files_mentioned(self, text: str) -> bool:
@@ -215,7 +523,7 @@ class _Guard:
     def relative(self, path: Path) -> str:
         return self.config.display(path).replace("\\", "/").lower()
 
-    def datanyx(self, sub: tuple[str, list[str]], tokens: list[str], current: Path) -> str | None:
+    def datanyx(self, sub: tuple[str, list[str]], current: Path) -> str | None:
         command, rest = sub
         if not command:
             return None  # Just `datanyx`: it prints its help.
@@ -225,17 +533,24 @@ class _Guard:
         weakening = next((o for o in options_part if o.split("=")[0] in _WEAKENING), None)
         if weakening is not None:
             return f"`{weakening.split('=')[0]}` loosens what the user set up, so the agent can't use it. Ask the user to run it."
+        for value in _option_values(options_part, ("--names-from",)):
+            # Names from the protected data are the user's. Names from a file the agent wrote are guesses being tested.
+            if self.protected_hit(self.resolve(_plain(value), current)) is None and not value.startswith("env:"):
+                return "`--names-from` can only name the protected data here: a file of guessed names would be a way to test them."
+        for value in _option_values(options_part, _OUTPUT_OPTIONS):
+            hit = self.protected_hit(self.resolve(_plain(value), current))
+            if hit is not None:
+                return f"{self.config.display(hit)} is protected by DataNyx: the real data shouldn't be changed from here."
         if command == "run":
-            options = rest[: rest.index("--")] if "--" in rest else rest
-            if any(option.split("=")[0] in ("--save-stdout", "--save-stderr") for option in options):
+            if any(option.split("=")[0] in ("--save-stdout", "--save-stderr") for option in options_part):
                 return "`datanyx run --save-stdout/--save-stderr` writes the real output to a file, so the agent can't use it."
-            if "--" in rest:
-                return self.references(rest[rest.index("--") + 1 :], current)
+            # Everything that isn't the value of --names-from: `run` also takes a command with no `--` before it.
+            return self.references(_without_option_values(rest, ("--names-from",)), current)
         if command == "anonymize" and any(option.split("=")[0] == "--mapping" for option in rest):
             return "`datanyx anonymize --mapping` saves the real values to a file, so the agent can't use it."
         return None
 
-    def references(self, tokens: list[str], current: Path) -> str | None:
+    def references(self, tokens: Iterable[str], current: Path) -> str | None:
         """A token that names a protected path, directly, by glob, or inside quoted code."""
         for token in tokens:
             for candidate in _candidates(token):
@@ -251,15 +566,20 @@ class _Guard:
                 return reason
         return None
 
-    def glob_hit(self, pattern: str, current: Path) -> str | None:
+    def glob_matches(self, pattern: str, current: Path) -> list[str]:
         expanded = Path(os.path.expanduser(pattern))
         try:
-            matches = glob.glob(str(expanded), recursive=True) if expanded.is_absolute() else glob.glob(
-                pattern, root_dir=str(current), recursive=True
+            found = (
+                glob.iglob(str(expanded), recursive=True)
+                if expanded.is_absolute()
+                else glob.iglob(pattern, root_dir=str(current), recursive=True)
             )
+            return list(islice(found, _MAX_GLOB_MATCHES))
         except (OSError, ValueError):
-            return None
-        for match in matches[:5000]:
+            return []
+
+    def glob_hit(self, pattern: str, current: Path) -> str | None:
+        for match in self.glob_matches(pattern, current):
             hit = self.protected_hit(self.resolve(match, current))
             if hit is not None:
                 return self.message(hit)
@@ -305,31 +625,93 @@ def _prog(token: str) -> str:
     return name[:-4] if name.endswith((".exe", ".cmd", ".bat")) else name
 
 
-def _tokens(segment: str) -> list[str]:
-    try:
-        raw = shlex.split(segment, posix=False)  # Keeps backslashes, so Windows paths survive.
-    except ValueError:
-        raw = segment.split()
-    tokens = [token[1:-1] if len(token) > 1 and token[0] == token[-1] and token[0] in "'\"" else token for token in raw]
-    while tokens and (_ASSIGNMENT.match(tokens[0]) or _prog(tokens[0]) in _WRAPPERS):
-        tokens.pop(0)
-    return tokens
+def _plain(token: str) -> str:
+    """A token without shell escapes, unless they are what separates a Windows path."""
+    return token if os.name == "nt" else token.replace("\\", "")
 
 
 def _candidates(token: str) -> list[str]:
-    """The paths a token may mean: itself, the value of --option=value, and without < or >."""
-    cleaned = token.lstrip("<>")
-    options = [cleaned.split("=", 1)[1]] if cleaned.startswith("-") and "=" in cleaned else []
-    return [] if cleaned.startswith("-") and not options else [cleaned, *options]
+    """The paths a token may mean: itself, without shell escapes, and the value of --option=value."""
+    if token.startswith("-"):
+        if "=" not in token:
+            return []
+        token = token.split("=", 1)[1]
+    unescaped = token.replace("\\", "")
+    return [token, unescaped] if unescaped != token else [token]
+
+
+def _is_read_only(tokens: list[str]) -> bool:
+    program = _prog(tokens[0])
+    if program == "git":
+        return _git_subcommand(tokens) in _READ_ONLY_GIT
+    return program in _READ_ONLY_PROGRAMS
+
+
+def _git_subcommand(tokens: list[str]) -> str | None:
+    position = 1
+    while position < len(tokens) and tokens[position].startswith("-"):
+        position += 2 if tokens[position] in _GIT_VALUE_OPTIONS else 1
+    return tokens[position] if position < len(tokens) else None
+
+
+def _is_git_cleanup(tokens: list[str]) -> bool:
+    subcommand = _git_subcommand(tokens)
+    if subcommand == "clean":
+        return True
+    return subcommand == "stash" and any(t in ("-u", "-a", "--include-untracked", "--all") for t in tokens)
+
+
+def _option_values(options: list[str], names: Iterable[str]) -> Iterable[str]:
+    """The values given to these options, as `--name value`, `--name=value` or `-ovalue`."""
+    names = tuple(names)
+    for position, option in enumerate(options):
+        if option in names:
+            if position + 1 < len(options):
+                yield options[position + 1]
+        elif "=" in option and option.split("=", 1)[0] in names:
+            yield option.split("=", 1)[1]
+        elif "-o" in names and option.startswith("-o") and not option.startswith("--") and len(option) > 2:
+            yield option[2:]
+
+
+def _without_option_values(options: list[str], names: tuple[str, ...]) -> list[str]:
+    kept: list[str] = []
+    skip = False
+    for option in options:
+        if skip:
+            skip = False
+        elif option in names:
+            skip = True
+        elif option.split("=", 1)[0] not in names:
+            kept.append(option)
+    return kept
 
 
 def _datanyx_subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
-    """(subcommand, the arguments after it) if the command runs datanyx, in any usual way."""
-    for position, token in enumerate(tokens[:8]):
-        if _prog(token) == "datanyx" and (position == 0 or _prog(tokens[0]) in {"uv", "uvx", "pipx", "python", "python3", "py"}):
-            return _split_command(tokens[position + 1 :])
-        if token == "-m" and tokens[position + 1 : position + 2] == ["datanyx"]:
+    """(subcommand, the arguments after it) if this command runs datanyx, and nothing else.
+
+    The word has to be the thing being run: `ls -m datanyx data` and `python -c "..." datanyx`
+    merely mention it, and get none of the allowances datanyx does.
+    """
+    if not tokens:
+        return None
+    program = _prog(tokens[0])
+    if program == "datanyx":
+        return _split_command(tokens[1:])
+    if _PYTHONS.fullmatch(program):
+        position = 1
+        while position < len(tokens) and tokens[position].startswith("-") and tokens[position] not in ("-m", "-c"):
+            position += 1
+        if tokens[position : position + 2] == ["-m", "datanyx"]:
             return _split_command(tokens[position + 2 :])
+        return None
+    if program == "uvx":
+        return _datanyx_subcommand(tokens[1:]) if tokens[1:2] == ["datanyx"] else None
+    if program in ("uv", "pipx") and tokens[1:2] == ["run"]:
+        position = 2
+        while position < len(tokens) and tokens[position].startswith("-"):
+            position += 2 if tokens[position] in _UV_VALUE_OPTIONS else 1
+        return _datanyx_subcommand(tokens[position:])
     return None
 
 

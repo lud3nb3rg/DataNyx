@@ -10,6 +10,36 @@ from .base import Source, SourceError
 from .files import extension, items_seen, missing_extra, open_text, records_observation, reject_namespace, unnamed
 
 _UNSET = object()
+# Aliases let a few hundred bytes describe more values than could ever be walked.
+MAX_EXPANDED_VALUES = 10_000_000
+
+
+def _check_expansion(document: object) -> object:
+    """Count what the document expands to, visiting each shared value once, and refuse a bomb."""
+    sizes: dict[int, int] = {}
+    in_progress: set[int] = set()
+
+    def size(value: object) -> int:
+        if not isinstance(value, (list, tuple, dict)):
+            return 1
+        key = id(value)
+        if key in sizes:
+            return sizes[key]
+        if key in in_progress:
+            raise SourceError("input is too deeply nested")
+        in_progress.add(key)
+        children = value.values() if isinstance(value, dict) else value
+        total = 1
+        for child in children:
+            total += size(child)
+            if total > MAX_EXPANDED_VALUES:
+                raise SourceError("the YAML's aliases expand to too many values")
+        in_progress.discard(key)
+        sizes[key] = total
+        return total
+
+    size(document)
+    return document
 
 
 class YamlSource(Source):
@@ -29,8 +59,8 @@ class YamlSource(Source):
         with open_text(target) as stream:
             try:
                 documents = yaml.load_all(stream, Loader=loader)
-                first = next(documents, _UNSET)
-                second = next(documents, _UNSET) if first is not _UNSET else _UNSET
+                first = _check_expansion(next(documents, _UNSET))
+                second = _check_expansion(next(documents, _UNSET)) if first is not _UNSET else _UNSET
                 if second is _UNSET:
                     observation = Observation()
                     if first is not _UNSET:
@@ -41,7 +71,7 @@ class YamlSource(Source):
                     observation.observe_item(first)
                     observation.observe_item(second)
                     for document in documents:
-                        observation.observe_item(document)
+                        observation.observe_item(_check_expansion(document))
             except yaml.YAMLError as error:
                 mark = getattr(error, "problem_mark", None)
                 where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""

@@ -18,6 +18,10 @@ inputs:
     description: "Extra options for the command, for example --kinds SECRET or --exclude tests."
     required: false
     default: ""
+  use-config:
+    description: "Read datanyx.toml from the repository being checked. Off by default: a pull request can change that file, and with it what gets scanned."
+    required: false
+    default: "false"
   version:
     description: "The datanyx version to install (a pip specifier such as ==0.1.0). Empty installs the latest."
     required: false
@@ -30,7 +34,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@v6
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: ${{ inputs.python-version }}
     - name: Install datanyx
@@ -50,11 +54,13 @@ runs:
         COMMAND: ${{ inputs.command }}
         TARGETS: ${{ inputs.path }}
         EXTRA: ${{ inputs.args }}
+        USE_CONFIG: ${{ inputs.use-config }}
       run: |
         # Inputs go through the environment, not into the script text, so a pull request can't inject commands.
         set -f
+        if [ "$USE_CONFIG" = "true" ]; then CONFIG=""; else CONFIG="--no-config"; fi
         case "$COMMAND" in
-          scan) datanyx scan $TARGETS --fail-on-findings $EXTRA ;;
-          diff) datanyx diff $TARGETS --fail-on breaking $EXTRA ;;
+          scan) datanyx $CONFIG scan $TARGETS --fail-on-findings $EXTRA ;;
+          diff) datanyx $CONFIG diff $TARGETS --fail-on breaking $EXTRA ;;
           *) echo "command must be scan or diff" >&2; exit 2 ;;
         esac

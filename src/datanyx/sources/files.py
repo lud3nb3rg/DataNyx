@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Collection, Iterable, Iterator
 from contextlib import contextmanager
 from typing import IO
 
+from ..formats import detect_format
 from ..inference import Observation
 from ..schema import Array, DataSchema, Entity, Node
 from .base import SourceError
@@ -100,6 +101,45 @@ def coerce_text(text: str) -> object:
     if lowered in ("true", "false"):
         return lowered == "true"
     return text
+
+
+HEADERLESS_NOTE = (
+    "the first row looked like data rather than a header, so the columns are called column_N; "
+    "if it is a header, list its names under keep_names or with --keep-name"
+)
+_CAMEL_CASE = re.compile(r"[a-z0-9][A-Z]")
+_LOWERCASE_NAME = re.compile(r"[a-z][a-z0-9 .-]*")
+_CELL_WORDS = re.compile(r"[a-z]+")
+# Words that head columns. Capitalised words alone can't separate "Name,City" from "Jane,Portland".
+_HEADER_WORDS = frozenset(
+    ["id", "name", "first", "last", "full", "middle", "email", "mail", "phone", "mobile", "fax", "tel", "address", "street", "city", "town", "state", "province", "country", "region", "zip", "postal", "postcode", "date", "time", "year", "month", "day", "week", "quarter", "age", "dob", "birth", "gender", "sex", "title", "status", "type", "kind", "category", "class", "group", "code", "number", "num", "no", "key", "ref", "reference", "value", "amount", "total", "sum", "count", "qty", "quantity", "price", "cost", "rate", "tax", "fee", "balance", "currency", "salary", "revenue", "sales", "profit", "percent", "score", "rank", "level", "grade", "description", "desc", "details", "notes", "note", "comment", "comments", "text", "message", "subject", "summary", "body", "url", "link", "website", "user", "username", "login", "password", "customer", "client", "contact", "company", "organization", "organisation", "org", "department", "dept", "team", "employee", "manager", "owner", "author", "product", "item", "sku", "order", "invoice", "account", "payment", "transaction", "created", "updated", "modified", "deleted", "start", "end", "active", "enabled", "flag", "latitude", "longitude", "lat", "lon", "lng", "size", "length", "width", "height", "weight", "color", "colour", "language", "file", "path", "host", "ip", "version", "source", "target", "label", "tag", "field", "column", "row", "index", "position", "role", "location", "site", "place", "project", "task", "patient", "doctor", "provider", "diagnosis"]
+)
+
+
+def first_row_is_data(cells: Iterable[object], keep_names: Collection[str] = ()) -> bool:
+    """Whether a table's first row is a record, not a header, so its cells must not become names.
+
+    Nothing marks a header, so this looks for what headers have and data doesn't. A name the user
+    confirmed, a snake_case, camelCase or lowercase name, or mostly words that head columns, make
+    it a header. An email or a date makes it data, as does a row with none of those signs:
+    `Jane,Doe,Oncology,Portland`. Mistaking a header costs some names; mistaking data shows it.
+    """
+    present = [cell for cell in cells if cell is not None and str(cell).strip()]
+    if not present:
+        return False
+    texts = [cell for cell in present if isinstance(cell, str)]
+    if any(cell in keep_names for cell in texts):
+        return False
+    if any(detect_format(cell.strip()) for cell in texts):
+        return True
+    if any("_" in cell or _CAMEL_CASE.search(cell) or _LOWERCASE_NAME.fullmatch(cell.strip()) for cell in texts):
+        return False
+    familiar = sum(any(word in _HEADER_WORDS for word in _CELL_WORDS.findall(cell.lower())) for cell in texts)
+    return familiar * 2 < len(present)
+
+
+def positional_names(count: int) -> list[str]:
+    return [f"column_{position}" for position in range(1, count + 1)]
 
 
 def column_names(header: list[object]) -> list[str]:

@@ -26,7 +26,8 @@ docker run --rm -v "$PWD:/data:ro" datanyx schema /data/customers.csv --format t
 ```
 
 The spaCy models are large and left out. To add one, build with `--build-arg MODEL=en_core_web_sm`
-and pass `--model en_core_web_sm`. Tagged releases are also pushed to `ghcr.io`.
+and pass `--model en_core_web_sm`. Tagged releases are also pushed to `ghcr.io`. The base image is pinned
+by digest and the dependencies by the hashes in `uv.lock`, so a build installs exactly what was tested.
 
 ## As a pre-commit hook
 
@@ -74,6 +75,14 @@ For a schema check on pull requests, save the schema you expect and compare agai
 `diff` fails only for changes that could break code written for the old schema. The inputs reach the
 command through environment variables, not the script text, so a pull request can't inject commands
 through them.
+
+The Action ignores `datanyx.toml` unless you set `use-config: "true"`, because a pull request can change
+that file: `exclude = ["*"]` would otherwise turn the scan off. Put exclusions in `args`, in the workflow.
+That workflow is part of the repository too, so protect `.github/` with a code owner or a branch rule
+if pull requests come from people you don't trust.
+
+`scan` also fails when a file that may hold data couldn't be read, because it was too large or is binary
+of an unknown kind. Exclude it, raise `--max-size`, or pass `--allow-unscanned`.
 
 ## A server a team shares
 

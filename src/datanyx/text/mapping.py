@@ -33,8 +33,9 @@ class MappingFile:
             raise SourceError("the mapping file already exists; choose a new name") from None
         except OSError as error:
             raise SourceError(f"cannot write the mapping: {error.strerror}") from None
-        if os.name == "nt":
-            restrict_to_owner(self.path)
+        if os.name == "nt" and not restrict_to_owner(self.path):
+            self.close()
+            raise SourceError("cannot make the mapping file private")
 
     def write(self, placeholders: dict[str, str], files: dict[str, str] | None = None) -> None:
         self.write_document(placeholders if files is None else {"placeholders": placeholders, "files": files})

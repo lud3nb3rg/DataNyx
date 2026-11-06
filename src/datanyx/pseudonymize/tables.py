@@ -11,15 +11,18 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import sqlite3
 from collections import defaultdict
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ..formats import detect_format
 from ..privacy import looks_like_data
 from ..sources.base import SourceError
+from ..sources.files import HEADERLESS_NOTE, first_row_is_data, positional_names
 from .fakes import Pseudonymizer
 from .plan import Treatment, build_plan
 
@@ -84,11 +87,17 @@ def _delimited(source: str, target: str | None, delimiter: str, pseudo: Pseudony
     csv.field_size_limit(1 << 24)
     with open(source, encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream, delimiter=delimiter)
-        header = next(reader, None)
-        if header is None:
+        first = next(reader, None)
+        if first is None:
             raise SourceError("the file is empty")
+        headerless = first_row_is_data(first, options.keep)
+        header = positional_names(len(first)) if headerless else first
         columns: dict[str, list[Any]] = {name: [] for name in header}
         names = list(columns)
+        if headerless:
+            report.notes.append(HEADERLESS_NOTE)
+            for name, cell in zip(names, first):
+                columns[name].append(cell)
         for count, row in enumerate(reader):
             if count >= SAMPLE_ROWS:
                 break
@@ -102,12 +111,17 @@ def _delimited(source: str, target: str | None, delimiter: str, pseudo: Pseudony
     with open(source, encoding="utf-8-sig", newline="") as stream, open(target, "x", encoding="utf-8", newline="") as out:
         reader = csv.reader(stream, delimiter=delimiter)
         writer = csv.writer(out, delimiter=delimiter, lineterminator="\n")
+        extra_cells = False
         for index, row in enumerate(reader):
-            if index == 0:
+            if index == 0 and not headerless:
                 writer.writerow(row)
                 continue
-            writer.writerow([pseudo.apply(kinds[i], cell) if i < len(kinds) else cell for i, cell in enumerate(row)])
+            extra_cells = extra_cells or len(row) > len(kinds)
+            # A cell past the last column has no name to judge it by, so it is replaced whatever it is.
+            writer.writerow([pseudo.apply(kinds[i] if i < len(kinds) else "category", cell) for i, cell in enumerate(row)])
             report.rows += 1
+        if extra_cells:
+            report.notes.append("some rows had more cells than the header; the extra cells were replaced")
 
 
 # --- JSON and JSON Lines -----------------------------------------------------------------------------
@@ -130,7 +144,10 @@ def _transform(node: Any, key: str, plan: Mapping[str, Treatment], pseudo: Pseud
     if isinstance(node, list):
         return [_transform(item, key, plan, pseudo) for item in node]
     treatment = plan.get(key)
-    if treatment is None or (isinstance(node, (bool, float)) and treatment.kind not in ("date",)):
+    if treatment is None:
+        # Under a key that is itself data, nothing says what the text is, so it can't be kept.
+        return pseudo.apply("category", node) if isinstance(node, str) and key and looks_like_data(key) else node
+    if isinstance(node, (bool, float)) and treatment.kind not in ("date",):
         return node
     return pseudo.apply(treatment.kind, node)
 
@@ -206,9 +223,98 @@ def _scoped(table: str, overrides: Mapping[str, str]) -> dict[str, str]:
     return scoped
 
 
+def _literal_end(sql: str, start: int) -> int:
+    """The position after the quoted text that starts at `start`, where a doubled quote is an escape."""
+    closer = "]" if sql[start] == "[" else sql[start]
+    position = start + 1
+    while position < len(sql):
+        if sql[position] == closer:
+            if closer != "]" and sql[position + 1 : position + 2] == closer:
+                position += 2
+                continue
+            return position + 1
+        position += 1
+    return len(sql)
+
+
+def _parenthesis_end(sql: str, start: int) -> int:
+    depth, position = 0, start
+    while position < len(sql):
+        char = sql[position]
+        if char in "'\"`[":
+            position = _literal_end(sql, position)
+            continue
+        depth += char == "("
+        depth -= char == ")"
+        position += 1
+        if depth == 0:
+            return position
+    return len(sql)
+
+
+def _value_end(sql: str, start: int) -> int:
+    """The position after a column's default value."""
+    position = start
+    while position < len(sql) and sql[position].isspace():
+        position += 1
+    if sql[position : position + 1] == "(":
+        return _parenthesis_end(sql, position)
+    if sql[position : position + 1] in ("+", "-"):
+        position += 1
+    while position < len(sql) and (sql[position].isalnum() or sql[position] in "_."):
+        position += 1
+    if sql[position : position + 1] == "'":
+        position = _literal_end(sql, position)
+    return position
+
+
+def clean_ddl(sql: str) -> str:
+    """A CREATE statement without its comments, column defaults and CHECK constraints.
+
+    All of those are text from whoever made the database, and they can hold real values, as in
+    DEFAULT 'owner@example.com'. The rows are copied with values for every column, so nothing
+    the copy needs depends on them.
+    """
+    out: list[str] = []
+    position = 0
+    while position < len(sql):
+        char = sql[position]
+        if sql.startswith("--", position):
+            end = sql.find("\n", position)
+            position = len(sql) if end == -1 else end
+        elif sql.startswith("/*", position):
+            end = sql.find("*/", position + 2)
+            position = len(sql) if end == -1 else end + 2
+        elif char in "'\"`[":
+            end = _literal_end(sql, position)
+            out.append(sql[position:end])
+            position = end
+        elif char.isalpha() or char == "_":
+            end = position
+            while end < len(sql) and (sql[end].isalnum() or sql[end] in "_$"):
+                end += 1
+            word = sql[position:end].upper()
+            following = end
+            while following < len(sql) and sql[following].isspace():
+                following += 1
+            if word == "DEFAULT":
+                position = _value_end(sql, end)
+            elif word == "CHECK" and sql[following : following + 1] == "(":
+                position = _parenthesis_end(sql, following)
+                kept = re.sub(r"(?i)\bCONSTRAINT\s+\S+\s*$", "", "".join(out)).rstrip()
+                out = [kept[:-1] if kept.endswith(",") else kept]  # A constraint of its own takes its comma with it.
+            else:
+                out.append(sql[position:end])
+                position = end
+        else:
+            out.append(char)
+            position += 1
+    return "".join(out)
+
+
 def _sqlite(source: str, target: str | None, pseudo: Pseudonymizer, options: Options, report: Report) -> None:
     try:
-        reader = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+        reader = sqlite3.connect(f"{Path(source).resolve().as_uri()}?mode=ro", uri=True)
     except sqlite3.Error:
         raise SourceError("cannot open the database") from None
     writer: sqlite3.Connection | None = None
@@ -223,7 +329,10 @@ def _sqlite(source: str, target: str | None, pseudo: Pseudonymizer, options: Opt
                 if sql.upper().startswith("CREATE VIRTUAL"):
                     report.notes.append(f"skipped the virtual table {name}")
                     continue
-                writer.execute(sql)
+                cleaned = clean_ddl(sql)
+                if cleaned != sql:
+                    report.notes.append(f"left comments, column defaults and CHECK constraints out of the table {name}, as they can hold real values")
+                writer.execute(cleaned)
         for name, sql in tables:
             if sql.upper().startswith("CREATE VIRTUAL"):
                 continue
@@ -233,8 +342,12 @@ def _sqlite(source: str, target: str | None, pseudo: Pseudonymizer, options: Opt
                 if kind == "trigger":
                     report.notes.append(f"left out the trigger {name}, which could hold data or change values")
                 elif kind in ("index", "view"):
+                    cleaned = clean_ddl(sql)
+                    if "'" in cleaned:
+                        report.notes.append(f"left out the {kind} {name}, whose text holds values")
+                        continue
                     try:
-                        writer.execute(sql)
+                        writer.execute(cleaned)
                     except sqlite3.Error:
                         report.notes.append(f"could not recreate the {kind} {name}")
             writer.commit()
@@ -264,21 +377,28 @@ def _table(
     if writer is None:
         return
     kinds = [plan[name].kind for name in columns]
+    kept_blobs = [name.lower() in {kept.lower() for kept in options.keep} for name in columns]
     marks = ", ".join("?" * len(columns))
+    emptied = False
     cursor = reader.execute(f"select * from {_quote(table)}")
     while True:
         rows = cursor.fetchmany(BATCH)
         if not rows:
             break
+        emptied = emptied or any(isinstance(value, bytes) and value and not kept_blobs[i] for row in rows for i, value in enumerate(row))
         writer.executemany(
             f"insert into {_quote(table)} values ({marks})",
-            [tuple(_cell(pseudo, kinds[i], value) for i, value in enumerate(row)) for row in rows],
+            [tuple(_cell(pseudo, kinds[i], value, kept_blobs[i]) for i, value in enumerate(row)) for row in rows],
         )
         report.rows += len(rows)
+    if emptied:
+        report.notes.append(f"emptied binary values in the table {table}, as they can't be checked; use --keep-column to keep them")
 
 
-def _cell(pseudo: Pseudonymizer, kind: str, value: Any) -> Any:
-    return value if isinstance(value, bytes) else pseudo.apply(kind, value)
+def _cell(pseudo: Pseudonymizer, kind: str, value: Any, keep_blob: bool) -> Any:
+    if isinstance(value, bytes):
+        return value if keep_blob else b""  # Empty rather than NULL: the column may not allow NULL.
+    return pseudo.apply(kind, value)
 
 
 __all__ = ["Options", "Report", "detect_kind", "pseudonymize_file"]
