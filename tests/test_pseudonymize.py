@@ -470,3 +470,12 @@ def test_foreign_key_with_a_personal_looking_name_still_follows_its_parent(tmp_p
     copy = sqlite3.connect(target)
     assert copy.execute("pragma foreign_key_check").fetchall() == []
     assert copy.execute("select count(*) from posts join users on users.id = posts.author").fetchone() == (20,)
+
+
+def test_pseudonymize_reads_and_writes_a_custom_delimiter(tmp_path):
+    source = tmp_path / "people.csv"
+    source.write_text("customer_id;name;email\n1;Jessica Whitfield;jessica@acme-corp.io\n", encoding="utf-8")
+    target, _ = run_file(tmp_path, str(source), "csv", delimiter=";")
+    text = open(target, encoding="utf-8").read()
+    assert text.splitlines()[0] == "customer_id;name;email"
+    assert "Jessica" not in text and len(text.splitlines()[1].split(";")) == 3

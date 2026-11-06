@@ -114,6 +114,8 @@ def _is_ip(match: str) -> bool:
 
 def _is_phone(match: str) -> bool:
     # A bare run of digits is more likely a reference number, which ID hides anyway.
+    if re.fullmatch(r"\d+\.\d+", match):  # A decimal such as 1234.50000, not a phone number.
+        return False
     has_punctuation = any(not char.isdigit() for char in match)
     return has_punctuation and sum(char.isdigit() for char in match) >= 7
 

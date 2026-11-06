@@ -198,7 +198,7 @@ def render_report(report: EvalReport, show_misses: bool = False, output_format: 
             document["misses"] = [{"document": d, "kind": k, "string": s, "outcome": o} for d, k, s, o in report.misses]
         return json.dumps(document, indent=2, ensure_ascii=False)
 
-    lines = [f"Evaluated {report.documents:,} document{'s' if report.documents != 1 else ''}, {overall.total:,} labelled strings.", ""]
+    lines = [f"Evaluated {report.documents:,} document{'s' if report.documents != 1 else ''}, {overall.total:,} labelled string{'s' if overall.total != 1 else ''}.", ""]
     header = f"{'Kind':<16}{'Strings':>8}{'Hidden':>8}{'Partly':>8}{'Missed':>8}{'Recall':>9}"
     lines.append(header)
     for kind, result in sorted(report.kinds.items()):

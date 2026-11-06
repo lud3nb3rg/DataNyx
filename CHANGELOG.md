@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+**Added**
+
+- `--delimiter` for `schema`, `synth`, `check`, `diff` and `pseudonymize`: read CSV and TSV files that use `;`, `|` or another separator. It takes a character or one of `comma`, `semicolon`, `tab`, `pipe`, `space`.
+
+**Fixed**
+
+- `anonymize` on a `.docx` could write a corrupt file when a document property was empty, such as `<dc:title/>`.
+- `pseudonymize` on SQLite left a foreign key unchanged when its name looked personal (`author`), which broke `PRAGMA foreign_key_check`.
+- A decimal such as `1234.50000` was hidden as a phone number; it is now an ID. `.xpt` columns no longer show a `None` type, `eval` says "1 labelled string", and the shared-fields note for a folder groups files with the same fields.
+
 A security release: the fixes from a full audit. Each of these closed a way past what DataNyx promises, and `tests/test_security.py` keeps it closed.
 
 **Changes that may need action**

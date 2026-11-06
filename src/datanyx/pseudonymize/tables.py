@@ -39,6 +39,7 @@ class Options:
     keep: frozenset[str] = frozenset()
     strict: bool = False
     plan_only: bool = False
+    delimiter: str | None = None
 
 
 @dataclass
@@ -59,7 +60,7 @@ def pseudonymize_file(source: str, target: str | None, kind: str, pseudo: Pseudo
     report = Report()
     try:
         if kind in ("csv", "tsv"):
-            _delimited(source, target, "," if kind == "csv" else "\t", pseudo, options, report)
+            _delimited(source, target, options.delimiter or ("," if kind == "csv" else chr(9)), pseudo, options, report)
         elif kind == "json":
             _json(source, target, pseudo, options, report)
         elif kind == "jsonl":

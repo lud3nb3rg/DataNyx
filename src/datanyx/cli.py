@@ -80,6 +80,7 @@ def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--schema", help="database schema to describe (default: the database's default)")
     parser.add_argument("--source", choices=source_kinds(), help="input type (default: detect)")
+    _add_delimiter(parser)
     parser.add_argument(
         "--scale-hints", action="store_true",
         help="also give each table's size as an order of magnitude (\"10^3 to 10^4 rows\"), never a number",
@@ -223,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     pseudo.add_argument("input", help="the file to copy: .csv, .tsv, .json, .jsonl or a SQLite database")
     pseudo.add_argument("-o", "--output", help="the new file to write (never overwritten)")
     pseudo.add_argument("--source", choices=("csv", "tsv", "json", "jsonl", "sqlite"), help="input type (default: from the extension)")
+    _add_delimiter(pseudo)
     pseudo.add_argument(
         "--key-file",
         metavar="FILE",
@@ -354,6 +356,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("-r", "--recursive", action="store_true", help="when an input is a folder, also read its subfolders")
     check.add_argument("--schema", help="database schema to use (default: the database's default)")
     check.add_argument("--source", choices=source_kinds(), help="input type for --against (default: detect)")
+    _add_delimiter(check)
     check.add_argument("--map-path", action="append", default=[], metavar="PATH", help="hide all keys or columns at a path (repeatable)")
     check.add_argument("--keep-name", action="append", default=[], metavar="NAME", help="show this name even if it looks like data (repeatable)")
 
@@ -487,6 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("-r", "--recursive", action="store_true", help="when an input is a folder, also read its subfolders")
     diff.add_argument("--schema", help="database schema to use (default: the database's default)")
     diff.add_argument("--source", choices=source_kinds(), help="input type for live inputs (default: detect)")
+    _add_delimiter(diff)
     diff.add_argument("--map-path", action="append", default=[], metavar="PATH", help="hide all keys or columns at a path (repeatable)")
     diff.add_argument("--keep-name", action="append", default=[], metavar="NAME", help="show this name even if it looks like data (repeatable)")
 
@@ -573,6 +577,23 @@ def _cfg(args: argparse.Namespace) -> Config:
     return args._cfg
 
 
+_DELIMITER_NAMES = {"comma": ",", "semicolon": ";", "tab": chr(9), "pipe": "|", "space": " "}
+
+
+def _delimiter_arg(value: str) -> str:
+    delimiter = _DELIMITER_NAMES.get(value.lower(), value)
+    if len(delimiter) != 1 or delimiter in (chr(13), chr(10), chr(34)):
+        raise argparse.ArgumentTypeError("use one character, such as ';' or '|', or a name: comma, semicolon, tab, pipe, space")
+    return delimiter
+
+
+def _add_delimiter(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--delimiter", type=_delimiter_arg, metavar="CHAR",
+        help="the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV)",
+    )
+
+
 def _policy(args: argparse.Namespace) -> KeyPolicy:
     config = _cfg(args)
     return KeyPolicy(
@@ -580,6 +601,7 @@ def _policy(args: argparse.Namespace) -> KeyPolicy:
         keep_names=frozenset([*config.keep_names, *getattr(args, "keep_name", [])]),
         scale_hints=bool(getattr(args, "scale_hints", False) or config.scale_hints),
         infer_keys=bool(getattr(args, "infer_keys", False) or config.infer_keys),
+        delimiter=getattr(args, "delimiter", None),
     )
 
 
@@ -1047,7 +1069,7 @@ def _run_pseudonymize(args: argparse.Namespace) -> int:
     key = load_key(None if args.plan else args.key_file)
     pseudo = Pseudonymizer(key, text=lambda: _anonymizer(args), record=bool(args.mapping) and not args.plan)
     mapping_file = MappingFile(args.mapping) if args.mapping and not args.plan else None
-    options = PseudonymizeOptions(overrides, frozenset(args.keep_column), args.strict, args.plan)
+    options = PseudonymizeOptions(overrides, frozenset(args.keep_column), args.strict, args.plan, args.delimiter)
     try:
         report = pseudonymize_file(args.input, None if args.plan else args.output, kind, pseudo, options)
         if mapping_file is not None:
