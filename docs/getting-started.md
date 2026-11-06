@@ -2,7 +2,7 @@
 
 ## Install
 
-DataNyx isn't published on PyPI yet, so install it from a clone.
+Install it from a clone. Once a release is published, `pip install datanyx` works too, and there is also a [container image, a pre-commit hook and a GitHub Action](deployment.md).
 
 ```sh
 git clone <this repository> datanyx && cd datanyx

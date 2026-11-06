@@ -103,12 +103,12 @@ datanyx eval cases [options]
 Look through a folder for emails, phone numbers, card and IBAN numbers, IP addresses, addresses and credentials, and report where they are. No value is ever printed. Run it before pointing an agent at a folder. Names of people and companies need --ner.
 
 ```
-datanyx scan path [options]
+datanyx scan PATH [options]
 ```
 
 | Argument | Meaning |
 |---|---|
-| `path` | folder or file to scan |
+| `PATH` | folders or files to scan |
 | `--kinds` `KIND` | what to look for (repeatable; default: EMAIL, PHONE, CREDIT_CARD, IBAN, IP_ADDRESS, MAC_ADDRESS, ADDRESS, SECRET and your custom kinds; 'all' for every built-in kind) |
 | `--ner` | also find names, organisations and places with the NER model (slow) |
 | `--model` `MODEL` | spaCy NER model (default: the config's, else en_core_web_lg). Repeat it, or separate with commas, to use several, such as one per language |
@@ -331,7 +331,7 @@ datanyx doctor [options]
 
 ## `datanyx mcp`
 
-Serve `describe_data` and `anonymize_file` over MCP (stdio). The agent can only read files under --root, and never receives values, a mapping, or a restore tool.
+Serve `describe_data` and `anonymize_file` over MCP (stdio, or HTTP with --http). The agent can only read files under --root, and never receives values, a mapping, or a restore tool.
 
 ```
 datanyx mcp [options]
@@ -346,4 +346,6 @@ datanyx mcp [options]
 | `--backend` `SPEC` | another detector to run as well: presidio[:LANG[:MODEL]], gliner[:MODEL] or ollama[:MODEL[@URL]] (repeatable) |
 | `--detectors` `FILE` | a file of custom detectors for your own formats and names (repeatable) |
 | `--keep-entity` `KIND` | leave this kind of entity visible in anonymized text (repeatable) |
+| `--http` `HOST:PORT` | serve over HTTP at /mcp instead of stdio, so a team can share one server; needs a token (--token-env) |
+| `--token-env` `NAME` | environment variable holding the bearer token HTTP clients must send (default: DATANYX_MCP_TOKEN) |
 | `--audit-log` `FILE` | append a record of every tool call, never values, to this file |

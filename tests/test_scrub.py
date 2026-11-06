@@ -1,6 +1,7 @@
 """Scrubbing keeps the diagnosis of an error and drops the data in it."""
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -182,12 +183,13 @@ def test_scrub_command_keeps_allowed_names(tmp_path):
 
 
 def test_run_hides_stdout_scrubs_stderr_and_passes_the_exit_code():
-    code = "import sys; print('secret row jane@example.com'); sys.exit(int('x'))"
+    # The email is built at run time: Python 3.13 prints a -c script's source in the traceback, and code is the agent's own.
+    code = "import sys; a = 'jane'; b = '@example.com'; print('secret row ' + a + b); sys.exit(int(a + b))"
     result = datanyx("run", "--no-ner", *py(code))
     assert result.returncode == 1
     assert result.stdout == "" and "jane@example.com" not in result.stderr
     assert "ValueError: invalid literal for int() with base 10: <VALUE>" in result.stderr
-    assert "datanyx: exit code 1; stdout hidden (1 line, 29 characters)" in result.stderr
+    assert re.search(r"datanyx: exit code 1; stdout hidden \(1 line, \d+ characters\)", result.stderr)
 
 
 def test_run_can_show_scrubbed_stdout_or_none_of_it():

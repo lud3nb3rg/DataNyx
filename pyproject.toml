@@ -76,7 +76,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["server: needs a real database server, started from tests/docker-compose.yml"]
+markers = [
+    "server: needs a real database server, started from tests/docker-compose.yml",
+    "needs_model: runs the default spaCy model, which only some CI jobs install",
+]
 
 [tool.ruff]
 line-length = 120

@@ -430,6 +430,7 @@ def test_cli_writes_a_copy_reports_what_changed_and_keeps_a_key_for_next_time(tm
     assert (tmp_path / "c2.csv").read_bytes() != (tmp_path / "a.csv").read_bytes()
 
 
+@pytest.mark.needs_model
 def test_cli_mapping_overrides_strict_and_text(tmp_path, capsys):
     source = write(tmp_path, "c.csv", CUSTOMERS.replace("pro", "Jessica Whitfield referred").replace("free", "plain"))
     mapping = tmp_path / "m.mapping.json"

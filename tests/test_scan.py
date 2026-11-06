@@ -215,3 +215,12 @@ def test_mcp_scan_tool(tree):
         asyncio.run(call({"target": str(tree / "app"), "kinds": ["NOPE"]}))
     with pytest.raises(Exception, match="outside"):
         asyncio.run(call({"target": str(tree.parent)}))
+
+
+def test_several_paths_at_once_as_a_pre_commit_hook_passes_them(tree, capsys):
+    files = [str(tree / "app" / "config.py"), str(tree / "src" / "clean.py")]
+    assert main(["scan", *files, "--fail-on-findings", "--format", "json", "--kinds", "SECRET"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["scanned"] == 2 and len(report["files"]) == 1
+    assert main(["scan", files[1], "--fail-on-findings"]) == 0
+    assert main(["scan", files[1], str(tree / "missing")]) == 1

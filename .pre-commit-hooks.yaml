@@ -1,0 +1,17 @@
+# Hooks for pre-commit (https://pre-commit.com). In your project's .pre-commit-config.yaml:
+#
+#   repos:
+#     - repo: lud3nb3rg/DataNyx
+#       rev: v0.1.0
+#       hooks:
+#         - id: datanyx-scan
+#
+# A commit is blocked when a staged file holds personal data or secrets. The hook prints where
+# (file, kind, count, line) and never the value. Settings come from datanyx.toml.
+- id: datanyx-scan
+  name: datanyx scan (personal data and secrets)
+  description: Blocks a commit that adds personal data or secrets, and reports where without showing them.
+  entry: datanyx scan --fail-on-findings
+  language: python
+  types: [text]
+  require_serial: true

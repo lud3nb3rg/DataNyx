@@ -64,6 +64,8 @@ container with no access to the data, or [a database login that can't read rows]
 
 ## As an MCP server
 
+The server speaks over stdio to one local agent. To host it for a team over HTTP with a bearer token, see [Installing and deploying](deployment.md#a-server-a-team-shares).
+
 ```sh
 datanyx mcp --root ./exports        # stdio; needs the `mcp` extra
 ```

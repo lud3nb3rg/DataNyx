@@ -45,6 +45,7 @@ nav:
   - Teams and agents:
       - Team settings: settings.md
       - Using it with an agent: agents.md
+      - Installing and deploying: deployment.md
   - Reference:
       - Command reference: cli-reference.md
       - Python API: python-api.md

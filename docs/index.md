@@ -18,6 +18,7 @@ or pick the job you have:
 | Measure and improve what gets detected | [Detection quality](detection.md) | `datanyx eval` |
 | Notice that a data feed changed shape | [Schema diff](schema-diff.md) | `datanyx diff` |
 | Stop an agent from reading the data directly | [Using it with an agent](agents.md) | `datanyx protect` |
+| Run it in a container, a pre-commit hook, CI or a shared server | [Installing and deploying](deployment.md) | `datanyx mcp --http` |
 | Share one policy across a team | [Team settings](settings.md) | `datanyx.toml` |
 
 ## Where things are

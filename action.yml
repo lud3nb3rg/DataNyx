@@ -1,0 +1,60 @@
+name: DataNyx
+description: Scan a repository for personal data and secrets, or compare two schemas for breaking changes, without printing any value.
+author: ludenberg
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  command:
+    description: "scan (fail when personal data or secrets are found) or diff (fail on breaking schema changes)."
+    required: false
+    default: scan
+  path:
+    description: "For scan: the files or folders to scan, separated by spaces. For diff: the earlier schema, then the later one."
+    required: false
+    default: "."
+  args:
+    description: "Extra options for the command, for example --kinds SECRET or --exclude tests."
+    required: false
+    default: ""
+  version:
+    description: "The datanyx version to install (a pip specifier such as ==0.1.0). Empty installs the latest."
+    required: false
+    default: ""
+  python-version:
+    description: "The Python version to run it with."
+    required: false
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install datanyx
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        if [ -n "$VERSION" ]; then
+          python -m pip install "datanyx$VERSION"
+        else
+          python -m pip install "$ACTION_PATH"
+        fi
+    - name: Run datanyx
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+        TARGETS: ${{ inputs.path }}
+        EXTRA: ${{ inputs.args }}
+      run: |
+        # Inputs go through the environment, not into the script text, so a pull request can't inject commands.
+        set -f
+        case "$COMMAND" in
+          scan) datanyx scan $TARGETS --fail-on-findings $EXTRA ;;
+          diff) datanyx diff $TARGETS --fail-on breaking $EXTRA ;;
+          *) echo "command must be scan or diff" >&2; exit 2 ;;
+        esac

@@ -7,10 +7,10 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-extras --locked
       - run: uv run ruff check src tests
       - run: uv run mypy
@@ -19,12 +19,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
         python: ["3.10", "3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --all-extras --locked
@@ -32,18 +32,30 @@ jobs:
 
   # The text tests need the large NER models, so they run once rather than in every cell.
   text:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-extras --group models --locked
       - run: uv run pytest tests/test_text.py tests/test_text_model.py
+      - run: uv run pytest -m needs_model
+
+  # The package builds, its metadata is valid, and the container image builds and runs.
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv build
+      - run: uvx twine check dist/*
+      - run: docker build -t datanyx .
+      - run: docker run --rm datanyx doctor
 
   docs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-extras --group docs --locked
       - run: uv run python tools/gen_cli_reference.py --check
       - run: uv run mkdocs build --strict
@@ -52,10 +64,10 @@ jobs:
 
   # Runs the tests that need real database servers, started from docker-compose.
   servers:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-extras --locked
       - run: docker compose -f tests/docker-compose.yml up -d --wait
       - run: uv run pytest -m server

@@ -71,6 +71,7 @@ Python 3.10 or newer. [Supported sources](docs/sources.md) lists the extra for e
 | [Debugging](docs/debugging.md), [checking code](docs/checking-code.md) | Fixing code without seeing the data |
 | [Scanning](docs/scanning.md), [anonymization](docs/anonymization.md), [pseudonymization](docs/pseudonymization.md), [detection quality](docs/detection.md) | Finding and hiding personal data |
 | [Using it with an agent](docs/agents.md) | `datanyx protect`, the guard hook and the MCP server |
+| [Installing and deploying](docs/deployment.md) | PyPI, Docker, a pre-commit hook, a GitHub Action, a shared MCP server |
 | [Team settings](docs/settings.md), [schema diff](docs/schema-diff.md) | Shared policy, and change detection for CI |
 | [Security model](docs/security.md) | What is guaranteed, what isn't, and the known limits |
 | [Command reference](docs/cli-reference.md), [Python API](docs/python-api.md) | Every option, and use from code |
@@ -80,4 +81,4 @@ To read it as a site: `uv sync --group docs` then `uv run mkdocs serve`.
 
 ## License
 
-[MIT](LICENSE) © 2026 RunningToOblivion
+[MIT](LICENSE) © 2026 ludenberg

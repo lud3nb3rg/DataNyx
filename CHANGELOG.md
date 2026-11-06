@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a release workflow (PyPI trusted publishing and a `ghcr.io` image on a version tag), a `Dockerfile`, a pre-commit hook (`datanyx-scan`) and a GitHub Action (`scan` or `diff`). `datanyx scan` now takes several paths.
+- Added `datanyx mcp --http HOST:PORT`: the MCP server over HTTP with a required bearer token, read from an environment variable.
+- CI: newer `checkout` and `setup-uv` actions, `ubuntu-24.04`, a package/Docker build job, and tests that need the spaCy model now skip where it isn't installed.
 - Added `datanyx eval`, which runs the anonymizer over labelled documents and reports recall by kind (hidden, partly hidden, missed), with `--min-recall` as a gate and `--show-misses` for the owner of the labels.
 - Added detector packs (`--pack healthcare`, `--pack finance`) with check-digit validation, optional backends (`--backend presidio|gliner|ollama`, the last only for a model on this computer, with the new `presidio` extra), and several spaCy models at once (`--model a --model b`). New `models`, `packs` and `backends` settings. `datanyx doctor` lists backends and packs.
 - `datanyx anonymize` now takes a folder (one set of placeholders for every file, files renamed, one mapping that restores the folder), `--stream` for live input, and reads HTML, email (`.eml`), Word, PDF (the new `pdf` extra), WhatsApp and Slack exports with their structure kept. `datanyx restore` restores folders, Word and HTML files. The `Anonymizer` class keeps placeholders across many texts.

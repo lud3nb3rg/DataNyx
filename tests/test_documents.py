@@ -497,6 +497,7 @@ def run(args, capsys):
     return code, captured.out, captured.err
 
 
+@pytest.mark.needs_model
 def test_cli_anonymizes_a_folder_and_restores_it(folder, tmp_path, capsys):
     out, back, mapping = tmp_path / "out", tmp_path / "back", tmp_path / "m.mapping.json"
     code, _, err = run(["anonymize", str(folder), "-o", str(out), "-r", "--mapping", str(mapping)], capsys)
@@ -506,6 +507,7 @@ def test_cli_anonymizes_a_folder_and_restores_it(folder, tmp_path, capsys):
     assert (back / "a.txt").read_text(encoding="utf-8") == (folder / "a.txt").read_text(encoding="utf-8")
 
 
+@pytest.mark.needs_model
 def test_cli_folder_errors(folder, tmp_path, capsys):
     assert run(["anonymize", str(folder)], capsys)[0] == 1
     assert run(["anonymize", str(folder), "--stream"], capsys)[0] == 1
@@ -514,6 +516,7 @@ def test_cli_folder_errors(folder, tmp_path, capsys):
     assert code == 1 and "inside the input" in err
 
 
+@pytest.mark.needs_model
 def test_cli_word_files_need_an_output_file_and_html_and_email_work(folder, tmp_path, capsys):
     docx = folder / "sub" / "doc.docx"
     code, _, err = run(["anonymize", str(docx)], capsys)
@@ -530,6 +533,7 @@ def test_cli_word_files_need_an_output_file_and_html_and_email_work(folder, tmp_
     assert code == 0 and out.startswith("From:") and "jessica@acme-corp.io" not in out
 
 
+@pytest.mark.needs_model
 def test_cli_still_reads_unknown_extensions_as_plain_text_and_stdin(tmp_path, capsys, monkeypatch):
     path = tmp_path / "notes.dat"
     path.write_text("mail a@acme-corp.io now", encoding="utf-8")
@@ -540,6 +544,7 @@ def test_cli_still_reads_unknown_extensions_as_plain_text_and_stdin(tmp_path, ca
     assert code == 0 and out == "from <EMAIL_1>"
 
 
+@pytest.mark.needs_model
 def test_cli_restores_single_html_and_docx_files(folder, tmp_path, capsys):
     mapping = tmp_path / "m.mapping.json"
     clean = tmp_path / "clean.html"
@@ -561,6 +566,7 @@ def stream_process(*args):
     )
 
 
+@pytest.mark.needs_model
 def test_stream_anonymizes_each_line_as_it_arrives_and_keeps_the_mapping_current(tmp_path):
     mapping = tmp_path / "s.mapping.json"
     process = stream_process("--mapping", str(mapping))

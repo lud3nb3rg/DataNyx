@@ -256,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
             "before pointing an agent at a folder. Names of people and companies need --ner."
         ),
     )
-    scan_parser.add_argument("path", help="folder or file to scan")
+    scan_parser.add_argument("path", nargs="+", metavar="PATH", help="folders or files to scan")
     scan_parser.add_argument(
         "--kinds",
         action="append",
@@ -487,7 +487,7 @@ def build_parser() -> argparse.ArgumentParser:
         "mcp",
         help="run an MCP server that gives an agent schemas and anonymized text, not data",
         description=(
-            "Serve `describe_data` and `anonymize_file` over MCP (stdio). The agent can only "
+            "Serve `describe_data` and `anonymize_file` over MCP (stdio, or HTTP with --http). The agent can only "
             "read files under --root, and never receives values, a mapping, or a restore tool."
         ),
     )
@@ -499,6 +499,14 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--keep-entity", action="append", default=[], metavar="KIND",
         help="leave this kind of entity visible in anonymized text (repeatable)",
+    )
+    serve.add_argument(
+        "--http", metavar="HOST:PORT",
+        help="serve over HTTP at /mcp instead of stdio, so a team can share one server; needs a token (--token-env)",
+    )
+    serve.add_argument(
+        "--token-env", metavar="NAME", default="DATANYX_MCP_TOKEN",
+        help="environment variable holding the bearer token HTTP clients must send (default: %(default)s)",
     )
     serve.add_argument("--audit-log", metavar="FILE", help="append a record of every tool call, never values, to this file")
     return parser
@@ -906,6 +914,10 @@ def _run_mcp(args: argparse.Namespace) -> int:
 
     config = _cfg(args)
     audit = args.audit_log or (str(config.audit_log) if config.audit_log else None)
+    http = _host_and_port(args.http) if args.http else None
+    token = os.environ.get(args.token_env, "") if http else None
+    if http and not token:
+        raise SourceError(f"set the {args.token_env} environment variable to the token clients must send")
     run(
         args.root or [str(root) for root in config.mcp_roots] or ["."],
         args.allow_urls or bool(config.mcp_allow_urls),
@@ -914,8 +926,17 @@ def _run_mcp(args: argparse.Namespace) -> int:
         hide=config.hide,
         detectors=[*_custom_detectors(args), *_backend_detectors(args)],
         audit_log=audit,
+        http=http,
+        token=token,
     )
     return 0
+
+
+def _host_and_port(value: str) -> tuple[str, int]:
+    host, _, port = value.rpartition(":")
+    if not host.strip("[]") or not port.isdigit() or not 0 < int(port) < 65536:
+        raise SourceError("--http takes HOST:PORT, for example 127.0.0.1:8808")
+    return host.strip("[]"), int(port)
 
 
 def _anonymizer(args: argparse.Namespace) -> Anonymizer:

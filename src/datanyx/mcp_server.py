@@ -280,6 +280,57 @@ def create_server(
     return server
 
 
+LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+class BearerAuth:
+    """ASGI middleware: only requests that carry the shared token get through.
+
+    The token is compared in constant time and never appears in a message. A request without it
+    gets a bare 401, so an unauthenticated caller learns nothing about the server.
+    """
+
+    def __init__(self, app, token: str) -> None:
+        self.app = app
+        self._token = token.encode()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and not self._allowed(scope):
+            await send({"type": "http.response.start", "status": 401, "headers": [(b"www-authenticate", b"Bearer"), (b"content-length", b"0")]})
+            await send({"type": "http.response.body", "body": b""})
+            return
+        await self.app(scope, receive, send)
+
+    def _allowed(self, scope) -> bool:
+        import hmac
+
+        for name, value in scope.get("headers", []):
+            if name == b"authorization":
+                scheme, _, supplied = value.partition(b" ")
+                return scheme.lower() == b"bearer" and hmac.compare_digest(supplied.strip(), self._token)
+        return False
+
+
+def http_app(server, host: str, token: str):
+    """The server as an ASGI app that requires `token`."""
+    if not token or len(token) < 16:
+        raise SourceError("the HTTP server needs a token of at least 16 characters")
+    options: dict = {}
+    if host not in LOOPBACK:
+        # The default only accepts a loopback Host header. A named host is protected by the token instead.
+        try:
+            from mcp.server.transport_security import TransportSecuritySettings
+
+            options["transport_security"] = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+        except ImportError:
+            pass
+    try:
+        app = server.streamable_http_app(host=host, **options)
+    except TypeError:  # mcp 1.x: the host is a setting of the server
+        app = server.streamable_http_app()
+    return BearerAuth(app, token)
+
+
 def run(
     roots: Sequence[str | Path],
     allow_urls: bool = False,
@@ -288,9 +339,21 @@ def run(
     hide: Sequence[str] = (),
     detectors: Sequence[Detector] = (),
     audit_log: str | Path | None = None,
+    http: tuple[str, int] | None = None,
+    token: str | None = None,
 ) -> None:
     allowed = {*ENTITY_KINDS, SECRET, *kinds_of(list(detectors))}
     unknown = set(keep_entity) - allowed
     if unknown:
         raise SourceError(f"unknown entity kinds: {sorted(unknown)}")
-    create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log).run("stdio")
+    server = create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log)
+    if http is None:
+        server.run("stdio")
+        return
+    host, port = http
+    app = http_app(server, host, token or "")
+    try:
+        import uvicorn
+    except ImportError:
+        raise SourceError("the HTTP server needs uvicorn; install datanyx[mcp]") from None
+    uvicorn.run(app, host=host, port=port, log_level="warning")

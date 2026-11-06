@@ -94,7 +94,7 @@ class ScanReport:
 
 
 def scan(
-    target: str,
+    target: str | Sequence[str],
     *,
     detectors: Sequence[Detector] | None = None,
     kinds: Iterable[str] | None = None,
@@ -104,8 +104,9 @@ def scan(
     show_paths: bool = False,
     policy: KeyPolicy | None = None,
 ) -> ScanReport:
-    """Scan a file or folder. `detectors` default to patterns plus the secret detector."""
-    if not os.path.exists(target):
+    """Scan files and folders. `detectors` default to patterns plus the secret detector."""
+    targets = [target] if isinstance(target, str) else list(target)
+    if not targets or not all(os.path.exists(item) for item in targets):
         raise SourceError("cannot read input: no such file or folder")
     policy = policy or KeyPolicy()
     chosen = frozenset(kinds) if kinds is not None else DEFAULT_KINDS
@@ -113,7 +114,7 @@ def scan(
     skip = (*DEFAULT_EXCLUDES, *excludes)
 
     report = ScanReport(shows_paths=show_paths)
-    files = _list_files(target, skip)
+    files = [found for item in targets for found in _list_files(item, skip, many=len(targets) > 1)]
     for position, (path, relative) in enumerate(files, start=1):
         display = _display(relative, position, policy, show_paths)
         if display != relative:
@@ -123,9 +124,10 @@ def scan(
     return report
 
 
-def _list_files(target: str, skip: Sequence[str]) -> list[tuple[str, str]]:
+def _list_files(target: str, skip: Sequence[str], many: bool = False) -> list[tuple[str, str]]:
     if os.path.isfile(target):
-        return [(target, os.path.basename(target))]
+        # Several files can share a name, so a list keeps the path the caller gave (a pre-commit hook passes them).
+        return [(target, target.replace(os.sep, "/") if many else os.path.basename(target))]
     found: list[tuple[str, str]] = []
     for folder, folders, names in os.walk(target, followlinks=False):
         folders[:] = sorted(name for name in folders if not _excluded(name, skip))
