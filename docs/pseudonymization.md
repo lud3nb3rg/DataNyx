@@ -64,18 +64,15 @@ database, its name, then what its values look like. The kinds are `name`, `first
   them survive. A date not written as `YYYY-MM-DD` is kept and counted.
 - **Free text** goes through [text anonymization](anonymization.md#text-anonymization), so names inside it become
   placeholders like `<PERSON_1>` (these don't match the fake name in the `name` column).
-- **JSON keys** work the same as columns, wherever the key appears, even first seen after the sample. A
-  key that is itself data, such as an email used as a key, is replaced, and agrees with the same email
-  used as a value. Text under such a key, or with no key at all, is replaced going by what it looks like.
+- **JSON keys** work the same as columns, wherever the key appears, even first seen after the sample. A key
+  that is itself data, such as an email used as a key, is replaced, and agrees with the same email used as a
+  value. Text under such a key, or with no key at all, is replaced going by what it looks like.
 - **CSV**: blank lines before the header are fine, columns are told apart by position even if two share a
-  name, a cell past the end of the header is blanked, and a first row holding an email or the like is
-  treated as data rather than a header.
-- **SQLite**: tables, keys and indexes are copied, and views too. A database's own SQL can hold real values,
-  so comments are dropped, **CHECK constraints are removed** (fakes wouldn't pass them anyway), text in
-  defaults is blanked, and a view or partial index whose definition holds text is left out. **Triggers are
-  left out**, since they can hold data or change values, and virtual tables are skipped along with their
-  contents; the notes at the end say so. A BLOB follows the plan like anything else: one that is kept stays
-  as it is, and one to be replaced that isn't text is blanked and noted.
+  name, and a cell past the last column is replaced, as there's no name to judge it by.
+- **SQLite**: tables, keys and indexes are copied, and views too. **Triggers are left out**, since they
+  can hold data or change values, and virtual tables are skipped with what they keep their contents in. So are column defaults, `CHECK` constraints,
+  comments, and any view or index with a literal in it, as those are text that can hold real values. Binary
+  values are emptied unless you name the column with `--keep-column`. The notes at the end say what happened.
 
 **What it can't promise.** *Pseudonymized is not anonymous.* Look at the plan before you share the copy.
 

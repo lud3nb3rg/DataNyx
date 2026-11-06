@@ -23,7 +23,7 @@ def merge_nodes(nodes: list[Node]) -> Node:
 
 
 def child_path(path: str, name: str, policy: KeyPolicy) -> str:
-    """Where a named entry's own contents are, for notes. A hidden name stays out of it."""
+    """Where a nested field sits, for notes. A hidden field's name must not end up in the path."""
     return f"{path}.{name}" if path not in policy.map_paths and policy.shows_name(name) else f"{path}.{{*}}"
 
 

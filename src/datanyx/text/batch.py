@@ -127,7 +127,9 @@ def restore_folder(source: str, target: str, placeholders: dict[str, str], files
         relative = path.relative_to(root).as_posix()
         original = files.get(relative)
         name = str(Path(original).with_suffix(path.suffix)) if original else relative
-        destination = out / name
+        destination = (out / name).resolve()
+        if out not in destination.parents:  # The mapping says where each file goes, and it can be edited.
+            raise SourceError("the mapping names a file outside the output folder")
         if destination.exists():
             raise SourceError("the output folder already has a file called " + name + "; use a new folder")
         data = path.read_bytes()

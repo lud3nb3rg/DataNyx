@@ -71,7 +71,14 @@ On Oracle, a table without the grant doesn't appear in the schema.
 - **JSON schemas reflect the sample.** `required` and formats describe the data seen,
   and hidden keys can include real optional fields.
 - **CSV has no types.** Types come from the text, so a column of numbers with one `n/a`
-  becomes a string, and a header row is assumed.
+  becomes a string.
+- **A first row is judged by its look.** A first row of a CSV or Excel sheet is read as data, with columns
+  called `column_N`, unless it looks like a header: lowercase, `snake_case` or `camelCase` names, or
+  mostly words that head columns. So `Species,Habitat` is taken for data until you confirm it with
+  `--keep-name`, and a headerless export whose first row is all lowercase (`jane,doe`) is taken for a header.
+  **Read the schema before sharing it.**
+- **File names are judged by their look too.** `jane_doe_medical.csv` becomes `file_N`, but `jane_doe.csv`
+  looks like any other name, so point the tool at folders whose file names you are willing to show.
 - **Large files.** JSON over 64 MB is streamed if `ijson` is installed (`.[streaming]`),
   and otherwise loaded fully into memory. JSON Lines and CSV are read row by row. XML and
   YAML are loaded fully into memory. Error messages for streamed JSON have no line number,

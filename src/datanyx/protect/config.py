@@ -45,6 +45,9 @@ class ProtectConfig:
             self.root / "datanyx.toml",
             self.root / "datanyx.local.toml",
             self.root / CONFIG_DIR / CONFIG_FILE,
+            # A setting in the user's own file (disableAllHooks) would turn the hook off here too.
+            Path.home() / ".claude" / "settings.json",
+            Path.home() / ".claude" / "settings.local.json",
         )
 
 

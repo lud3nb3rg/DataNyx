@@ -336,9 +336,10 @@ def test_glob_is_left_alone_when_nothing_protected_would_match(config):
         assert call(config, "Glob", pattern=pattern) is None, pattern
 
 
-def test_glob_can_be_allowed_to_go_broad(project):
+def test_glob_never_lists_protected_files_even_when_searches_may_go_broad(project):
     relaxed = ProtectConfig(project, (project / "data",), block_broad_search=False)
-    assert call(relaxed, "Glob", pattern="**/*.csv") is None
+    assert call(relaxed, "Glob", pattern="**/*.py") is None
+    assert call(relaxed, "Glob", pattern="**/*.csv")  # Listing protected files stays refused: names can be data.
     assert call(relaxed, "Glob", pattern="data/*.csv")
 
 

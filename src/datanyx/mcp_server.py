@@ -8,16 +8,20 @@ out on purpose:
   way of testing whether that name exists in the data. What to hide is the user's choice,
   made when starting the server.
 - No restore, and no mapping file, since both hold the real values.
-- Files must be inside the folders the server was started with, whichever way they are
-  named: a path, a variable holding one, or a `sqlite:///` URL. Database URLs are refused
-  unless allowed (use `env:NAME` so the password stays out of the conversation).
+- Files must be inside the folders the server was started with, however they are named: a
+  path, a variable holding one, or a `sqlite:///` URL. Database URLs are refused unless allowed.
+  `env:NAME` works only for the variables the user named with `--allow-env`: otherwise it would
+  reach any database or file the server's environment happens to mention.
+- `anonymize_file` refuses key, mapping and credential files, whatever else it would hide.
 - Errors are reduced to fixed messages, because an exception can quote the data.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import functools
 import os
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -59,42 +63,55 @@ INSTRUCTIONS = (
 )
 _ENV_PREFIX = "env:"
 MAX_SAMPLE_ROWS = 200
+MAX_ANONYMIZE_BYTES = 5 * 1024 * 1024
 _FILE_DATABASES = ("sqlite", "duckdb")
-# One answer for a variable that's unset, unusable or out of bounds: the agent can name any variable,
-# and shouldn't learn which exist or what they hold.
-_BAD_VARIABLE = "that env:NAME can't be used here; ask the user to set it to a database URL"
 _OUTSIDE = "that path is outside the folders this server may read"
+# Files that exist to hold secrets or real values. Replacing what looks sensitive isn't enough for these.
+_CREDENTIAL_FILES = (
+    ".env", ".env.*", "*.key", "*.pem", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*", "id_ecdsa*", ".netrc", ".pgpass", ".npmrc", ".pypirc",
+    "*.mapping.json", "datanyx.local.toml",
+)
+_MAPPING_ENTRY = re.compile(r'"<[A-Z_]+_\d+>"\s*:')
 
 
 class Access:
     """Which targets the agent may point the tools at."""
 
-    def __init__(self, roots: Sequence[str | Path], allow_urls: bool = False) -> None:
+    def __init__(self, roots: Sequence[str | Path], allow_urls: bool = False, allow_env: Sequence[str] = ()) -> None:
         self.roots = [Path(root).resolve() for root in roots]
         self.allow_urls = allow_urls
+        self.allow_env = frozenset(allow_env)
 
     def check(self, target: str) -> str:
         if target.startswith(_ENV_PREFIX):
-            self._check_variable(target[len(_ENV_PREFIX) :])
-            return target
+            return self._check_env(target)
         if "://" in target:
             if not self.allow_urls:
-                raise SourceError("database URLs aren't accepted here; ask the user to set one as env:NAME")
+                raise SourceError("database URLs aren't accepted here; ask the user to set one as env:NAME and allow it with --allow-env")
             if not self._url_allowed(target):
                 raise SourceError(_OUTSIDE)
             return target
         if target == "-":
             raise SourceError("stdin isn't available; pass a path")
+        return self._inside_roots(target)
+
+    def _check_env(self, target: str) -> str:
+        """One answer for a variable that isn't allowed and one that doesn't exist, so neither can be probed."""
+        name = target[len(_ENV_PREFIX) :]
+        if name not in self.allow_env:
+            raise SourceError("that environment variable isn't available here; the user can allow it with --allow-env")
+        value = os.environ.get(name, "")
+        if value and "://" not in value:
+            self._inside_roots(value)  # It holds a path, which the folders limit like any other.
+        elif value and not self._url_allowed(value):
+            raise SourceError(_OUTSIDE)
+        return target
+
+    def _inside_roots(self, target: str) -> str:
         resolved = Path(target).resolve()
-        if not self._inside_roots(resolved):
+        if not self._is_inside(resolved):
             raise SourceError(_OUTSIDE)
         return str(resolved)
-
-    def _check_variable(self, name: str) -> None:
-        value = os.environ.get(name, "")
-        allowed = self._url_allowed(value) if "://" in value else bool(value) and self._inside_roots(Path(value).resolve())
-        if not allowed:
-            raise SourceError(_BAD_VARIABLE)
 
     def _url_allowed(self, url: str) -> bool:
         """A URL can name a file, which is under the same rules as a path."""
@@ -107,9 +124,9 @@ class Access:
             database = make_url(url).database
         except (ArgumentError, ValueError):
             return False
-        return not database or database == ":memory:" or self._inside_roots(Path(database).resolve())
+        return not database or database == ":memory:" or self._is_inside(Path(database).resolve())
 
-    def _inside_roots(self, resolved: Path) -> bool:
+    def _is_inside(self, resolved: Path) -> bool:
         return any(resolved.is_relative_to(root) for root in self.roots)
 
 
@@ -154,6 +171,7 @@ def create_server(
     audit_log: str | Path | None = None,
     scale_hints: bool = False,
     infer_keys: bool = False,
+    allow_env: Sequence[str] = (),
     scan_settings: Mapping[str, Any] | None = None,
 ):
     """Build the server.
@@ -161,8 +179,9 @@ def create_server(
     `model` is one spaCy model or several, such as one per language. `keep_entity`, `hide` and
     `custom_detectors` are the user's choices, made when starting it. `audit_log` is a file that
     gets a record of every tool call (never values). `scale_hints` and `infer_keys` add size buckets
-    and key guesses to schemas; the agent can't switch them on or off. `scan_settings` are options
-    for `scan` (`excludes`, `max_bytes`, `include_examples`).
+    and key guesses to schemas; the agent can't switch them on or off. `allow_env` names the
+    environment variables the agent may use as `env:NAME`. `scan_settings` are options for `scan`
+    (`excludes`, `max_bytes`, `include_examples`).
     """
     try:
         from mcp.server.mcpserver import MCPServer as Server  # type: ignore[import-not-found]  # mcp 2.x
@@ -172,7 +191,7 @@ def create_server(
         except ImportError:
             raise SourceError("the MCP server needs the mcp package; install datanyx[mcp]") from None
 
-    access = Access(roots, allow_urls)
+    access = Access(roots, allow_urls, allow_env)
     models = [model] if isinstance(model, str) else list(model)
     detectors: list[Detector] = []  # Loaded on first use: the model is slow to start.
     scan_options = dict(scan_settings or {})
@@ -313,22 +332,34 @@ def create_server(
     def anonymize_file(target: str) -> str:
         """Return a text file with names, credentials and other identifiers replaced by placeholders.
 
-        This is best effort and can miss things.
+        This is best effort and can miss things. Files that exist to hold secrets are refused.
         """
         if target.startswith(_ENV_PREFIX) or "://" in target:
             raise SourceError("pass a path to a text file")
         path = access.check(target)
-        try:
-            text = Path(path).read_bytes().decode("utf-8-sig")
-        except OSError as error:
-            raise SourceError(f"cannot read input: {error.strerror}") from None
-        except UnicodeDecodeError:
-            raise SourceError("input is not valid UTF-8") from None
+        text = _read_for_anonymizing(Path(path))
         if not detectors:
             detectors.extend([*custom_detectors, PatternDetector(), SecretDetector(), *(SpacyDetector(name) for name in models)])
         return anonymize(text, detectors, hide_terms, (), keep_entity)
 
     return server
+
+
+def _read_for_anonymizing(path: Path) -> str:
+    refusal = "that file holds credentials or real values, so it can't be read here; ask the user"
+    if any(fnmatch.fnmatch(path.name.lower(), pattern) for pattern in _CREDENTIAL_FILES):
+        raise SourceError(refusal)
+    try:
+        if path.stat().st_size > MAX_ANONYMIZE_BYTES:
+            raise SourceError(f"that file is larger than {MAX_ANONYMIZE_BYTES // (1024 * 1024)} MB; ask the user to split it")
+        text = path.read_bytes().decode("utf-8-sig")
+    except OSError as error:
+        raise SourceError(f"cannot read input: {error.strerror}") from None
+    except UnicodeDecodeError:
+        raise SourceError("input is not valid UTF-8") from None
+    if _MAPPING_ENTRY.search(text):  # A mapping file by any other name.
+        raise SourceError(refusal)
+    return text
 
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
@@ -338,7 +369,8 @@ class BearerAuth:
     """ASGI middleware: only requests that carry the shared token get through.
 
     The token is compared in constant time and never appears in a message. A request without it
-    gets a bare 401, so an unauthenticated caller learns nothing about the server.
+    gets a bare 401, so an unauthenticated caller learns nothing about the server. Everything but
+    the server's own startup and shutdown needs the token, so a new kind of connection can't skip it.
     """
 
     def __init__(self, app, token: str) -> None:
@@ -403,13 +435,14 @@ def run(
     token: str | None = None,
     scale_hints: bool = False,
     infer_keys: bool = False,
+    allow_env: Sequence[str] = (),
     scan_settings: Mapping[str, Any] | None = None,
 ) -> None:
     allowed = {*ENTITY_KINDS, SECRET, *kinds_of(list(detectors))}
     unknown = set(keep_entity) - allowed
     if unknown:
         raise SourceError(f"unknown entity kinds: {sorted(unknown)}")
-    server = create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys, scan_settings)
+    server = create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys, allow_env, scan_settings)
     if http is None:
         server.run("stdio")
         return

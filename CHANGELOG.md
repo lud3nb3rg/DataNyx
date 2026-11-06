@@ -2,54 +2,82 @@
 
 ## Unreleased
 
-Fixes from a full code review. Several change what you get, so read these before upgrading.
+A security release: the fixes from a full audit. Each of these closed a way past what DataNyx promises, and `tests/test_security.py` keeps it closed.
 
-**Changes in behaviour**
+**Changes that may need action**
 
-- `datanyx pseudonymize`: names, cities, companies and addresses are now invented, pronounceable words instead of a short word list, so different values no longer merge and a fake doesn't depend on row order. Fakes made with an existing key file change: re-export anything that has to line up.
-- `datanyx scan --fail-on-findings` now also exits with 1 when a file that could hold data wasn't read (too large, unreadable, or a binary data file). Use `--exclude` or `--max-size` for files you've decided about.
-- The MCP `anonymize_file` tool no longer takes `hide`, which let an agent test guesses. Choose terms to hide when starting the server. An `env:NAME` that holds a path or a `sqlite:///` URL must now point under `--root`, and so must a `sqlite:///` URL under `--allow-urls`.
-- Shortened command-line options (`--rev` for `--reveal`) are no longer accepted.
-- `anonymize`, `scrub` and the MCP server now hide credentials such as `password=...`.
-- `schema --format sql` keeps native types only for SQL and DuckDB sources. A FHIR type that FHIR doesn't define is shown as `Resource_N`.
-- A mapping, key file or audit log that can't be made private to its owner is no longer kept.
+- MCP: `env:NAME` now only works for variables named with `--allow-env NAME` or `allow_env` under `[mcp]`. It used to reach any variable in the server's environment, and through it any database or file outside `--root`.
+- MCP: `anonymize_file` no longer takes `hide`, which told an agent whether a guessed term was in the file. Set terms to hide in `datanyx.local.toml`.
+- `scan --fail-on-findings` now also fails when a file that may hold data couldn't be read: too large, or binary of an unknown kind. Exclude it, raise `--max-size`, or pass `--allow-unscanned`. Images, fonts and the like don't count.
+- The GitHub Action ignores `datanyx.toml` unless `use-config: "true"`, since a pull request can change that file.
+- Options can no longer be abbreviated: `--rev` is an error, not `--reveal`.
+- Run `datanyx protect --write` again: the hook is now installed with `--require-config`.
+- `datanyx anonymize` removes HTML comments and script contents. `pseudonymize` empties BLOBs unless they are in `--keep-column`, and leaves out column defaults, `CHECK` constraints and any view or index with a literal.
+- A CSV or Excel sheet whose first row looks like data gets `column_N` names. If it was a header, list its names with `--keep-name` or under `keep_names`.
 
-**Protect guard**
+**Fixed**
 
-- The guard reads shell syntax rather than splitting on spaces, so `&`, `$(...)`, backticks, subshells, redirections without spaces, brace expansion, here-documents, joined quotes, `dd if=`, and `bash -c`, `eval`, `cmd /c` and `pwsh -Command` no longer get around it. Encoded PowerShell commands are refused.
-- Only datanyx itself counts as a datanyx command: `python x.py -m datanyx` and `uv run cat x datanyx` don't. `datanyx run` checks the command it starts with or without `--`.
-- The setup can't be removed by deleting or moving its folders, overwritten through a redirection, or reverted with git. Git commands that print protected files are refused. Git Bash and WSL paths are understood on Windows. Glob refuses a pattern that would list a protected file.
+- `anonymize`, `scrub` and the MCP server now hide credentials: API keys, tokens, passwords and whole private key blocks. `anonymize_file` also refuses key, mapping and `.env` files.
+- The guard reads shell commands the way a shell does, so quoting, escapes, redirections, `$(...)`, backticks, `bash -c` and `eval` no longer hide a path. Paths are compared after resolving them.
+- The guard no longer gives `datanyx`'s allowances to a command that merely mentions it (`ls -m datanyx data`), and `datanyx run` checks its command with or without `--`.
+- The agent can no longer switch protection off: `rm -rf .datanyx`, `cd .claude && ...`, `./.claude/./settings.json`, `cat x > .claude/settings.json`, `git rm`, `git clean`, a `datanyx.toml` in a sub-folder, `DATANYX_CONFIG`, the user's own Claude settings, or replacing the running install. A hook whose settings have gone now refuses everything.
+- The guard refuses `--hide`, `--model`, `--backend`, `--detectors` and `--keep-names`, `--names-from` with anything but the protected data, output options that point at it, and Glob patterns that match it.
+- `scan` reads UTF-16 and UTF-32 files and text with a stray NUL, which used to count as binary and pass.
+- A headerless CSV or Excel sheet no longer shows its first record as field names, and `pseudonymize` no longer copies that row in the clear.
+- Notes from Parquet, ORC and Avro no longer name a hidden parent field.
+- Text in an Arrow type (a timezone) can no longer reach a schema or run as SQL in `synth --format sqlite`, which could create a database at a path of the file's choosing.
+- Word: comment and revision authors, tracked deletions, alt text, content control labels, custom properties, custom XML, embedded files and the glossary are now covered. HTML: every attribute that isn't about layout is.
+- `pseudonymize` no longer keeps real values in column defaults, `CHECK` constraints, DDL comments, view and index text, BLOBs, values under data-like JSON keys, or extra CSV cells.
+- Regular expressions that took minutes on a 100 KB line (`1 1 1...`, `a-a-a...`, `x://x://...`) now take linear time, line numbers in `scan` no longer slow down with the number of findings, a YAML alias bomb is refused, and `anonymize_file` has a 5 MB limit.
+- The Ollama backend ignores proxy settings, which could send the text for a "local" model through a proxy.
+- `scrub` treats only real traceback lines as code, and redacts long quoted values, `://:password@`, `://token@` and `?password=`, as does the audit log.
+- `datanyx audit` shows control characters as escapes, so an agent can't write fake lines into the summary. The audit log is private from the moment it is created, also if it already existed.
+- Key and mapping files are locked down before anything goes in, and it is an error if they can't be. `run --save-stdout` files are private. `icacls` is started by its full path.
+- `restore` can't be sent outside its output folder by an edited mapping, and `schema -o` won't overwrite its own input.
+- File names that pair a sensitive subject with other words (`jane_doe_medical.csv`) become `file_N`.
+- The HTTP server refuses every kind of connection without the token, not only HTTP requests.
+- `datanyx protect` warns if Claude Code is older than 2.1.295, before which a hook that fails to start lets tool calls through.
+- Releases: actions pinned to commits, read-only default permissions, the image's base and dependencies pinned (by the hashes in `uv.lock`), and Dependabot to keep them current.
+
+**Also fixed, from a full code review**
+
+Changes that may need action:
+
+- `pseudonymize`: names, cities, companies and addresses are now invented, pronounceable words rather than a short word list, so different values no longer merge and a fake doesn't depend on row order. Fakes made with an existing key file change: re-export anything that has to line up. With `--key-file`, a note says if any fake had to be drawn again.
+- The MCP server: a `sqlite:///` URL under `--allow-urls`, or in an allowed `env:NAME`, must point under `--root`.
+
+The guard:
+
+- It also refuses `dd if=`, `-fdata/x`, `@data/x`, brace expansion (`{data,src}/x.csv`), here-strings, `$PWD/data/x`, a Glob brace list, encoded PowerShell commands, shortened options, and git commands that print protected files or revert the setup (`git show HEAD:x`, `git grep`, `git diff` and `git log -p` when git holds the data, `git checkout -- .`, `git reset --hard`). `datanyx run` checks the command it starts as a command of its own.
+- A substitution or subshell is checked from where it runs: `(cd /tmp); cat data/x.csv` and `echo $(cat data/x.csv); cd /tmp` no longer get through. Comments aren't commands, and a here-document is text.
+- Git Bash and WSL paths are understood on Windows. `mv /tmp/x .` and `git commit -m "about .claude/settings.json"` are no longer refused, and `git clean` is allowed for a folder that doesn't hold the setup.
 - `protect` no longer leaves deny rules behind for paths it stopped protecting.
 
-**Real data in output**
+Real data in output:
 
-- `pseudonymize`: unbroken phone numbers (`+14155552671`), BLOBs under any treatment, text in a SQLite schema (defaults, CHECK constraints, comments, views, partial indexes, full-text shadow tables), CSV files with blank leading lines, cells past the header, numeric phones and postcodes, and JSON text with no usable key were all kept. `--mapping` now records every kind.
-- `schema`: notes named hidden parents in Parquet, ORC and Avro, and a CSV with no header showed its first row as field names (when that row holds an email or the like).
-- `anonymize`: HTML comments, script and style strings, `data-*` attributes and unquoted attributes; Word text after a text box, tracked deletions and their authors, `people.xml`, custom properties, embedded data, alt text and links out of the document. A known sender or display name is now hidden in message bodies too.
-- `scrub`: terms to hide now reach traceback lines, patterns reach `File` paths, indented lines that aren't code are treated as messages, long quoted strings are removed, and longer secrets are replaced first.
-- URL credentials: passwords holding `@`, tokens with no colon and secrets in the query string are found, by one rule shared by `scrub` and the audit log.
-- The Ollama backend ignores proxy settings, so text can't leave the computer through one.
+- `pseudonymize`: unbroken phone numbers (`+14155552671`), numeric phones and postcodes, a default written `DEFAULT "x"`, full-text index contents, bare top-level JSON values, and JSON keys first seen after the sample. `--mapping` now records every kind.
+- `anonymize`: Word text after a text box, picture names and the paths of links out of the document, and strings and comments in HTML stylesheets. A sender or display name known from a chat or email's structure is now hidden in message bodies too.
+- `scrub`: terms to hide now reach traceback lines, patterns reach `File` paths, and longer secrets are replaced first. A password holding `@` is removed whole, here and in the audit log.
 
-**MCP server**
+The MCP server:
 
-- `scan_folder` uses the server's custom detectors, packs and scan settings. `anonymize_file` uses every configured model. A MongoDB URL in `env:NAME` reaches the MongoDB source. `BearerAuth` refuses any connection but start-up events without the token. The mcp 1.x fallback keeps the host and security settings.
+- `scan_folder` uses the server's custom detectors, packs and scan settings. `anonymize_file` uses every configured model. A MongoDB URL in `env:NAME` reaches the MongoDB source. The mcp 1.x fallback keeps the host and security settings.
 
-**Scan**
+Scan:
 
-- UTF-16 and UTF-32 files are read. Excludes apply to files named one by one, so they work in the pre-commit hook. Reports say when they aren't complete. `.duckdb`, `.ddb`, `.zsav`, `.por` and `.xpt` are flagged as data files, including when too large. `--backend` findings such as SSN are no longer filtered out, and `--kinds` accepts them.
+- Excludes apply to files named one by one, so they work in the pre-commit hook. `.duckdb`, `.ddb`, `.zsav`, `.por` and `.xpt` are flagged as data files, including when too large. `--backend` findings such as SSN are no longer filtered out, and `--kinds` accepts them.
 
-**Crashes and wrong answers**
+Crashes and wrong answers:
 
-- `pseudonymize` no longer hangs when a kind's fakes run out, and handles database paths holding `#`, `?` or `%`, duplicate CSV headers, and tables named like `sqlite2_users`.
-- `schema -o` refuses to overwrite its input. `synth` on an input with no tables, `anonymize --keep-names` with `a.txt` and `a.eml`, a damaged `.docx` in a folder, a CSV cell of thousands of digits, a YAML date that doesn't exist, recursive YAML aliases and deep XML are all clear errors or per-file notes now. `synth --format sqlite` works from Avro and Stata. One bad audit line no longer hides the log.
+- `pseudonymize` no longer hangs when a kind's fakes run out, and handles database paths holding `#`, `?` or `%`, duplicate CSV headers, blank lines before a header, and tables named like `sqlite2_users`.
+- `synth` on an input with no tables, `anonymize --keep-names` with `a.txt` and `a.eml`, a damaged `.docx` in a folder, a CSV cell of thousands of digits, a YAML date that doesn't exist, recursive YAML aliases and deep XML are all clear errors or per-file notes now. `synth --format sqlite` works from Avro and Stata. One bad audit line no longer hides the log.
 - `check`: `df.join(other, on=...)` no longer reports a false error, `SUM(DISTINCT x)` is type-checked, a time column accepts a time, and attribute checks work without pandas installed.
 - `eval --kind` with a kind nobody labelled is an error, and nothing measured no longer passes `--min-recall`.
-- `init --local` finds the repository from a subfolder. HL7 reads every MLLP frame, and HL7 and FHIR say when they stop at their type limit. `--infer-keys` works on JSON large enough to be streamed. A server denying foreign keys for one table costs only a note. Connection timeouts are set per driver.
+- `init --local` finds the repository from a subfolder. HL7 reads every MLLP frame, and HL7 and FHIR say when they stop at their type limit. A FHIR type FHIR doesn't define is shown as `Resource_N`. `--infer-keys` works on JSON large enough to be streamed. A server denying foreign keys for one table costs only a note. Connection timeouts are set per driver.
 
-**Internals**
+Internals:
 
-- Faster line numbers in `scan`, and a single pass for kept spans in the anonymizer. `check` no longer imports pandas.
-- SQL and DuckDB share `build_object` for hiding names, so their notes now read "hid data-like names". One home for the Luhn check, the placeholder pattern and the SQLite URI. Output encoding is set once, in `main`.
+- A single pass for kept spans in the anonymizer, and `check` no longer imports pandas. SQL and DuckDB share `build_object` for hiding names, so their notes now read "hid data-like names". One home for the Luhn check, the placeholder pattern and the SQLite URI. Output encoding is set once, in `main`.
 
 ## 0.1.0 (2026-11-06)
 

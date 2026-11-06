@@ -116,7 +116,7 @@ def test_clean_folder_says_so(tmp_path):
 
 def test_json_report_shape(tree):
     data = json.loads(render_report(scan(str(tree), max_bytes=1_000_000), "json"))
-    assert data["skipped"] == {"too_large": 1, "binary": 2, "unreadable": 0}
+    assert data["skipped"] == {"too_large": 1, "binary": 2}
     assert data["totals"]["SECRET"] == 2
     assert {"path", "counts", "lines"} <= set(data["files"][0])
 

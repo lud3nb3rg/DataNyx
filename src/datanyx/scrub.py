@@ -30,9 +30,9 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from .credentials import hide_url_credentials
 from .schema import Array, DataSchema, Node, Object, Union
 from .text import Anonymizer, Detector, PatternDetector, SecretDetector
+from .text.secrets import redact_url_credentials
 
 VALUE = "<VALUE>"
 NUMBER = "<NUMBER>"
@@ -44,17 +44,18 @@ _SECRET_NAME = re.compile(
 _MIN_SECRET_LENGTH = 6
 
 _TRACEBACK = re.compile(r"^Traceback \(most recent call last\):\s*$")
+_FILE_LINE = re.compile(r'^\s+File ".*", line \d+')
+_REPEATED_LINE = re.compile(r"^\s+\[Previous line repeated \d+ more times?\]\s*$")
+_CODE_LINE = re.compile(r"^ {4}")
+# Python 3.13 prints a statement that spans lines in full, with the middle cut, so a frame can have a few.
+_MAX_CODE_LINES = 12
 _CHAIN = re.compile(r"^(During handling of the above exception|The above exception was the direct cause)")
 _EXCEPTION_LINE = re.compile(
     r"^((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception|Warning|Exit|Interrupt|Failure))(:\s*)(.*)$"
 )
-_QUOTED = re.compile(r"""(?<!\w)(?:[bBrRuUfF]{1,2})?(['"])((?:(?!\1)[^\n\\]|\\.){0,300})\1(?!\w)""")
-# Longer ones, which the pattern above leaves alone to stay fast on lines full of stray quotes.
-_LONG_QUOTED = re.compile(r"""(['"])[^\n]{301,}?\1""")
+_QUOTED = re.compile(r"""(?<!\w)(?:[bBrRuUfF]{1,2})?(['"])((?:(?!\1)[^\n\\]|\\.){0,100000})\1(?!\w)""")
 _NUMBER = re.compile(r"(?<![\w.])(?:\d{4,}|\d+\.\d+)(?![\w])")
-_TRACEBACK_FILE = re.compile(r"^\s+File \"")
 _FILE_PATH = re.compile(r'^(\s+File ")(.*?)(".*)$')
-_CARETS = re.compile(r"^\s+[\^~]+\s*$")
 
 # Words that are about how the data is stored rather than what is in it.
 _COMMON_WORDS = frozenset(
@@ -144,7 +145,7 @@ def _hide_secrets(text: str) -> str:
     values = {value for name, value in os.environ.items() if _SECRET_NAME.search(name) and len(value) >= _MIN_SECRET_LENGTH}
     for value in sorted(values, key=len, reverse=True):
         text = text.replace(value, SECRET)
-    return hide_url_credentials(text)
+    return redact_url_credentials(text)
 
 
 def _shorten_paths(text: str) -> str:
@@ -166,25 +167,22 @@ def _classify(lines: list[str]) -> list[str]:
     """Mark each line `structure` (a traceback's own lines) or `message`."""
     kinds = []
     in_traceback = False
-    after_file = False  # The one line under a `File` line is its code.
+    code_lines = _MAX_CODE_LINES  # How many more lines may be code under the last `File` line.
     for line in lines:
         if _TRACEBACK.match(line):
             kinds.append("structure")
-            in_traceback, after_file = True, False
+            in_traceback, code_lines = True, 0
         elif _CHAIN.match(line):
             kinds.append("structure")
-            after_file = False
-        elif in_traceback and _TRACEBACK_FILE.match(line):
+        elif in_traceback and (_FILE_LINE.match(line) or _REPEATED_LINE.match(line)):
             kinds.append("structure")
-            after_file = True
-        elif in_traceback and (after_file or _CARETS.match(line)) and line.startswith(" "):
-            kinds.append("structure")
-            after_file = False
+            code_lines = _MAX_CODE_LINES
+        elif in_traceback and code_lines and _CODE_LINE.match(line):
+            kinds.append("structure")  # The code line, and the ^^^^ markers.
+            code_lines -= 1
         else:
             kinds.append("message")
-            after_file = False
-            # An indented line that isn't one of the above can be a value, but the traceback goes on.
-            in_traceback = in_traceback and line.startswith(" ")
+            in_traceback = False
     return kinds
 
 
@@ -194,7 +192,7 @@ def _redact_quoted(text: str, allowed: frozenset[str]) -> str:
         # An empty string holds no data, and "got an empty string" helps in debugging.
         return match.group(0) if not inner or inner in allowed or inner in _COMMON_WORDS else VALUE
 
-    return _LONG_QUOTED.sub(VALUE, _QUOTED.sub(replace, text))
+    return _QUOTED.sub(replace, text)
 
 
 def _detect(bodies: list[str], anonymizer: Anonymizer) -> list[str]:

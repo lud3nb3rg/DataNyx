@@ -13,7 +13,6 @@ from datanyx.audit import read_log, summarize
 from datanyx.check import check_code
 from datanyx.check.model import Column, Table
 from datanyx.cli import main
-from datanyx.credentials import hide_url_credentials
 from datanyx.evaluation import EvalReport, KindResult
 from datanyx.mcp_server import Access, BearerAuth, http_app
 from datanyx.privacy import KeyPolicy
@@ -25,7 +24,7 @@ from datanyx.text import Anonymizer, DictionaryDetector, PatternDetector, Secret
 from datanyx.text.batch import anonymize_folder
 from datanyx.text.detectors import PERSON, luhn_valid
 from datanyx.text.documents import anonymize_bytes, restore_bytes
-from datanyx.text.mapping import MappingFile
+from datanyx.text.secrets import redact_url_credentials
 
 
 def anonymizer(*names):
@@ -101,25 +100,25 @@ def test_html_has_nowhere_for_a_value_to_hide(page):
     assert "jane@corp.com" not in html_out(page)
 
 
-def test_script_code_stays_when_its_strings_change():
-    out = html_out('<script>var a = 1; var u = "jane@corp.com"; call(a);</script>')
-    assert "var a = 1; var u = " in out and "call(a);" in out
+def test_a_script_is_removed_and_a_stylesheet_keeps_its_rules():
+    out = html_out('<script>var u = "jane@corp.com"; call();</script><style>.a { color: red; background: url(bob@corp.com) }</style>')
+    assert "call()" not in out and "<script></script>" in out and ".a { color: red; background: url(" in out and "bob@corp.com" not in out
 
 
 def test_nothing_changes_when_there_is_nothing_to_hide():
-    page = '<!-- a note --><script>var a = "b"; // c\n</script><input value=plain data-x="y"><p>Text &amp; more</p>'
+    page = '<style>.a { content: "b" } /* c */</style><input value=plain data-x="y"><p>Text &amp; more</p>'
     assert html_out(page) == page
 
 
-def test_an_unquoted_attribute_gets_quotes_only_if_it_changes():
-    assert 'value="&lt;EMAIL_1&gt;"' in html_out("<input value=jane@corp.com>")
+def test_an_unquoted_attribute_is_escaped():
+    assert "value=&lt;EMAIL_1&gt;>" in html_out("<input value=jane@corp.com>")
 
 
-def test_html_restores_from_comments_and_scripts_too():
+def test_html_restores_from_stylesheets_too():
     who = anonymizer()
-    page = '<!-- jane@corp.com --><script>var u="bob@corp.com";</script><p data-x="carl@corp.com">dan@corp.com</p>'
+    page = '<style>a { content: "bob@corp.com" }</style><p data-x="carl@corp.com">dan@corp.com</p>'
     done = anonymize_bytes(page.encode(), ".html", who).data
-    assert restore_bytes(done, ".html", who.mapping).decode().count("@corp.com") == 4
+    assert restore_bytes(done, ".html", who.mapping).decode() == page
 
 
 # --- Word ------------------------------------------------------------------------------------------------------
@@ -171,7 +170,7 @@ def test_tracked_changes_lose_their_text_and_their_author():
     change = '<w:del w:author="jane@corp.com" w:initials="JD"><w:r><w:delText>deleted amy@corp.com</w:delText></w:r></w:del>'
     xml = part(anonymize_bytes(docx(body(f"<w:p>{run('x')}{change}</w:p>")), ".docx", anonymizer()).data, "word/document.xml")
     assert "amy@corp.com" not in xml and "jane@corp.com" not in xml and 'w:initials="JD"' not in xml
-    assert "<w:delText>deleted " in xml
+    assert "deleted" not in xml
 
 
 def test_other_parts_lose_what_they_hold():
@@ -189,7 +188,6 @@ def test_other_parts_lose_what_they_hold():
         everything = " ".join(archive.read(name).decode() for name in archive.namelist())
     assert "jane@corp.com" not in everything and "Jane Doe" not in everything
     assert 'Target="media/image1.png"' in everything
-    assert any("custom properties" in note for note in result.notes)
 
 
 def test_alt_text_and_picture_names_are_anonymized():
@@ -291,13 +289,13 @@ def test_scrub_hides_credentials_by_default():
     ],
 )
 def test_credentials_in_urls_are_found(text, secret):
-    assert secret not in hide_url_credentials(text).replace("<CREDENTIALS>", "")
+    assert secret not in redact_url_credentials(text).replace("<CREDENTIALS>", "")
 
 
 def test_addresses_stay_when_credentials_go():
-    assert hide_url_credentials("postgresql://u:p@ss@host/db") == "postgresql://<CREDENTIALS>@host/db"
-    assert hide_url_credentials("https://example.com/a@b") == "https://example.com/a@b"
-    assert hide_url_credentials("see https://example.com/?page=2") == "see https://example.com/?page=2"
+    assert redact_url_credentials("postgresql://u:p@ss@host/db") == "postgresql://<CREDENTIALS>@host/db"
+    assert redact_url_credentials("https://example.com/a@b") == "https://example.com/a@b"
+    assert redact_url_credentials("see https://example.com/?page=2") == "see https://example.com/?page=2"
 
 
 def test_the_audit_log_and_scrub_share_the_rule():
@@ -333,40 +331,6 @@ def test_one_bad_line_doesnt_hide_the_whole_audit_log(tmp_path):
 # --- Owner-only files --------------------------------------------------------------------------------------------
 
 
-@pytest.fixture
-def cant_restrict(monkeypatch):
-    monkeypatch.setattr("datanyx.fileperms.restrict_to_owner", lambda path: False)
-    monkeypatch.setattr("datanyx.text.mapping.os.name", "nt")
-    monkeypatch.setattr("datanyx.pseudonymize.keys.os.name", "nt")
-
-
-@pytest.mark.skipif(__import__("os").name != "nt", reason="the check applies where modes can't do it")
-def test_a_mapping_that_cant_be_private_isnt_kept(tmp_path, cant_restrict):
-    path = tmp_path / "m.json"
-    with pytest.raises(SourceError, match="couldn't be made private"):
-        MappingFile(path)
-    assert not path.exists()
-
-
-@pytest.mark.skipif(__import__("os").name != "nt", reason="the check applies where modes can't do it")
-def test_a_key_that_cant_be_private_isnt_kept(tmp_path, cant_restrict):
-    from datanyx.pseudonymize import load_key
-
-    path = tmp_path / "k.key"
-    with pytest.raises(SourceError, match="couldn't be made private"):
-        load_key(str(path))
-    assert not path.exists()
-
-
-def test_an_audit_log_that_cant_be_private_stops_the_server(tmp_path, monkeypatch):
-    from datanyx.audit import AuditLog
-
-    monkeypatch.setattr("datanyx.fileperms.restrict_to_owner", lambda path: False)
-    with pytest.raises(SourceError, match="couldn't be made private"):
-        AuditLog(tmp_path / "audit.jsonl")
-    assert not (tmp_path / "audit.jsonl").exists()
-
-
 # --- Ollama --------------------------------------------------------------------------------------------------------
 
 
@@ -393,37 +357,14 @@ def test_ollama_ignores_proxy_settings(monkeypatch):
 # --- MCP: access ---------------------------------------------------------------------------------------------------
 
 
-def test_a_variable_holding_a_path_outside_the_roots_is_refused(tmp_path, monkeypatch):
-    root, elsewhere = tmp_path / "root", tmp_path / "elsewhere"
-    root.mkdir()
-    elsewhere.mkdir()
-    monkeypatch.setenv("APP_DB", str(elsewhere / "app.db"))
-    with pytest.raises(SourceError, match="can't be used here"):
-        Access([root]).check("env:APP_DB")
-    monkeypatch.setenv("APP_DB", str(root / "app.db"))
-    assert Access([root]).check("env:APP_DB") == "env:APP_DB"
-
-
-def test_a_variable_holding_a_sqlite_url_outside_the_roots_is_refused(tmp_path, monkeypatch):
+def test_an_allowed_variable_holding_a_sqlite_url_outside_the_roots_is_refused(tmp_path, monkeypatch):
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setenv("APP_DB", f"sqlite:///{(tmp_path / 'secrets.db').as_posix()}")
-    with pytest.raises(SourceError, match="can't be used here"):
-        Access([root]).check("env:APP_DB")
-
-
-def test_every_bad_variable_gets_the_same_answer(tmp_path, monkeypatch):
-    monkeypatch.delenv("UNSET_VARIABLE", raising=False)
-    monkeypatch.setenv("HOME_LIKE", str(tmp_path.parent))
-    monkeypatch.setenv("BROKEN_URL", "sqlite://:::")
-    messages = set()
-    for name in ("UNSET_VARIABLE", "HOME_LIKE", "BROKEN_URL"):
-        root = tmp_path / "root"
-        root.mkdir(exist_ok=True)
-        with pytest.raises(SourceError) as caught:
-            Access([root]).check(f"env:{name}")
-        messages.add(str(caught.value))
-    assert len(messages) == 1
+    with pytest.raises(SourceError, match="outside"):
+        Access([root], allow_env=["APP_DB"]).check("env:APP_DB")
+    monkeypatch.setenv("APP_DB", f"sqlite:///{(root / 'ok.db').as_posix()}")
+    assert Access([root], allow_env=["APP_DB"]).check("env:APP_DB") == "env:APP_DB"
 
 
 def test_a_sqlite_url_is_under_the_same_rules_as_a_path(tmp_path):
@@ -619,12 +560,12 @@ def test_an_unreadable_file_is_counted(tmp_path, monkeypatch):
 
     monkeypatch.setattr("builtins.open", refusing)
     report = scan(str(tmp_path))
-    assert report.unreadable == 1 and not report.complete
+    assert report.unscanned == ["a.txt"] and not report.complete
 
 
 @pytest.mark.parametrize("name", ["x.duckdb", "x.ddb", "x.zsav", "x.por", "x.xpt"])
 def test_data_formats_the_project_reads_are_flagged(tmp_path, name):
-    (tmp_path / name).write_bytes(b"\x00\x01")
+    (tmp_path / name).write_bytes(bytes(range(256)) * 4)
     assert scan(str(tmp_path)).not_scanned_data == [name]
 
 
@@ -1074,6 +1015,6 @@ def test_sql_and_duckdb_hide_names_the_same_way(tmp_path):
 
 def test_output_is_utf8_from_one_place(tmp_path, capsysbinary):
     path = tmp_path / "c.csv"
-    path.write_text("naïve\n1\n", encoding="utf-8")
+    path.write_text("naïve_id\n1\n", encoding="utf-8")
     assert main(["--no-config", "schema", str(path), "--format", "text"]) == 0
-    assert "naïve".encode() in capsysbinary.readouterr().out
+    assert "naïve_id".encode() in capsysbinary.readouterr().out

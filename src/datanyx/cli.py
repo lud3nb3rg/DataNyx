@@ -24,6 +24,7 @@ from .config import CONFIG_NAME, LOCAL_NAME, STARTER, STARTER_LOCAL, Config, des
 from .diff import diff_schemas, has_breaking, render_diff, snapshot
 from .evaluation import evaluate, load_cases
 from .evaluation import render_report as render_eval
+from .fileperms import restrict_to_owner
 from .privacy import KeyPolicy
 from .pseudonymize import Options as PseudonymizeOptions
 from .pseudonymize import Pseudonymizer, detect_kind, load_key, parse_overrides, pseudonymize_file, render_plan
@@ -55,6 +56,14 @@ from .text.batch import BatchResult, anonymize_folder, anonymize_stream, restore
 from .text.documents import anonymize_bytes, can_handle, restore_bytes
 from .text.mapping import MappingFile, read_mapping
 from .text.packs import PACKS, load_packs
+
+
+class _Parser(argparse.ArgumentParser):
+    """No abbreviated options: `--rev` meaning `--reveal` would slip past the guard's list of options."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs["allow_abbrev"] = False
+        super().__init__(*args, **kwargs)
 
 
 def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
@@ -154,16 +163,8 @@ def _add_model_and_detectors(parser: argparse.ArgumentParser) -> None:
     )
 
 
-class _ExactOptionsParser(argparse.ArgumentParser):
-    """No shortened options: the guard has to recognise `--reveal`, and `--rev` shouldn't work around it."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        kwargs.setdefault("allow_abbrev", False)
-        super().__init__(*args, **kwargs)
-
-
 def build_parser() -> argparse.ArgumentParser:
-    parser = _ExactOptionsParser(
+    parser = _Parser(
         prog="datanyx",
         description="Describe data to an AI agent without showing it the data.",
     )
@@ -288,7 +289,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument("--include-examples", action="store_true", help="also count example.com emails and loopback or documentation IPs")
     scan_parser.add_argument("--show-paths", action="store_true", help="show real file names, even ones that look like data (run it yourself)")
     scan_parser.add_argument("--format", choices=("text", "json"), default="text", help="output format (default: %(default)s)")
-    scan_parser.add_argument("--fail-on-findings", action="store_true", help="exit with 1 if anything is found, or a file that could hold data couldn't be read, for CI or a pre-commit hook")
+    scan_parser.add_argument("--fail-on-findings", action="store_true", help="exit with 1 if anything is found or a file that may hold data couldn't be read, for CI or a pre-commit hook")
+    scan_parser.add_argument("--allow-unscanned", action="store_true", help="with --fail-on-findings, don't fail because a file was too large or couldn't be read")
 
     protect = commands.add_parser(
         "protect",
@@ -314,11 +316,12 @@ def build_parser() -> argparse.ArgumentParser:
     protect.add_argument("--remove", action="store_true", help="take protection out again")
     protect.add_argument("--write", action="store_true", help="apply the changes (the default is to show them)")
 
-    commands.add_parser(
+    hook = commands.add_parser(
         "hook",
         help="the Claude Code hook that enforces `protect` (reads a tool call on stdin)",
         description="Used by Claude Code, not by hand: reads a PreToolUse payload and refuses calls that touch protected data.",
     )
+    hook.add_argument("--require-config", action="store_true", help="refuse everything if the protection settings are missing; `protect` installs the hook with this")
 
     check = commands.add_parser(
         "check",
@@ -512,6 +515,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--root", action="append", default=[], metavar="DIR", help="folder the agent may read (repeatable; default: current folder)"
     )
     serve.add_argument("--allow-urls", action="store_true", help="accept database URLs from the agent (they may contain passwords)")
+    serve.add_argument(
+        "--allow-env", action="append", default=[], metavar="NAME",
+        help="let the agent use this environment variable as a database URL, as env:NAME (repeatable); no other variable can be used",
+    )
     _add_model_and_detectors(serve)
     serve.add_argument(
         "--keep-entity", action="append", default=[], metavar="KIND",
@@ -699,20 +706,22 @@ def _run_scan(args: argparse.Namespace) -> int:
         show_paths=args.show_paths,
     )
     print(render_report(report, args.format))
-    return 1 if args.fail_on_findings and not (report.clean and report.complete) else 0
+    if not args.fail_on_findings:
+        return 0
+    return 1 if not report.clean or not (report.complete or args.allow_unscanned) else 0
 
 
 def _run_hook(args: argparse.Namespace) -> int:
     from .protect import run_hook
 
-    decision = run_hook(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
+    decision = run_hook(sys.stdin.buffer.read().decode("utf-8", errors="replace"), require_config=args.require_config)
     if decision:
         sys.stdout.write(decision)
     return 0
 
 
 def _run_protect(args: argparse.Namespace) -> int:
-    from .protect import apply, plan_protect, plan_remove, self_test, split_command
+    from .protect import apply, claude_code_warning, plan_protect, plan_remove, self_test, split_command
 
     project = Path(args.dir).resolve()
     command = split_command(args.launcher)
@@ -750,6 +759,9 @@ def _run_protect(args: argparse.Namespace) -> int:
         return 0
     problem = self_test(project, command, targets[0])
     print("Checked: the guard hook refuses protected files." if problem is None else f"warning: {problem}")
+    version_warning = claude_code_warning()
+    if version_warning:
+        print(f"warning: {version_warning}", file=sys.stderr)
     return 0 if problem is None else 1
 
 
@@ -828,9 +840,9 @@ def _run_command(args: argparse.Namespace) -> int:
 
     raw_out, raw_err = out.decode("utf-8", errors="replace"), err.decode("utf-8", errors="replace")
     if args.save_stdout:
-        _write_new(args.save_stdout, raw_out)
+        _write_new(args.save_stdout, raw_out, private=True)
     if args.save_stderr:
-        _write_new(args.save_stderr, raw_err)
+        _write_new(args.save_stderr, raw_err, private=True)
 
     if raw_err:
         sys.stderr.write(scrub(raw_err, policy))
@@ -891,15 +903,23 @@ def _has_hidden_columns(table) -> bool:
     return isinstance(node, Object) and node.extra is not None
 
 
-def _write_new(path: str, text: str) -> None:
-    """Write a file that must not exist yet, so real data next to it can't be overwritten."""
+def _write_new(path: str, text: str, private: bool = False) -> None:
+    """Write a file that must not exist yet, so real data next to it can't be overwritten.
+
+    `private` is for real data: the file is readable by its owner alone from the start."""
     try:
-        with open(path, "x", encoding="utf-8", newline="") as stream:
+        with open(path, "x", encoding="utf-8", newline="", opener=_owner_only if private else None) as stream:
+            if private and os.name == "nt" and not restrict_to_owner(path):
+                raise SourceError("cannot make the output file private")
             stream.write(text)
     except FileExistsError:
         raise SourceError("the output file already exists; choose a new name") from None
     except OSError as error:
         raise SourceError(f"cannot write the output: {error.strerror}") from None
+
+
+def _owner_only(file: str, flags: int) -> int:
+    return os.open(file, flags, 0o600)
 
 
 _OPTIONAL = (
@@ -960,6 +980,7 @@ def _run_mcp(args: argparse.Namespace) -> int:
         token=token,
         scale_hints=bool(args.scale_hints or config.scale_hints),
         infer_keys=bool(args.infer_keys or config.infer_keys),
+        allow_env=[*config.mcp_allow_env, *args.allow_env],
         scan_settings={
             "excludes": list(config.scan_exclude),
             "max_bytes": int((config.scan_max_size or 5.0) * 1024 * 1024),

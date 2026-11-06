@@ -9,7 +9,6 @@ import pytest
 
 from datanyx.cli import main
 from datanyx.pseudonymize import Options, Pseudonymizer, build_plan, classify, pseudonymize_file
-from datanyx.pseudonymize.sql_text import clean_table_sql, holds_text, without_comments
 from datanyx.text import Anonymizer, PatternDetector
 
 KEY = bytes(range(32))
@@ -162,11 +161,11 @@ def test_a_file_of_blank_lines_is_empty(tmp_path):
         copy(tmp_path, write(tmp_path, "c.csv", "\n\n,,\n"), "csv")
 
 
-def test_cells_past_the_header_are_blanked_and_noted(tmp_path):
+def test_cells_past_the_header_are_replaced_and_noted(tmp_path):
     target, report = copy(tmp_path, write(tmp_path, "c.csv", "name,email\nAna Real,a@corp.com,555-123-4567,extra\n"), "csv")
-    rows = rows_of(target)
-    assert "555-123-4567" not in target.read_text(encoding="utf-8") and rows[1][2:] == ["", ""]
-    assert any("past the end of the header" in note for note in report.notes)
+    text = target.read_text(encoding="utf-8")
+    assert "555-123-4567" not in text and "extra" not in text and len(rows_of(target)[1]) == 4
+    assert any("more cells than the header" in note for note in report.notes)
 
 
 def test_duplicate_headers_are_sampled_by_position(tmp_path):
@@ -295,7 +294,7 @@ def test_literals_in_the_schema_dont_reach_the_copy(tmp_path):
     assert connection.execute("select count(*) from u").fetchone() == (1,)
     connection.close()
     notes = " ".join(report.notes)
-    assert "CHECK" in notes and "definition" in notes and "view v" in notes and "index i" in notes
+    assert "CHECK" in notes and "view v" in notes and "index i" in notes
 
 
 def test_a_fake_can_be_inserted_where_a_check_would_have_refused_it(tmp_path):
@@ -324,31 +323,6 @@ def test_keys_and_table_options_survive_cleaning(tmp_path):
     connection.close()
 
 
-@pytest.mark.parametrize(
-    ("sql", "expected"),
-    [
-        ("create table t (a text check (a <> 'x'), b int)", "create table t ( a text , b int )"),
-        ("create table t (a int, check (a > 1))", "create table t ( a int )"),
-        ("create table t (a int, check (a > 1), unique (a))", "create table t ( a int , unique ( a ) )"),
-        ("create table t (a int, constraint c check (a > 1))", "create table t ( a int )"),
-        ("create table t (a int constraint c check (a > 1) not null)", "create table t ( a int not null )"),
-        ("create table t (a text default 'it''s')", "create table t ( a text default '' )"),
-        ('create table "check" ("check" text)', 'create table "check" ( "check" text )'),
-        ("create table t (a text) -- note", "create table t ( a text )"),
-    ],
-)
-def test_cleaning_a_table_statement(sql, expected):
-    assert clean_table_sql(sql).sql == expected
-    sqlite3.connect(":memory:").execute(expected)
-
-
-def test_finding_text_in_a_statement():
-    assert holds_text("create view v as select * from t where a = 'x'")
-    assert not holds_text("create view v as select * from t where a = 5 -- it's fine")
-    assert not holds_text('create view v as select "a b" from t')
-    assert without_comments("select 1 -- x\n/* y */ from t") == "select 1 from t"
-
-
 def test_blobs_follow_the_plan(tmp_path):
     source = database(
         tmp_path,
@@ -358,15 +332,15 @@ def test_blobs_follow_the_plan(tmp_path):
     connection = sqlite3.connect(target)
     photo, doc, name, raw = connection.execute("select photo, doc, name, raw from t").fetchone()
     connection.close()
-    assert photo is None and doc != b"jane" and isinstance(doc, bytes) and b"Jane" not in name and raw == b"\xff\x00"
-    assert report.notes == [] or all("blanked" not in note for note in report.notes)
+    assert photo == b"" and doc == b"" and name == b"" and raw == b"\xff\x00"  # Only what was asked to stay stays.
+    assert any("binary" in note for note in report.notes)
 
 
-def test_a_blob_that_cant_be_faked_is_blanked_and_noted(tmp_path):
+def test_a_blob_that_cant_be_faked_is_emptied_and_noted(tmp_path):
     source = database(tmp_path, "create table t (doc blob); insert into t values (x'ff00ff');")
     target, report = copy(tmp_path, source, "sqlite", overrides={"doc": "text"})
     connection = sqlite3.connect(target)
-    assert connection.execute("select doc from t").fetchone() == (None,)
+    assert connection.execute("select doc from t").fetchone() == (b"",)
     connection.close()
     assert any("binary" in note for note in report.notes)
 

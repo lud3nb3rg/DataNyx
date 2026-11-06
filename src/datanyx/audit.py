@@ -3,8 +3,7 @@
 One JSON object per line. It never holds a value or anything the agent was given back:
 only the tool's name, the paths and settings it was called with, whether it worked, and
 the sizes involved. Arguments that could carry data are reduced to a length or a count
-(the SQL an agent asked to have checked, the terms it asked to hide), and a password in a
-database URL is replaced.
+(the SQL an agent asked to have checked), and credentials in a database URL are replaced.
 
 Keep the file where the agent can't change it. `datanyx audit FILE` summarises it.
 """
@@ -12,6 +11,8 @@ Keep the file where the agent can't change it. `datanyx audit FILE` summarises i
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 import uuid
 from collections import Counter
@@ -20,11 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .credentials import hide_url_credentials
-from .fileperms import restrict_to_owner_or_remove
+from .fileperms import restrict_to_owner
 from .sources.base import SourceError
+from .text.secrets import redact_url_credentials
 
 _MAX_TEXT = 300
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 # How each tool's arguments are recorded. Anything not listed is reduced to its size.
 _KEEP = "keep"
 _COUNT = "count"
@@ -52,13 +54,11 @@ class AuditLog:
         assert self.path is not None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            created = not self.path.exists()
-            with open(self.path, "a", encoding="utf-8"):
-                pass
-            if created:
-                restrict_to_owner_or_remove(str(self.path), "the audit log")
+            os.close(os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600))  # Owner only from the start.
         except OSError:
             raise SourceError("cannot write the audit log") from None
+        if not restrict_to_owner(str(self.path)):
+            raise SourceError("cannot make the audit log private")
 
     def record(
         self, tool: str, arguments: Mapping[str, Any], outcome: str, message: str | None, started: float, output_chars: int | None
@@ -102,7 +102,7 @@ def summarize(tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
 
 def _clean(value: Any) -> Any:
     if isinstance(value, str):
-        return hide_url_credentials(value)[:_MAX_TEXT]
+        return redact_url_credentials(value)[:_MAX_TEXT]
     if isinstance(value, (list, tuple)):
         return [_clean(item) for item in value][:50]
     return value
@@ -142,17 +142,22 @@ def _parse_time(text: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _printable(value: Any) -> str:
+    """The text with control characters shown as escapes: an agent chose it, and a person reads it in a terminal."""
+    return _CONTROL.sub(lambda match: match.group().encode("unicode_escape").decode("ascii"), str(value))
+
+
 def summarize_log(records: list[dict[str, Any]], unreadable: int = 0, output_format: str = "text") -> str:
-    tools = Counter(entry.get("tool", "?") for entry in records)
+    tools = Counter(_printable(entry.get("tool", "?")) for entry in records)
     sessions = {entry.get("session") for entry in records}
     targets: Counter[str] = Counter()
     for entry in records:
         arguments = entry.get("arguments", {})
         for key in ("target", "old", "new"):
             if isinstance(arguments.get(key), str):
-                targets[arguments[key]] += 1
+                targets[_printable(arguments[key])] += 1
     failures = Counter(
-        (entry.get("tool", "?"), entry.get("message", "")) for entry in records if entry.get("outcome") != "ok"
+        (_printable(entry.get("tool", "?")), _printable(entry.get("message", ""))) for entry in records if entry.get("outcome") != "ok"
     )
     times = sorted(entry["time"] for entry in records if "time" in entry)
 

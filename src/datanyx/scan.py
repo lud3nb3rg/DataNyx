@@ -2,7 +2,8 @@
 
 For checking a repository or an export folder before an agent is pointed at it. The
 report says which files hold what kinds of sensitive text, how many, and on which
-lines. It never contains a value.
+lines. It never contains a value. A file that couldn't be read is listed too, because "nothing
+found" means little for a file nobody looked at.
 
 File names can be sensitive too, so a name is shown only if it passes the same test as
 a column name; others appear as `file_N`. Pass `show_paths` when you are reading the
@@ -17,12 +18,12 @@ too large, or one it couldn't open doesn't claim to be complete.
 
 from __future__ import annotations
 
+import bisect
+import codecs
 import fnmatch
 import ipaddress
 import os
 import re
-from bisect import bisect_left
-from codecs import BOM_UTF16_BE, BOM_UTF16_LE, BOM_UTF32_BE, BOM_UTF32_LE
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -59,7 +60,15 @@ _DATA_EXTENSIONS = frozenset(
      ".accdb", ".sav", ".zsav", ".por", ".dta", ".sas7bdat", ".xpt", ".duckdb", ".ddb", ".pkl", ".pickle", ".npy", ".npz",
      ".h5", ".hdf5", ".zip", ".gz", ".7z", ".tar"}
 )
-_EXAMPLE_DOMAIN = re.compile(r"(?i)@(?:[\w.-]*\.)?(?:example\.(?:com|org|net)|example|test|invalid|localhost)$|@localhost$|noreply")
+# Binary files that can't hold records as text. Any other file that can't be read is reported.
+_MEDIA_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4",
+     ".wav", ".ogg", ".webm", ".mov", ".avi", ".pyc", ".pyo", ".so", ".dll", ".dylib", ".exe", ".o", ".a", ".class", ".wasm"}
+)
+_BOMS = ((codecs.BOM_UTF32_LE, "utf-32"), (codecs.BOM_UTF32_BE, "utf-32"), (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16"))
+_CONTROL_BYTES = frozenset({*range(0, 9), *range(14, 32), 127})
+_MAX_CONTROL_SHARE = 0.05
+_EXAMPLE_DOMAIN = re.compile(r"(?i)@(?:[\w.-]*\.)?(?:example\.(?:com|org|net)|example|test|invalid|localhost)$|^no-?reply@")
 _DOCUMENTATION_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32"))
 
 
@@ -81,10 +90,11 @@ class ScanReport:
     findings: list[FileFinding] = field(default_factory=list)
     too_large: int = 0
     binary: int = 0
-    unreadable: int = 0
     not_scanned_data: list[str] = field(default_factory=list)
     hidden_names: int = 0
     shows_paths: bool = False
+    #: Every file that may hold data but couldn't be read: too large, or binary of an unknown kind.
+    unscanned: list[str] = field(default_factory=list)
 
     @property
     def totals(self) -> Counter:
@@ -99,8 +109,7 @@ class ScanReport:
 
     @property
     def complete(self) -> bool:
-        """Whether every file that could hold data was read. Images and the like don't count."""
-        return not (self.too_large or self.unreadable or self.not_scanned_data)
+        return not self.unscanned
 
 
 def scan(
@@ -172,7 +181,7 @@ def _excluded(name: str, patterns: Sequence[str]) -> bool:
 
 
 def _display(relative: str, position: int, policy: KeyPolicy, show_paths: bool) -> str:
-    if show_paths or all(policy.shows_name(part) for part in relative.split("/")):
+    if show_paths or all(policy.shows_file_name(part) for part in relative.split("/")):
         return relative
     return f"file_{position}"
 
@@ -187,24 +196,28 @@ def _scan_file(
     include_examples: bool,
     report: ScanReport,
 ) -> None:
-    is_data = os.path.splitext(path)[1].lower() in _DATA_EXTENSIONS
+    extension = os.path.splitext(path)[1].lower()
     try:
         size = os.path.getsize(path)
         if size > max_bytes:
-            if is_data:
+            if extension in _DATA_EXTENSIONS:
                 report.not_scanned_data.append(display)
             report.too_large += 1
+            if extension not in _MEDIA_EXTENSIONS:
+                report.unscanned.append(display)
             return
         with open(path, "rb") as stream:
             data = stream.read()
     except OSError:
-        report.unreadable += 1
+        report.unscanned.append(display)
         return
-    text = _as_text(data)
+    text = _decode(data)
     if text is None:
         report.binary += 1
-        if is_data:
+        if extension in _DATA_EXTENSIONS:
             report.not_scanned_data.append(display)
+        if extension not in _MEDIA_EXTENSIONS:
+            report.unscanned.append(display)
         return
 
     report.scanned += 1
@@ -217,25 +230,35 @@ def _scan_file(
     spans = _resolve(found, text, include_examples)
     if not spans:
         return
-    newlines = [match.start() for match in re.finditer("\n", text)]
     counts: Counter = Counter()
     lines: dict[str, list[int]] = {}
+    breaks = [match.start() for match in re.finditer("\n", text)]
     for span in spans:
         counts[span.kind] += 1
-        line = bisect_left(newlines, span.start) + 1
+        line = bisect.bisect_left(breaks, span.start) + 1
         listed = lines.setdefault(span.kind, [])
         if line not in listed and len(listed) < MAX_LINES_LISTED:
             listed.append(line)
     report.findings.append(FileFinding(path, display, dict(counts), lines))
 
 
-def _as_text(data: bytes) -> str | None:
-    """A file's text, or None if it is binary. Windows tools write UTF-16, which is full of NUL bytes."""
-    if data.startswith((BOM_UTF32_LE, BOM_UTF32_BE)):  # Before UTF-16: one starts with the other's mark.
-        return data.decode("utf-32", errors="replace")
-    if data.startswith((BOM_UTF16_LE, BOM_UTF16_BE)):
-        return data.decode("utf-16", errors="replace")
-    return None if b"\x00" in data[:8192] else data.decode("utf-8", errors="replace")
+def _decode(data: bytes) -> str | None:
+    """The file as text, or None if it is binary. UTF-16 and UTF-32 are text, and common in Windows
+    exports, though they are full of NUL bytes. So is a text file with a stray NUL in it."""
+    for mark, encoding in _BOMS:
+        if data.startswith(mark):
+            return data.decode(encoding, errors="replace")
+    sample = data[:8192]
+    if b"\x00" not in sample:
+        return data.decode("utf-8", errors="replace")
+    half = max(len(sample) // 2, 1)
+    if sample[1::2].count(0) > 0.8 * half and sample[0::2].count(0) < 0.2 * half:
+        return data.decode("utf-16-le", errors="replace")
+    if sample[0::2].count(0) > 0.8 * half and sample[1::2].count(0) < 0.2 * half:
+        return data.decode("utf-16-be", errors="replace")
+    if sum(byte in _CONTROL_BYTES for byte in sample) <= _MAX_CONTROL_SHARE * len(sample):
+        return data.decode("utf-8", errors="replace")
+    return None
 
 
 def _resolve(spans: list[Span], text: str, include_examples: bool) -> list[Span]:
@@ -294,8 +317,6 @@ def _text(report: ScanReport) -> str:
         skipped.append(f"{report.too_large} too large")
     if report.binary:
         skipped.append(f"{report.binary} binary")
-    if report.unreadable:
-        skipped.append(f"{report.unreadable} unreadable")
     head = f"Scanned {report.scanned:,} file{'s' if report.scanned != 1 else ''}"
     lines = [head + (f" ({', '.join(skipped)} skipped)." if skipped else ".")]
 
@@ -318,6 +339,12 @@ def _text(report: ScanReport) -> str:
     if report.not_scanned_data:
         shown = ", ".join(report.not_scanned_data[:12]) + (" …" if len(report.not_scanned_data) > 12 else "")
         lines += ["", f"Not scanned, but these binary data files may hold personal data: {shown}"]
+    others = [name for name in report.unscanned if name not in report.not_scanned_data]
+    if others:
+        shown = ", ".join(others[:12]) + (" …" if len(others) > 12 else "")
+        lines += ["", f"Not scanned, because they are too large or couldn't be read: {shown}"]
+    if report.unscanned:
+        lines.append("--fail-on-findings fails until these are excluded, or --max-size is raised, or --allow-unscanned is passed.")
     if report.hidden_names:
         lines += [
             "",
@@ -339,11 +366,12 @@ def _json(report: ScanReport) -> str:
     return json.dumps(
         {
             "scanned": report.scanned,
-            "skipped": {"too_large": report.too_large, "binary": report.binary, "unreadable": report.unreadable},
+            "skipped": {"too_large": report.too_large, "binary": report.binary},
             "complete": report.complete,
             "totals": dict(report.totals),
             "files": [{"path": item.display, "counts": item.counts, "lines": item.lines} for item in report.findings],
             "not_scanned_data_files": report.not_scanned_data,
+            "unscanned_files": report.unscanned,
             "hidden_file_names": report.hidden_names,
         },
         indent=2,

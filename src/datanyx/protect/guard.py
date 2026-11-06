@@ -5,81 +5,77 @@ This runs as a Claude Code `PreToolUse` hook. It is a guardrail, not a sandbox:
 - It stops the agent *looking at* the protected files with its own tools: Read, Grep,
   Glob, and shell commands that name them. Running a script that reads them is fine,
   and is the intended way to work: `datanyx run -- python report.py`.
-- It reads shell syntax (see `shell.py`), but it can't see inside a script, follow a path
-  built at run time ($DATA/x.csv), or see what a pipe feeds to another program.
+- It can't see inside a script, or follow a path built at run time from a variable the
+  command sets itself (D=data; cat $D/x.csv).
 - It lets `datanyx schema`, `synth`, `check`, `scrub`, `anonymize` and `run` through,
   because those are the ways to work with protected data that don't reveal it.
-- It also refuses changes to the files that set the protection up, or to their folders.
+- It also refuses changes to the files that set the protection up.
 
 Claude Code's own deny rules (written by `datanyx protect`) cover Read, Edit and Write
 too; this hook adds Bash, Grep and Glob, and fails closed if it breaks.
+
+Shell commands are parsed the way a shell reads them (quotes, escapes, redirections,
+substitutions and nested shells) rather than matched as text, and paths are compared after
+resolving them, so `da''ta/x.csv` and `./.claude/./settings.json` mean what they would mean.
 """
 
 from __future__ import annotations
 
-import fnmatch
 import glob
 import json
 import os
 import re
 import subprocess
-from collections.abc import Mapping
+import sys
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 
-from .config import ProtectConfig, find_config
-from .shell import Command, expand_braces, parse
+from .config import CONFIG_DIR, ProtectConfig, find_config
 
 _GLOB_CHARACTERS = re.compile(r"[*?\[]")
 _ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
-_KEY_VALUE = re.compile(r"[\w.-]+=(.+)")
-_DRIVE_PATH = re.compile(r"/(?:cygdrive/|mnt/)?([A-Za-z])(/.*)?")
-_RUN_TIME_PATHS = re.compile(r"\$(?:\{(PWD|HOME)\}|(PWD|HOME)\b)", re.IGNORECASE)
-_PYTHON = re.compile(r"(?:python|pypy)[\d.]*|py")
-_KEYWORDS = frozenset({"{", "}", "!", "if", "then", "elif", "else", "fi", "do", "done", "while", "until"})
-_WRAPPERS = frozenset({"sudo", "env", "time", "nohup", "command", "exec", "nice", "timeout", "xargs"})
+# Words that come before the program. They run what follows, so they aren't the program themselves.
+_WRAPPERS = frozenset({"sudo", "env", "time", "nohup", "command", "exec", "nice", "timeout", "xargs", "{", "!", "then", "do", "else", "elif", "if", "while", "until"})
 _WRAPPER_VALUES = frozenset({"-u", "-g", "-n", "-C", "-p", "-I", "-L", "-P", "-s", "-k", "--user", "--group", "--adjustment"})
+_DRIVE_PATH = re.compile(r"/(?:cygdrive/|mnt/)?([A-Za-z])(/.*)?")
+_RUN_TIME_PWD = re.compile(r"\$(?:\{PWD\}|PWD\b)", re.IGNORECASE)
+_KEY_VALUE = re.compile(r"[\w.-]+=(.+)")
+_MAX_BRACE_RESULTS = 256
 _READ_TOOLS = {"Read": "file_path", "NotebookRead": "notebook_path"}
 _WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 _SHELLS = frozenset({"Bash", "PowerShell"})
+_SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish", "powershell", "pwsh", "cmd"})
+_SHELL_CODE_FLAGS = frozenset({"-c", "-lc", "-ic", "-command", "/c", "/k"})
+_POSIX_SHELL_CODE_FLAG = re.compile(r"-[A-Za-z]*c[A-Za-z]*")
+_POWERSHELLS = frozenset({"powershell", "pwsh"})
 _RECURSIVE_SEARCH = frozenset({"rg", "ag", "ack"})
 _GREPS = frozenset({"grep", "egrep", "fgrep"})
-_CHANGE_FOLDER = frozenset({"cd", "pushd", "chdir", "set-location", "sl"})
-_POSIX_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "fish"})
-_POWERSHELLS = frozenset({"powershell", "pwsh"})
-# Options of launchers that take a value, so that the program they start can be told from it.
-_LAUNCHER_VALUES = frozenset(
-    {
-        "--project", "--directory", "--with", "--with-editable", "--with-requirements", "--python", "-p", "--package",
-        "--group", "--extra", "--env-file", "--index", "--from", "--spec",
-    }
-)
+_CHANGE_DIRECTORY = frozenset({"cd", "pushd", "chdir", "set-location", "sl"})
 # DataNyx commands that work with protected data without showing it.
 _SAFE_COMMANDS = frozenset(
     {"schema", "synth", "check", "scrub", "anonymize", "run", "scan", "diff", "audit", "config", "doctor", "hook", "mcp"}
 )
 # Options that loosen what the user decided: they show names the rules hid, leave terms visible,
-# or point at a settings file the agent wrote. Each also works as a way to test guesses.
+# choose weaker detectors, or point at a settings file the agent wrote. Many also work as a way
+# to test guesses. `--hide` is here for that reason: whether a term comes back as <TERM_1> says
+# whether it is in the data.
 _WEAKENING = frozenset(
     {
-        "--keep-name", "--keep", "--keep-entity", "--allow", "--keep-numbers", "--no-ner", "--show-paths",
-        "--reveal", "--config", "--no-config", "--allow-urls", "--include-examples",
+        "--keep-name", "--keep-names", "--keep", "--keep-entity", "--allow", "--keep-numbers", "--no-ner", "--show-paths",
+        "--reveal", "--config", "--no-config", "--allow-urls", "--allow-env", "--include-examples", "--allow-unscanned",
+        "--hide", "--model", "--backend", "--detectors",
     }
 )
-_RUN_VALUES = frozenset(
-    {
-        "--names-from", "--allow", "--hide", "--model", "--pack", "--backend", "--detectors", "--stdout", "--timeout",
-        "--save-stdout", "--save-stderr",
-    }
-)
+_OUTPUT_OPTIONS = ("-o", "--output", "--audit-log")
 _READ_ONLY_PROGRAMS = frozenset(
-    {
-        "cat", "head", "tail", "less", "more", "type", "grep", "egrep", "fgrep", "rg", "ls", "dir", "wc", "diff", "jq", "stat",
-        "get-content", "gc", "select-string", "sls", "get-childitem", "gci",
-    }
+    {"cat", "head", "tail", "less", "more", "type", "grep", "egrep", "fgrep", "rg", "ls", "dir", "wc", "diff", "jq", "stat", "get-content", "gc", "get-childitem"}
 )
-# Programs that can take a whole folder with them, so naming a folder that holds the setup is enough.
-_REMOVERS = frozenset({"rm", "rmdir", "rd", "del", "erase", "unlink", "shred", "trash", "remove-item", "ri"})
-_MOVERS = frozenset({"mv", "move", "ren", "rename", "move-item", "mi", "rename-item", "rni"})
+_READ_ONLY_GIT = frozenset({"status", "diff", "log", "show", "blame", "ls-files", "ls-tree", "rev-parse", "describe", "grep", "shortlog", "cat-file"})
+_GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+_DESTRUCTIVE_PROGRAMS = frozenset({"rm", "rmdir", "del", "erase", "rd", "ri", "mv", "move", "ren", "rename", "remove-item", "move-item", "rename-item", "rsync", "shred", "unlink", "trash"})
+_MOVERS = frozenset({"mv", "move", "ren", "rename", "move-item", "rename-item"})  # The last path is where it goes: `mv /tmp/x .` is fine.
 # Git subcommands that rewrite files in the working folder when they are given paths.
 _GIT_PATH_WRITERS = frozenset({"checkout", "restore", "reset", "rm", "mv", "clean"})
 # Git subcommands that print file contents from the whole repository unless paths narrow them.
@@ -87,8 +83,13 @@ _GIT_CONTENT = frozenset({"diff", "show", "archive", "format-patch", "bundle", "
 _GIT_PATCH_OPTIONAL = frozenset({"log", "whatchanged"})  # These print contents only if asked to.
 _GIT_PATCH_FLAGS = frozenset({"-p", "-u", "--patch", "--patch-with-stat", "--patch-with-raw"})
 _GIT_SUMMARIES = frozenset({"--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--summary", "-s", "--no-patch"})
-_GIT_GLOBAL_VALUES = frozenset({"-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"})
-_MAX_WALKED = 5000
+_RUN_VALUES = frozenset({"--names-from", "--allow", "--hide", "--model", "--pack", "--backend", "--detectors", "--stdout", "--timeout", "--save-stdout", "--save-stderr"})
+_SETTINGS_NAMES = frozenset({"datanyx.toml", "datanyx.local.toml"})
+_PYTHONS = re.compile(r"(python|pypy)[\d.]*|py")
+_UV_VALUE_OPTIONS = frozenset({"--project", "--directory", "--python", "-p", "--env-file", "--with", "--with-editable", "--with-requirements", "--package", "--group", "--extra", "--index", "--from", "--spec"})
+_PACKAGE = Path(__file__).resolve().parent.parent  # The code of this very hook.
+_MAX_NESTING = 6
+_MAX_GLOB_MATCHES = 20_000
 
 DENY_TOOLS = "Read|Grep|Glob|Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|NotebookRead"
 
@@ -109,12 +110,22 @@ def decide(payload: dict, config: ProtectConfig) -> str | None:
     if tool == "Glob":
         return guard.glob(inputs.get("path"), inputs.get("pattern") or "")
     if tool in _SHELLS:
-        return guard.shell(inputs.get("command") or "", guard.base, tool == "PowerShell")
+        return guard.shell(inputs.get("command") or "", powershell=tool == "PowerShell")
     return None
 
 
-def run_hook(stdin_text: str, environment: Mapping[str, str] | None = None, fallback: Path | None = None) -> str:
-    """The hook's whole job: read the payload, return the JSON to print (empty to allow)."""
+def run_hook(
+    stdin_text: str,
+    environment: Mapping[str, str] | None = None,
+    fallback: Path | None = None,
+    require_config: bool = False,
+) -> str:
+    """The hook's whole job: read the payload, return the JSON to print (empty to allow).
+
+    `datanyx protect` installs the hook with `require_config`: the hook being there means the
+    project is protected, so a missing settings file means someone removed it, not that there
+    is nothing to protect. Claude Code also keeps a session's hooks when their settings go.
+    """
     environment = os.environ if environment is None else environment
     try:
         payload = json.loads(stdin_text)
@@ -126,6 +137,11 @@ def run_hook(stdin_text: str, environment: Mapping[str, str] | None = None, fall
         start = Path(environment.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or fallback or Path.cwd())
         config = find_config(start.resolve())
         if config is None:
+            if require_config:
+                return _deny(
+                    "DataNyx's protection settings (.datanyx/protect.json) are missing, so this was blocked to be safe. "
+                    "Ask the user to run `datanyx protect` again, or to restart Claude Code if protection was removed on purpose."
+                )
             return ""  # Not a protected project.
         reason = decide(payload, config)
     except Exception:
@@ -137,6 +153,256 @@ def _deny(reason: str) -> str:
     return json.dumps(
         {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}
     )
+
+
+# --- reading a shell command -------------------------------------------------------
+
+
+@dataclass
+class _Segment:
+    """One simple command: its words with the shell's quoting removed, and what it redirects."""
+
+    text: str
+    words: list[str] = field(default_factory=list)
+    reads: list[str] = field(default_factory=list)
+    writes: list[str] = field(default_factory=list)
+    inputs: list[str] = field(default_factory=list)  # Here-documents and here-strings: text, not paths.
+    inner: list[str] = field(default_factory=list)  # Code in substitutions and subshells: run from this command's folder.
+
+
+def _closing(text: str, start: int) -> int:
+    """Where the parenthesis opened just before `start` closes, or the end of the text."""
+    depth, position = 1, start
+    quote = None
+    while position < len(text):
+        char = text[position]
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "\\":
+            position += 1
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return position
+        position += 1
+    return len(text)
+
+
+def _parse_shell(command: str, powershell: bool = False) -> list[_Segment]:
+    """The simple commands in `command`. Each holds the code inside its `$(...)`, backticks, `<(...)` or `(...)`."""
+    segments: list[_Segment] = []
+    current = _Segment("")
+    buffer: list[str] = []
+    in_word = False
+    pending: str | None = None  # What the next word is: "read", "write", "input" or "heredoc" (its tag).
+    heredocs: list[tuple[str, _Segment]] = []  # Tags whose text starts on the next line.
+    start = position = 0
+    length = len(command)
+
+    def end_word() -> None:
+        nonlocal in_word, pending
+        if in_word:
+            word = "".join(buffer)
+            if pending == "read":
+                current.reads.append(word)
+            elif pending == "write":
+                current.writes.append(word)
+            elif pending == "input":
+                current.inputs.append(word)
+            elif pending == "heredoc":
+                heredocs.append((word, current))
+            elif pending is None:
+                current.words.append(word)
+            pending = None
+        buffer.clear()
+        in_word = False
+
+    def end_segment(at: int) -> None:
+        nonlocal current, start, pending
+        end_word()
+        pending = None
+        if current.words or current.reads or current.writes or current.inputs or current.inner:
+            current.text = command[start:at]
+            segments.append(current)
+        current = _Segment("")
+        start = at + 1
+
+    while position < length:
+        char = command[position]
+        if char == "'":
+            closing = command.find("'", position + 1)
+            if closing == -1:  # An apostrophe in plain text, not a quote.
+                buffer.append(char)
+                position += 1
+            else:
+                buffer.append(command[position + 1 : closing])
+                position = closing + 1
+            in_word = True
+        elif char == '"':
+            position = _double_quoted(command, position, buffer, current.inner, powershell)
+            in_word = True
+        elif char == "\\":
+            if command[position + 1 : position + 2] in ("\n", "\r"):
+                position += 2  # A line continuation.
+            else:
+                buffer.append(command[position : position + 2])  # Kept: on Windows it separates a path.
+                position += 2
+                in_word = True
+        elif char == "`" and powershell:  # There it is the escape character.
+            buffer.append(command[position + 1 : position + 2])
+            position += 2
+            in_word = True
+        elif char == "`":
+            closing = command.find("`", position + 1)
+            if closing == -1:
+                buffer.append(char)
+                position += 1
+            else:
+                current.inner.append(command[position + 1 : closing])
+                buffer.append(command[position : closing + 1])
+                position = closing + 1
+            in_word = True
+        elif command.startswith("$(", position):
+            closing = _closing(command, position + 2)
+            current.inner.append(command[position + 2 : closing])
+            buffer.append(command[position : closing + 1])
+            position = closing + 1
+            in_word = True
+        elif command.startswith(("<(", ">("), position):
+            end_word()
+            closing = _closing(command, position + 2)
+            current.inner.append(command[position + 2 : closing])
+            position = closing + 1
+        elif char == "(" and not in_word:  # A subshell: its `cd` doesn't outlast it.
+            closing = _closing(command, position + 1)
+            current.inner.append(command[position + 1 : closing])
+            position = closing + 1
+        elif char == "#" and not in_word:  # A comment, which nothing runs.
+            newline = command.find("\n", position)
+            position = length if newline == -1 else newline
+        elif char in " \t":
+            end_word()
+            position += 1
+        elif command.startswith("&>", position):
+            end_word()
+            pending = "write"
+            position += 3 if command.startswith("&>>", position) else 2
+        elif char in "\r\n;|&()":
+            end_segment(position)
+            position += 1
+            if char == "\n" and heredocs:
+                position = _read_heredocs(command, position, heredocs)
+                start = position
+        elif char in "<>":
+            if (in_word and "".join(buffer).isdigit()) or (powershell and char == ">" and "".join(buffer) == "*"):  # The descriptor in 2>file or 0<file.
+                buffer.clear()
+                in_word = False
+            end_word()
+            stop = position
+            while stop < length and command[stop] in "<>":
+                stop += 1
+            operator = command[position:stop]
+            if command[stop : stop + 1] == "&":  # 2>&1, or a descriptor with no file.
+                stop += 1
+                while stop < length and (command[stop].isdigit() or command[stop] == "-"):
+                    stop += 1
+                position = stop
+                continue
+            if command[stop : stop + 1] == "|":
+                stop += 1
+            if operator == "<<<":
+                pending = "input"
+            elif operator.startswith("<<"):
+                pending = "heredoc"
+                if command[stop : stop + 1] == "-":
+                    stop += 1
+            else:
+                pending = "read" if operator == "<" else "write"
+            position = stop
+        else:
+            buffer.append(char)
+            in_word = True
+            position += 1
+    end_segment(length)
+    return segments
+
+
+def _read_heredocs(command: str, position: int, heredocs: list[tuple[str, _Segment]]) -> int:
+    """Give each waiting here-document its text, which isn't commands. Returns the position after them."""
+    for tag, segment in heredocs:
+        closing = re.compile(rf"^\t*{re.escape(tag)}\r?$", re.MULTILINE).search(command, position)
+        segment.inputs.append(command[position : closing.start()] if closing else command[position:])
+        position = closing.end() + 1 if closing else len(command)
+    heredocs.clear()
+    return position
+
+
+def _double_quoted(command: str, start: int, buffer: list[str], inner: list[str], powershell: bool = False) -> int:
+    """Read a double-quoted stretch into `buffer`. Returns the position after it."""
+    closing = _closing_quote(command, start + 1)
+    if closing == -1:  # Not really a quote.
+        buffer.append('"')
+        return start + 1
+    position = start + 1
+    while position < closing:
+        char = command[position]
+        if char == "\\" and command[position + 1 : position + 2] in ('"', "\\", "$", "`"):
+            buffer.append(command[position + 1])
+            position += 2
+        elif command.startswith("$(", position):
+            end = _closing(command, position + 2)
+            inner.append(command[position + 2 : end])
+            buffer.append(command[position : end + 1])
+            position = end + 1
+        elif char == "`" and powershell:
+            buffer.append(command[position + 1 : position + 2])
+            position += 2
+        elif char == "`":
+            end = command.find("`", position + 1)
+            end = closing if end == -1 else end
+            inner.append(command[position + 1 : end])
+            buffer.append(command[position : end + 1])
+            position = end + 1
+        else:
+            buffer.append(char)
+            position += 1
+    return closing + 1
+
+
+def _closing_quote(command: str, position: int) -> int:
+    while position < len(command):
+        char = command[position]
+        if char == "\\":
+            position += 2
+            continue
+        if char == '"':
+            return position
+        if command.startswith("$(", position):
+            position = _closing(command, position + 2) + 1
+            continue
+        position += 1
+    return -1
+
+
+def _without_wrappers(words: list[str]) -> list[str]:
+    tokens = list(words)
+    while tokens:
+        if _ASSIGNMENT.match(tokens[0]):
+            tokens.pop(0)
+        elif _prog(tokens[0]) in _WRAPPERS:
+            tokens.pop(0)
+            while tokens and tokens[0].startswith("-"):  # `sudo -u me rm`: the program is still to come.
+                option = tokens.pop(0)
+                if option in _WRAPPER_VALUES and tokens:
+                    tokens.pop(0)
+        else:
+            break
+    return tokens
 
 
 # --- paths ---------------------------------------------------------------------
@@ -166,26 +432,57 @@ def _drive_form(path: Path) -> str:
     return f"/{posix[0]}{posix[2:]}".lower() if len(posix) > 1 and posix[1] == ":" else ""
 
 
-def _glob_matches(pattern: list[str], path: list[str]) -> bool:
-    """Whether a glob's `/`-separated parts match a path's parts, with `**` for any number of folders."""
-    if not pattern:
-        return not path
-    if pattern[0] == "**":
-        return any(_glob_matches(pattern[1:], path[skip:]) for skip in range(len(path) + 1))
-    return bool(path) and fnmatch.fnmatch(path[0].lower(), pattern[0].lower()) and _glob_matches(pattern[1:], path[1:])
+def _expand_braces(word: str) -> list[str]:
+    """`data/{a,b}.csv` as a shell would expand it. Words without a list are returned as they are."""
+    results: list[str] = []
+    pending = [word]
+    while pending:
+        current = pending.pop()
+        found = _brace_list(current)
+        if found is None:
+            results.append(current)
+            continue
+        opening, closing, options = found
+        pending.extend(current[:opening] + option + current[closing + 1 :] for option in reversed(options))
+        if len(results) + len(pending) > _MAX_BRACE_RESULTS:  # Past this, keep what's left unexpanded.
+            results.extend(pending)
+            break
+    return results
+
+
+def _brace_list(word: str) -> tuple[int, int, list[str]] | None:
+    """The first `{a,b}` in the word: where it starts and ends, and its options."""
+    for opening, character in enumerate(word):
+        if character != "{" or (opening and word[opening - 1] == "$"):
+            continue
+        depth, begin = 0, opening + 1
+        options: list[str] = []
+        for position in range(opening, len(word)):
+            current = word[position]
+            if current == "{":
+                depth += 1
+            elif current == "}":
+                depth -= 1
+                if depth == 0:
+                    if options:
+                        options.append(word[begin:position])
+                        return opening, position, options
+                    break
+            elif current == "," and depth == 1:
+                options.append(word[begin:position])
+                begin = position + 1
+    return None
 
 
 class _Guard:
     def __init__(self, config: ProtectConfig, base: Path) -> None:
         self.config = config
         self.base = base
-        self.tracked: dict[Path, bool] = {}
 
     def resolve(self, text: str, base: Path | None = None) -> Path:
         folder = base or self.base
-        known = {"PWD": str(folder), "HOME": os.path.expanduser("~")}
-        expanded = _RUN_TIME_PATHS.sub(lambda m: known[(m[1] or m[2]).upper()], text)
-        path = Path(os.path.expanduser(_native(expanded)))
+        known = _RUN_TIME_PWD.sub(lambda _: str(folder), text)
+        path = Path(os.path.expanduser(_native(os.path.expandvars(known))))
         return path if path.is_absolute() else folder / path
 
     def protected_hit(self, path: Path) -> Path | None:
@@ -206,6 +503,37 @@ class _Guard:
             "against the real data and see only a scrubbed error."
         )
 
+    # --- what sets the protection up ------------------------------------------------
+
+    def is_setup_file(self, path: Path) -> bool:
+        """A file that sets the protection up. A settings file counts wherever it is, since
+        a command reads the nearest one, so a new one in a sub-folder would replace the real one."""
+        if path.name.lower() in _SETTINGS_NAMES or any(_key(path) == _key(guarded) for guarded in self.config.guarded_files):
+            return True
+        return _inside(path, _PACKAGE) or (_prog(sys.argv[0]) == "datanyx" and _key(path) == _key(sys.argv[0]))
+
+    def is_setup_folder(self, path: Path) -> bool:
+        key = _key(path)
+        return any(key == _key(folder) for folder in (self.config.root / ".claude", self.config.root / CONFIG_DIR, Path.home() / ".claude"))
+
+    def holds_setup(self, path: Path) -> bool:
+        return any(_inside(guarded, path) for guarded in self.config.guarded_files)
+
+    def touches_setup(self, token: str, current: Path, destructive: bool) -> bool:
+        for candidate in _candidates(token):
+            paths = self.expand(candidate, current)
+            for path in paths:
+                if self.is_setup_file(path) or self.is_setup_folder(path) or _inside(path, self.config.root / CONFIG_DIR):
+                    return True
+                if destructive and self.holds_setup(path):
+                    return True
+        return False
+
+    def expand(self, candidate: str, current: Path) -> list[Path]:
+        if _GLOB_CHARACTERS.search(candidate):
+            return [self.resolve(match, current) for match in self.glob_matches(candidate, current)]
+        return [self.resolve(candidate, current)]
+
     # --- tools -------------------------------------------------------------------
 
     def file(self, path: str | None, verb: str) -> str | None:
@@ -219,7 +547,7 @@ class _Guard:
         return self.message(hit)
 
     def tamper(self, path: str | None) -> str | None:
-        if path and any(_inside(self.resolve(path), guarded) for guarded in self.config.guarded_files):
+        if path and self.is_setup_file(self.resolve(path)):
             return "That file sets up DataNyx's protection. Ask the user to change it."
         return None
 
@@ -241,182 +569,122 @@ class _Guard:
 
     def glob(self, path: str | None, pattern: str) -> str | None:
         root = self.resolve(path) if path else self.base
-        hit = self.protected_hit(root)
-        if hit is not None:
-            return self.message(hit)
-        for expansion in expand_braces(pattern):
-            reason = self.embedded(expansion) or self.glob_reach(root, expansion)
+        for expansion in _expand_braces(pattern):
+            hit = self.protected_hit(root) or self.protected_hit(self.resolve(expansion.split("*")[0] or ".", root))
+            if hit is not None:
+                return self.message(hit)
+            reason = self.embedded(expansion) or self.glob_hit(expansion, root)
             if reason:
                 return reason
         return None
-
-    def glob_reach(self, root: Path, pattern: str) -> str | None:
-        """Refuse a pattern that names protected data, or would list what is inside it."""
-        parts = pattern.replace("\\", "/").split("/")
-        fixed = 0
-        while fixed < len(parts) - 1 and not _GLOB_CHARACTERS.search(parts[fixed]):
-            fixed += 1
-        start = self.resolve("/".join(parts[:fixed]) or ".", root)
-        hit = self.protected_hit(start) or (self.protected_hit(self.resolve(pattern, root)) if fixed == len(parts) - 1 else None)
-        if hit is not None:
-            return self.message(hit)
-        if not self.config.block_broad_search:
-            return None
-        rest = parts[fixed:]
-        for protected in self.config.paths:  # File names are often data too: jane_doe_medical.csv.
-            if _inside(protected, start) and self.lists_something(start, protected, rest):
-                return self.broad(protected)
-        return None
-
-    def lists_something(self, start: Path, protected: Path, pattern: list[str]) -> bool:
-        """Whether `pattern`, from `start`, matches a file at or under `protected`."""
-        files = [str(protected)] if os.path.isfile(protected) else []
-        for folder, _folders, names in os.walk(protected):
-            files.extend(os.path.join(folder, name) for name in names)
-            if len(files) > _MAX_WALKED:
-                return True  # Too many to check, so assume the worst.
-        origin = os.path.realpath(start)
-        return any(
-            _glob_matches(pattern, os.path.relpath(os.path.realpath(name), origin).replace(os.sep, "/").split("/"))
-            for name in files
-        )
 
     # --- shell commands ----------------------------------------------------------
 
-    def shell(self, command: str, current: Path, powershell: bool = False) -> str | None:
-        return self.commands(parse(command, powershell), current, powershell)
-
-    def commands(self, commands: list[Command], current: Path, powershell: bool) -> str | None:
-        for command in commands:
-            for scope in command.nested:  # A subshell's `cd` doesn't last, so each gets its own folder.
-                reason = self.commands(scope, current, powershell)
+    def shell(self, command: str, base: Path | None = None, depth: int = 0, powershell: bool = False) -> str | None:
+        if depth > _MAX_NESTING:
+            return "That command is nested too deeply for DataNyx to check, so it was blocked to be safe."
+        if "DATANYX_CONFIG" in command.upper():
+            return "`DATANYX_CONFIG` points DataNyx at another settings file, so the agent can't set it. Ask the user."
+        current = base or self.base
+        for segment in _parse_shell(command, powershell):
+            for code in segment.inner:  # Each from where it runs: a later `cd` doesn't move it.
+                reason = self.shell(code, current, depth + 1, powershell)
                 if reason:
                     return reason
-            words = _strip_prefixes(command.words)
-            if words and _prog(words[0]) in _CHANGE_FOLDER:
-                target = next((word for word in words[1:] if not word.startswith("-")), None)
-                if target:
-                    current = self.resolve(target, current)
-                    hit = self.protected_hit(current)
-                    if hit is not None:
-                        return self.message(hit)
+            tokens = _without_wrappers(segment.words)
+            reason = self.redirections(segment, current)
+            if reason:
+                return reason
+            if tokens and _prog(tokens[0]) in _CHANGE_DIRECTORY and len(tokens) > 1:
+                current = self.resolve(_plain(tokens[1]), current)
+                hit = self.protected_hit(current)
+                if hit is not None:
+                    return self.message(hit)
                 continue
-            reason = self.simple(command, words, current, powershell)
+            if not tokens:
+                continue
+            reason = self.nested(tokens, segment, current, depth) or self.segment(segment, tokens, current, powershell, depth)
             if reason:
                 return reason
         return None
 
-    def simple(self, command: Command, words: list[str], current: Path, powershell: bool) -> str | None:
-        program = _prog(words[0]) if words else ""
-        reason = self.tampering(command, words, program, current)
-        if reason:
-            return reason
-        for target in command.writes:
-            hit = self.protected_hit(self.resolve(target, current))
-            if hit is not None:
-                return f"{self.config.display(hit)} is protected by DataNyx: the real data shouldn't be changed from here."
-
-        if program in _POWERSHELLS and _has_encoded_command(words):
+    def nested(self, tokens: list[str], segment: _Segment, current: Path, depth: int) -> str | None:
+        """Code handed to another shell, or to eval, is checked as a command of its own."""
+        program = _prog(tokens[0])
+        if program == "eval":
+            return self.shell(" ".join(tokens[1:]), current, depth + 1)
+        if program in _POWERSHELLS and _has_encoded_command(tokens):
             return "An encoded PowerShell command can't be checked, so it was blocked. Write the command out."
-        script = _inline_script(words, program)
-        if script is not None:
-            reason = self.shell(script, current, program in _POWERSHELLS)
-            if reason:
-                return reason
-        if program in _POSIX_SHELLS:  # `bash <<EOF` runs the text it is fed.
-            for text in command.inputs:
-                reason = self.shell(text, current)
+        if program in _SHELL_PROGRAMS:
+            for position, token in enumerate(tokens[1:], start=1):
+                if token.lower() in _SHELL_CODE_FLAGS or (program not in _POWERSHELLS and program != "cmd" and _POSIX_SHELL_CODE_FLAG.fullmatch(token)):
+                    return self.shell(" ".join(tokens[position + 1 :]), current, depth + 1, program in _POWERSHELLS)
+            for text in segment.inputs:  # `bash <<EOF` runs the text it is fed.
+                reason = self.shell(text, current, depth + 1)
                 if reason:
                     return reason
+        return None
 
-        sub = None if command.nested else _datanyx_subcommand(words)
-        if sub is not None:
-            return self.datanyx(sub, current, powershell)
+    def redirections(self, segment: _Segment, current: Path) -> str | None:
+        for target in segment.writes:
+            if self.touches_setup(target, current, destructive=True):
+                return "That command changes a file that sets up DataNyx's protection. Ask the user to change it."
+            hit = self.protected_hit(self.resolve(_plain(target), current))
+            if hit is not None:
+                return f"{self.config.display(hit)} is protected by DataNyx: the real data shouldn't be changed from here."
+        return self.references(segment.reads, current)
 
-        reason = self.references([*words, *command.reads, *command.writes], current)
+    def segment(self, segment: _Segment, tokens: list[str], current: Path, powershell: bool = False, depth: int = 0) -> str | None:
+        program = _prog(tokens[0])
+        if program == "git" and self.git_tampers(tokens, current):
+            return "That git command can delete or revert the files that set up DataNyx's protection. Ask the user to run it."
+        if not _is_read_only(tokens):
+            destructive = program in _DESTRUCTIVE_PROGRAMS or (program == "find" and "-delete" in tokens)
+            if self.mentions_setup(segment, tokens, program) or self.setup_in_tokens(tokens, program, current, destructive):
+                return "That command changes a file that sets up DataNyx's protection. Ask the user to change it."
+
+        if not segment.inner:
+            sub = _datanyx_subcommand(tokens)
+            if sub is not None:
+                return self.datanyx(sub, current, powershell, depth)
+        reason = self.references(tokens, current)
         if reason:
             return reason
-        for text in command.inputs:
+        for text in segment.inputs:
             reason = self.embedded(text)
             if reason:
                 return reason
         if program == "git":
-            return self.git_read(words[1:], current)
-        return self.recursive_search(program, words, current)
+            return self.git_read(tokens, current)
+        return self.recursive_search(program, tokens, current)
 
-    # --- changes to the setup ----------------------------------------------------
+    def mentions_setup(self, segment: _Segment, tokens: list[str], program: str) -> bool:
+        """A setup file named anywhere in the command, or its folder in quoted code. A commit message only talks about it."""
+        text = " ".join(_without_option_values(tokens, ("-m", "--message"))) if program == "git" else segment.text
+        text = " ".join([text, *segment.inputs])
+        return self.guard_files_mentioned(text) or self.setup_folder_quoted(text)
 
-    def tampering(self, command: Command, words: list[str], program: str, current: Path) -> str | None:
-        refusal = "That command changes a file that sets up DataNyx's protection. Ask the user to change it."
-        for target in command.writes:
-            if self.names_setup(target, current) or self.guard_files_mentioned(target):
-                return refusal
-        if program == "git":
-            return refusal if self.git_tampers(words[1:], current) else None
-        if not words or program in _READ_ONLY_PROGRAMS:
-            return None
-        text = " ".join([*words, *command.inputs, *command.reads])
-        if self.guard_files_mentioned(text) or self.guard_folder_quoted(text):
-            return refusal
-        if any(self.names_setup(word, current) for word in words[1:]):
-            return refusal
-        return refusal if self.takes_setup_folder(words, current) else None
+    def setup_in_tokens(self, tokens: list[str], program: str, current: Path, destructive: bool) -> bool:
+        last = None
+        if program in _MOVERS:
+            positional = [position for position, token in enumerate(tokens) if position and not token.startswith("-")]
+            last = positional[-1] if positional else None
+        return any(
+            self.touches_setup(token, current, destructive and position != last)
+            for position, token in enumerate(tokens)
+            if position
+        )
 
-    def guard_files_mentioned(self, text: str) -> bool:
+    def setup_folder_quoted(self, text: str) -> bool:
+        """shutil.rmtree('.datanyx'): code that names a folder holding the setup."""
         flat = text.replace("\\", "/").lower()
-        return any(self.relative(path) in flat for path in self.config.guarded_files)
-
-    def guard_folder_quoted(self, text: str) -> bool:
-        """shutil.rmtree('.datanyx'): code that names the folder holding the setup."""
-        flat = text.replace("\\", "/").lower()
-        return any(
-            re.search(rf"""['"](?:\./)?{re.escape(self.relative(folder))}/?['"]""", flat)
-            for folder in self.setup_folders
-        )
-
-    @property
-    def setup_folders(self) -> set[Path]:
-        return {path.parent for path in self.config.guarded_files if path.parent != self.config.root}
-
-    def names_setup(self, word: str, current: Path) -> bool:
-        return any(
-            _inside(path, guarded)
-            for candidate in _candidates(word)
-            for path in self.paths_of(candidate, current)
-            for guarded in self.config.guarded_files
-        )
-
-    def takes_setup_folder(self, words: list[str], current: Path) -> bool:
-        """`rm -rf .datanyx`, `mv .claude x`, `find . -delete`: gone with a folder they sit in."""
-        leading = {_prog(word) for word in words[:4]}
-        arguments = words[1:]
-        if not leading & _REMOVERS and "-delete" not in arguments:
-            if not leading & _MOVERS:
-                return False
-            positional = [word for word in arguments if not word.startswith("-")]
-            arguments = positional[:-1]  # The last is where it goes: `mv /tmp/x .` is fine.
-        return any(self.holds_setup(word, current) for word in arguments)
-
-    def holds_setup(self, word: str, current: Path) -> bool:
-        return any(
-            _inside(guarded, path)
-            for candidate in _candidates(word)
-            for path in self.paths_of(candidate, current)
-            for guarded in self.config.guarded_files
-        )
-
-    def paths_of(self, candidate: str, current: Path) -> list[Path]:
-        if not _GLOB_CHARACTERS.search(candidate):
-            return [self.resolve(candidate, current)]
-        return [self.resolve(match, current) for match in _glob(self.resolve(candidate, current))[:_MAX_WALKED]]
-
-    def relative(self, path: Path) -> str:
-        return self.config.display(path).replace("\\", "/").lower()
+        folders = {path.parent for path in self.config.guarded_files if path.parent != self.config.root}
+        return any(re.search(rf"""['"](?:\./)?{re.escape(self.relative(folder))}/?['"]""", flat) for folder in folders)
 
     # --- git ---------------------------------------------------------------------
 
-    def git_tampers(self, arguments: list[str], current: Path) -> bool:
-        sub, rest, current = _git_parts(arguments, current)
+    def git_tampers(self, tokens: list[str], current: Path) -> bool:
+        sub, rest, current = _git_parts(tokens[1:], current)
         if sub == "stash":
             return any(option in ("-u", "--include-untracked", "-a", "--all") for option in rest)
         if sub not in _GIT_PATH_WRITERS:
@@ -426,81 +694,88 @@ class _Guard:
             return True  # It would delete an uncommitted setup.
         if sub == "reset" and "--hard" in rest:
             return True
-        return any(self.names_setup(word, current) or self.holds_setup(word, current) for word in paths)
+        return any(self.touches_setup(word, current, destructive=True) for word in paths)
 
-    def git_read(self, arguments: list[str], current: Path) -> str | None:
-        sub, rest, current = _git_parts(arguments, current)
+    def git_read(self, tokens: list[str], current: Path) -> str | None:
+        sub, rest, current = _git_parts(tokens[1:], current)
         for word in rest:  # HEAD:data/x.csv, :0:data/x.csv
             if ":" in word and not word.startswith("-") and word.index(":") != 1:
                 inner = word.rsplit(":", 1)[1]
                 for folder in (current, self.config.root):
-                    hit = self.protected_hit(self.resolve(inner or ".", folder)) if inner else None
+                    hit = self.protected_hit(self.resolve(inner, folder)) if inner else None
                     if hit is not None:
                         return self.message(hit)
         if sub == "grep":
             return self.git_grep(rest, current)
-        if not self.git_prints_contents(sub, rest):
+        if not _git_prints_contents(sub, rest):
             return None
-        paths = rest[rest.index("--") + 1 :] if "--" in rest else [
+        narrowed = rest[rest.index("--") + 1 :] if "--" in rest else [
             word for word in rest if not word.startswith("-") and os.path.exists(self.resolve(word, current))
         ]
-        roots = [self.resolve(path, current) for path in paths] or [self.config.root]
+        roots = [self.resolve(word, current) for word in narrowed] or [self.config.root]
         for protected in self.config.paths:
-            if any(_inside(protected, root) for root in roots) and self.is_tracked(protected):
+            if any(_inside(protected, root) for root in roots) and _git_knows(self.config.root, protected):
                 return self.broad(protected)
         return None
 
     def git_grep(self, rest: list[str], current: Path) -> str | None:
         if not self.config.block_broad_search:
             return None
-        paths = rest[rest.index("--") + 1 :] if "--" in rest else None
-        if paths is None:
+        narrowed = rest[rest.index("--") + 1 :] if "--" in rest else None
+        if narrowed is None:
             positional = [word for word in rest if not word.startswith("-")]
             candidates = positional if "-e" in rest else positional[1:]
-            paths = [word for word in candidates if os.path.exists(self.resolve(word, current))]
-        for root in [self.resolve(path, current) for path in paths] or [current]:
+            narrowed = [word for word in candidates if os.path.exists(self.resolve(word, current))]
+        for root in [self.resolve(word, current) for word in narrowed] or [current]:
             covered = self.covers_protected(root)
             if covered is not None:
                 return self.broad(covered)
         return None
 
-    def git_prints_contents(self, sub: str, rest: list[str]) -> bool:
-        if set(rest) & _GIT_SUMMARIES:
-            return False
-        if sub in _GIT_PATCH_OPTIONAL:
-            return bool(set(rest) & _GIT_PATCH_FLAGS)
-        return sub in _GIT_CONTENT
-
-    def is_tracked(self, path: Path) -> bool:
-        """Whether git holds this path now or in its history. Only then can git print it."""
-        if path not in self.tracked:
-            self.tracked[path] = _git_knows(self.config.root, path)
-        return self.tracked[path]
-
     # --- datanyx -----------------------------------------------------------------
 
-    def datanyx(self, sub: tuple[str, list[str]], current: Path, powershell: bool) -> str | None:
+    def guard_files_mentioned(self, text: str) -> bool:
+        flat = text.replace("\\", "/").lower()
+        return any(self.relative(path) in flat for path in self.config.guarded_files)
+
+    def relative(self, path: Path) -> str:
+        return self.config.display(path).replace("\\", "/").lower()
+
+    def datanyx(self, sub: tuple[str, list[str]], current: Path, powershell: bool = False, depth: int = 0) -> str | None:
         command, rest = sub
         if not command:
             return None  # Just `datanyx`: it prints its help.
         if command not in _SAFE_COMMANDS:
             return f"`datanyx {command}` isn't available to the agent. Ask the user to run it."
-        options = rest[: rest.index("--")] if "--" in rest else rest
-        weakening = next((o for o in options if any(_abbreviates(o, name) for name in _WEAKENING)), None)
+        options_part = rest[: rest.index("--")] if "--" in rest else rest
+        weakening = next((o for o in options_part if any(_abbreviates(o, name) for name in _WEAKENING)), None)
         if weakening is not None:
             return f"`{weakening.split('=')[0]}` loosens what the user set up, so the agent can't use it. Ask the user to run it."
+        for value in _option_values(options_part, ("--names-from",)):
+            # Names from the protected data are the user's. Names from a file the agent wrote are guesses being tested.
+            if self.protected_hit(self.resolve(_plain(value), current)) is None and not value.startswith("env:"):
+                return "`--names-from` can only name the protected data here: a file of guessed names would be a way to test them."
+        for value in _option_values(options_part, _OUTPUT_OPTIONS):
+            hit = self.protected_hit(self.resolve(_plain(value), current))
+            if hit is not None:
+                return f"{self.config.display(hit)} is protected by DataNyx: the real data shouldn't be changed from here."
         if command == "run":
-            if any(_abbreviates(option, name) for option in options for name in ("--save-stdout", "--save-stderr")):
+            if any(_abbreviates(option, name) for option in options_part for name in ("--save-stdout", "--save-stderr")):
                 return "`datanyx run --save-stdout/--save-stderr` writes the real output to a file, so the agent can't use it."
-            program = _run_program(rest)
-            return self.commands([Command(words=program)], current, powershell) if program else None
-        if command == "anonymize" and any(_abbreviates(option, "--mapping") for option in options):
+            # Everything that isn't the value of --names-from: `run` also takes a command with no `--` before it.
+            reason = self.references(_without_option_values(rest, ("--names-from",)), current)
+            if reason:
+                return reason
+            program = _without_wrappers(_run_program(rest))
+            if not program:
+                return None
+            started = _Segment(" ".join(program), words=program)
+            return self.nested(program, started, current, depth) or self.segment(started, program, current, powershell, depth)
+        if command == "anonymize" and any(_abbreviates(option, "--mapping") for option in rest):
             return "`datanyx anonymize --mapping` saves the real values to a file, so the agent can't use it."
         return None
 
-    # --- naming protected data ---------------------------------------------------
-
-    def references(self, tokens: list[str], current: Path) -> str | None:
+    def references(self, tokens: Iterable[str], current: Path) -> str | None:
         """A token that names a protected path, directly, by glob, or inside quoted code."""
         for token in tokens:
             for candidate in _candidates(token):
@@ -516,8 +791,20 @@ class _Guard:
                 return reason
         return None
 
+    def glob_matches(self, pattern: str, current: Path) -> list[str]:
+        expanded = Path(os.path.expanduser(pattern))
+        try:
+            found = (
+                glob.iglob(str(expanded), recursive=True)
+                if expanded.is_absolute()
+                else glob.iglob(pattern, root_dir=str(current), recursive=True)
+            )
+            return list(islice(found, _MAX_GLOB_MATCHES))
+        except (OSError, ValueError):
+            return []
+
     def glob_hit(self, pattern: str, current: Path) -> str | None:
-        for match in _glob(self.resolve(pattern, current))[:_MAX_WALKED]:
+        for match in self.glob_matches(pattern, current):
             hit = self.protected_hit(self.resolve(match, current))
             if hit is not None:
                 return self.message(hit)
@@ -526,11 +813,10 @@ class _Guard:
     def embedded(self, text: str) -> str | None:
         """A protected path written inside other text, such as python -c "open('data/x.csv')"."""
         flat = text.replace("\\", "/")
-        lowered = flat.lower()
         for protected in self.config.all_protected:
             absolute = protected.as_posix()
             drive = _drive_form(protected)
-            if absolute.lower() in lowered or _key(protected).replace(os.sep, "/") in lowered or (drive and drive in lowered):
+            if absolute.lower() in flat.lower() or _key(protected).replace(os.sep, "/") in flat.lower() or (drive and drive in flat.lower()):
                 return self.message(protected)
             relative = re.escape(self.config.display(protected).replace("\\", "/"))
             if re.search(rf"""['"](?:\./)?{relative}(?:/|['"])""", flat, re.IGNORECASE):
@@ -560,136 +846,49 @@ class _Guard:
         return None
 
 
-def _glob(pattern: Path) -> list[str]:
-    try:
-        return glob.glob(str(pattern), recursive=True)
-    except (OSError, ValueError):
-        return []
-
-
 def _prog(token: str) -> str:
     name = os.path.basename(token.replace("\\", "/")).lower()
     return name[:-4] if name.endswith((".exe", ".cmd", ".bat")) else name
 
 
-def _strip_prefixes(words: list[str]) -> list[str]:
-    """The command without what runs before it: keywords, `FOO=1`, and wrappers such as `sudo -u me`."""
-    tokens = list(words)
-    while tokens:
-        if tokens[0] in _KEYWORDS or _ASSIGNMENT.match(tokens[0]):
-            tokens.pop(0)
-        elif _prog(tokens[0]) in _WRAPPERS:
-            tokens.pop(0)
-            while tokens and tokens[0].startswith("-"):
-                option = tokens.pop(0)
-                if option in _WRAPPER_VALUES and tokens:
-                    tokens.pop(0)
-        else:
-            break
-    return tokens
+def _plain(token: str) -> str:
+    """A token without shell escapes, unless they are what separates a Windows path."""
+    return token if os.name == "nt" else token.replace("\\", "")
 
 
 def _candidates(token: str) -> list[str]:
-    """The paths a token may mean: itself, an option's value (--opt=x, -fx, if=x, @x), and without shell escapes."""
+    """The paths a token may mean: itself, its brace expansions, without shell escapes, and an option's value
+    (--opt=x, -fx, if=x, @x)."""
     found: list[str] = []
     if token.startswith("-"):
         if "=" in token:
             found.append(token.split("=", 1)[1])
         elif not token.startswith("--") and len(token) > 2 and ("/" in token or "\\" in token or "." in token):
             found.append(token[2:])  # grep -fdata/x.csv
-    elif token:
+    else:
         found.append(token)
         assignment = _KEY_VALUE.fullmatch(token)
         if assignment:
             found.append(assignment[1])  # dd if=data/x.csv
-    for value in list(found):
-        if value.startswith("@"):
-            found.append(value[1:])  # curl -d @data/x.csv
-        if "\\" in value:
-            found.append(value.replace("\\", ""))  # da\ta/x.csv is data/x.csv to a POSIX shell.
-    return [value for value in found if value]
+    candidates: list[str] = []
+    for value in found:
+        for expanded in _expand_braces(value):
+            candidates.append(expanded)
+            if expanded.startswith("@"):
+                candidates.append(expanded[1:])  # curl -d @data/x.csv
+            if "\\" in expanded:
+                candidates.append(expanded.replace("\\", ""))  # da\\ta/x.csv is data/x.csv to a POSIX shell.
+    return [candidate for candidate in candidates if candidate]
 
 
 def _abbreviates(option: str, name: str) -> bool:
-    """Whether a command-line word is this long option, or a shortened form of it."""
+    """Whether a command-line word is this option, or a shortened form of a long one."""
     given = option.split("=")[0]
-    return len(given) > 2 and given.startswith("--") and name.startswith(given)
+    return given == name or (len(given) > 2 and given.startswith("--") and name.startswith(given))
 
 
-def _inline_script(words: list[str], program: str) -> str | None:
-    """The text of `bash -c TEXT`, `eval TEXT`, `pwsh -Command TEXT` or `cmd /c TEXT`."""
-    if program == "eval":
-        return " ".join(words[1:])
-    for position, word in enumerate(words[1:], start=1):
-        lowered = word.lower()
-        if program in _POSIX_SHELLS:
-            if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word):
-                return " ".join(words[position + 1 : position + 2])
-            if not word.startswith(("-", "+")):
-                return None
-        elif program in _POWERSHELLS:
-            if len(lowered) > 1 and "-command".startswith(lowered):
-                return " ".join(words[position + 1 :])
-        elif program == "cmd" and lowered in ("/c", "/k"):
-            return " ".join(words[position + 1 :])
-    return None
-
-
-def _has_encoded_command(words: list[str]) -> bool:
-    return any(len(word) > 1 and "-encodedcommand".startswith(word.lower()) and word.lower().startswith("-e") for word in words[1:])
-
-
-def _skip_options(rest: list[str]) -> list[str]:
-    """What follows a launcher's options, so `uv run --project tools datanyx` finds datanyx."""
-    index = 0
-    while index < len(rest) and rest[index].startswith("-"):
-        index += 2 if rest[index] in _LAUNCHER_VALUES else 1
-    return rest[index:]
-
-
-def _datanyx_subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
-    """(subcommand, the arguments after it) if the command runs datanyx, in any usual way.
-
-    Only datanyx itself counts: `python script.py -m datanyx` and `uv run cat x datanyx` don't."""
-    if not tokens:
-        return None
-    program, rest = _prog(tokens[0]), tokens[1:]
-    if program == "datanyx":
-        return _split_command(rest)
-    if _PYTHON.fullmatch(program):
-        return _python_module(rest)
-    if program == "uv":
-        rest = _skip_options(rest)
-        return _datanyx_subcommand(_skip_options(rest[1:])) if rest[:1] == ["run"] else None
-    if program == "uvx":
-        return _datanyx_subcommand(_skip_options(rest))
-    if program == "pipx":
-        return _datanyx_subcommand(_skip_options(rest[1:])) if rest[:1] == ["run"] else None
-    return None
-
-
-def _python_module(rest: list[str]) -> tuple[str, list[str]] | None:
-    index = 0
-    while index < len(rest) and rest[index].startswith("-"):
-        option = rest[index]
-        if option == "-m":
-            return _split_command(rest[index + 2 :]) if rest[index + 1 : index + 2] == ["datanyx"] else None
-        if option == "-c":
-            return None  # Everything after -c is the program's, whatever it looks like.
-        index += 2 if option in ("-X", "-W") else 1
-    return None
-
-
-def _split_command(rest: list[str]) -> tuple[str, list[str]]:
-    """(command, every other argument) for `datanyx [--config FILE] [--no-config] COMMAND ...`.
-
-    The options before the command are returned with the rest, so they are checked too."""
-    index = 0
-    while index < len(rest) and rest[index].startswith("--"):
-        index += 2 if rest[index] == "--config" else 1
-    if index >= len(rest):
-        return "", rest
-    return rest[index], [*rest[:index], *rest[index + 1 :]]
+def _has_encoded_command(tokens: list[str]) -> bool:
+    return any(len(word) > 2 and "-encodedcommand".startswith(word.lower()) for word in tokens[1:])
 
 
 def _run_program(rest: list[str]) -> list[str]:
@@ -702,6 +901,20 @@ def _run_program(rest: list[str]) -> list[str]:
     return rest[index:]
 
 
+def _is_read_only(tokens: list[str]) -> bool:
+    program = _prog(tokens[0])
+    if program == "git":
+        return _git_subcommand(tokens) in _READ_ONLY_GIT
+    return program in _READ_ONLY_PROGRAMS
+
+
+def _git_subcommand(tokens: list[str]) -> str | None:
+    position = 1
+    while position < len(tokens) and tokens[position].startswith("-"):
+        position += 2 if tokens[position] in _GIT_VALUE_OPTIONS else 1
+    return tokens[position] if position < len(tokens) else None
+
+
 def _git_parts(arguments: list[str], current: Path) -> tuple[str, list[str], Path]:
     """(subcommand, what follows it, the folder it runs in), past git's own options such as -C."""
     index = 0
@@ -710,13 +923,19 @@ def _git_parts(arguments: list[str], current: Path) -> tuple[str, list[str], Pat
         if option == "-C" and index + 1 < len(arguments):
             current = current / arguments[index + 1]
             index += 2
-        elif option in _GIT_GLOBAL_VALUES:
-            index += 2
         else:
-            index += 1
+            index += 2 if option in _GIT_VALUE_OPTIONS else 1
     if index >= len(arguments):
         return "", [], current
     return arguments[index].lower(), arguments[index + 1 :], current
+
+
+def _git_prints_contents(sub: str, rest: list[str]) -> bool:
+    if set(rest) & _GIT_SUMMARIES:
+        return False
+    if sub in _GIT_PATCH_OPTIONAL:
+        return bool(set(rest) & _GIT_PATCH_FLAGS)
+    return sub in _GIT_CONTENT
 
 
 def _git_knows(root: Path, path: Path) -> bool:
@@ -731,3 +950,72 @@ def _git_knows(root: Path, path: Path) -> bool:
         if result.returncode == 0 and result.stdout.strip():
             return True
     return False
+
+
+def _option_values(options: list[str], names: Iterable[str]) -> Iterable[str]:
+    """The values given to these options, as `--name value`, `--name=value` or `-ovalue`."""
+    names = tuple(names)
+    for position, option in enumerate(options):
+        if option in names:
+            if position + 1 < len(options):
+                yield options[position + 1]
+        elif "=" in option and option.split("=", 1)[0] in names:
+            yield option.split("=", 1)[1]
+        elif "-o" in names and option.startswith("-o") and not option.startswith("--") and len(option) > 2:
+            yield option[2:]
+
+
+def _without_option_values(options: list[str], names: tuple[str, ...]) -> list[str]:
+    kept: list[str] = []
+    skip = False
+    for option in options:
+        if skip:
+            skip = False
+        elif option in names:
+            skip = True
+        elif option.split("=", 1)[0] not in names:
+            kept.append(option)
+    return kept
+
+
+def _datanyx_subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
+    """(subcommand, the arguments after it) if this command runs datanyx, and nothing else.
+
+    The word has to be the thing being run: `ls -m datanyx data` and `python -c "..." datanyx`
+    merely mention it, and get none of the allowances datanyx does.
+    """
+    if not tokens:
+        return None
+    program = _prog(tokens[0])
+    if program == "datanyx":
+        return _split_command(tokens[1:])
+    if _PYTHONS.fullmatch(program):
+        position = 1
+        while position < len(tokens) and tokens[position].startswith("-") and tokens[position] not in ("-m", "-c"):
+            position += 2 if tokens[position] in ("-X", "-W") else 1
+        if tokens[position : position + 2] == ["-m", "datanyx"]:
+            return _split_command(tokens[position + 2 :])
+        return None
+    if program == "uvx":
+        position = 1
+        while position < len(tokens) and tokens[position].startswith("-"):
+            position += 2 if tokens[position] in _UV_VALUE_OPTIONS else 1
+        return _datanyx_subcommand(tokens[position:]) if tokens[position : position + 1] == ["datanyx"] else None
+    if program in ("uv", "pipx") and tokens[1:2] == ["run"]:
+        position = 2
+        while position < len(tokens) and tokens[position].startswith("-"):
+            position += 2 if tokens[position] in _UV_VALUE_OPTIONS else 1
+        return _datanyx_subcommand(tokens[position:])
+    return None
+
+
+def _split_command(rest: list[str]) -> tuple[str, list[str]]:
+    """(command, every other argument) for `datanyx [--config FILE] [--no-config] COMMAND ...`.
+
+    The options before the command are returned with the rest, so they are checked too."""
+    index = 0
+    while index < len(rest) and rest[index].startswith("--"):
+        index += 2 if rest[index] == "--config" else 1
+    if index >= len(rest):
+        return "", rest
+    return rest[index], [*rest[:index], *rest[index + 1 :]]

@@ -124,7 +124,8 @@ datanyx scan PATH [options]
 | `--include-examples` | also count example.com emails and loopback or documentation IPs |
 | `--show-paths` | show real file names, even ones that look like data (run it yourself) |
 | `--format` `FORMAT` | output format (default: text). Choices: `text`, `json`. |
-| `--fail-on-findings` | exit with 1 if anything is found, or a file that could hold data couldn't be read, for CI or a pre-commit hook |
+| `--fail-on-findings` | exit with 1 if anything is found or a file that may hold data couldn't be read, for CI or a pre-commit hook |
+| `--allow-unscanned` | with --fail-on-findings, don't fail because a file was too large or couldn't be read |
 
 ## `datanyx protect`
 
@@ -152,6 +153,10 @@ Used by Claude Code, not by hand: reads a PreToolUse payload and refuses calls t
 ```
 datanyx hook [options]
 ```
+
+| Argument | Meaning |
+|---|---|
+| `--require-config` | refuse everything if the protection settings are missing; `protect` installs the hook with this |
 
 ## `datanyx check`
 
@@ -345,6 +350,7 @@ datanyx mcp [options]
 |---|---|
 | `--root` `DIR` | folder the agent may read (repeatable; default: current folder) |
 | `--allow-urls` | accept database URLs from the agent (they may contain passwords) |
+| `--allow-env` `NAME` | let the agent use this environment variable as a database URL, as env:NAME (repeatable); no other variable can be used |
 | `--model` `MODEL` | spaCy NER model (default: the config's, else en_core_web_lg). Repeat it, or separate with commas, to use several, such as one per language |
 | `--pack` `NAME` | a pack of detectors for a field: finance, healthcare (repeatable) |
 | `--backend` `SPEC` | another detector to run as well: presidio[:LANG[:MODEL]], gliner[:MODEL] or ollama[:MODEL[@URL]] (repeatable) |

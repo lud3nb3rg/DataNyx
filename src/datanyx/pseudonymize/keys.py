@@ -12,7 +12,7 @@ import os
 import secrets
 from pathlib import Path
 
-from ..fileperms import restrict_to_owner_or_remove
+from ..fileperms import restrict_to_owner
 from ..sources.base import SourceError
 
 MIN_BYTES = 16
@@ -33,9 +33,10 @@ def load_key(path: str | None) -> bytes:
     key = secrets.token_bytes(32)
     try:
         with open(path, "x", encoding="utf-8", opener=lambda file, flags: os.open(file, flags, 0o600)) as stream:
+            # Windows ignores the mode above, so the file is locked down before the key goes in.
+            if os.name == "nt" and not restrict_to_owner(path):
+                raise SourceError("cannot make the key file private")
             stream.write(key.hex() + chr(10))
     except OSError as error:
         raise SourceError(f"cannot create the key file: {error.strerror}") from None
-    if os.name == "nt":
-        restrict_to_owner_or_remove(path, "the key file")
     return key

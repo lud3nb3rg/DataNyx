@@ -149,8 +149,10 @@ _STREET_NAME_LINK = r"(?:de|du|des|la|le|les|l['’]|d['’]|del|di|da|dos)"
 
 # First match wins ties, so the most specific patterns come first.
 _PATTERNS: tuple[tuple[str, re.Pattern[str], Callable[[str], bool] | None], ...] = (
-    (EMAIL, re.compile(r"[\w.+%'-]+@[\w-]+(?:\.[\w-]+)+"), None),
-    (URL, re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]*://|www\.)[^\s<>\"']*[^\s<>\"'.,;:!?)\]]"), None),
+    # The bounds and the absence of a look-ahead on ID below are what keep these linear: unbounded, a
+    # 100 KB line of "1 1 1 1" or "a-a-a-a" took minutes, because each start scanned the rest of the line.
+    (EMAIL, re.compile(r"[\w.+%'-]{1,128}@[\w-]+(?:\.[\w-]+)+"), None),
+    (URL, re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]{0,31}://|www\.)[^\s<>\"']*[^\s<>\"'.,;:!?)\]]"), None),
     (ID, re.compile(r"(?i)\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b"), None),
     (MAC_ADDRESS, re.compile(r"(?i)\b[0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}\b"), None),
     (IP_ADDRESS, re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"), _is_ip),
@@ -167,7 +169,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], Callable[[str], bool] | None], ...]
     ), None),
     (MONEY, re.compile(r"[$€£¥]\s?\d[\d,. \u00a0]*\d|[$€£¥]\s?\d"), None),
     (MONEY, re.compile(
-        rf"\b\d[\d,. \u00a0]*\s?(?:[$€£¥]|(?:{_CURRENCY_CODES})\b)"
+        rf"\b\d[\d,. \u00a0]{{0,64}}\s?(?:[$€£¥]|(?:{_CURRENCY_CODES})\b)"
     ), None),
     (PHONE, re.compile(r"(?<![\w.])\+?\(?\d[\d \t().-]{5,}\d(?![\w])"), _is_phone),
     (ADDRESS, re.compile(
@@ -178,7 +180,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], Callable[[str], bool] | None], ...]
         rf"(?:{_STREET_NAME_LINK}\s*)*{_CAPITALIZED_WORD}"
         rf"(?:\s+(?:{_STREET_NAME_LINK}\s*)*{_CAPITALIZED_WORD})*"
     ), None),
-    (ID, re.compile(r"\b(?=[\w-]*\d)[^\W_]+(?:[-_][^\W_]+)*\b"), _looks_like_id),
+    (ID, re.compile(r"\b[^\W_]+(?:[-_][^\W_]+)*\b"), _looks_like_id),
 )
 
 

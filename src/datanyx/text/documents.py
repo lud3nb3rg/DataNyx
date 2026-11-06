@@ -3,8 +3,8 @@
 | Format | Result |
 |---|---|
 | text, Markdown, logs, CSV, JSON and similar | the same file, with placeholders |
-| HTML | the same page: tags and layout stay, text and some attributes change |
-| Word (.docx) | the same document: styles, tables and layout stay; a paragraph that had something to hide loses the formatting inside it; author and company are cleared |
+| HTML | the same page: tags and layout stay, text and attributes change; comments and scripts are removed |
+| Word (.docx) | the same document: styles, tables and layout stay; a paragraph that had something to hide loses the formatting inside it; author and company are cleared, tracked deletions are removed, and custom properties and embedded files are emptied |
 | email (.eml) | a text file of the headers and the body, with the people replaced and attachments left out |
 | PDF | a text file of the pages (needs `datanyx[pdf]`); scanned pages with no text can't be read |
 | WhatsApp export | the same chat, with each sender replaced by one placeholder |
@@ -62,7 +62,8 @@ def anonymize_file(path: str | Path, anonymizer: Anonymizer) -> Output:
 
 def anonymize_bytes(data: bytes, suffix: str, anonymizer: Anonymizer) -> Output:
     if suffix in (".html", ".htm"):
-        return Output(_html(_decode(data), anonymizer).encode("utf-8"), suffix)
+        page, notes = _html(_decode(data), anonymizer)
+        return Output(page.encode("utf-8"), suffix, notes)
     if suffix == ".eml":
         return Output(_eml(data, anonymizer).encode("utf-8"), ".txt")
     if suffix == ".docx":
@@ -91,78 +92,84 @@ def _decode(data: bytes) -> str:
 # --- HTML ------------------------------------------------------------------------------------------
 
 _TAG = re.compile(r"<!--.*?-->|<![^>]*>|<[^>]*>", re.DOTALL)
-_COMMENT = re.compile(r"(<!--)(.*?)(-->)", re.DOTALL)
-_ATTRIBUTE = re.compile(
-    r"""(\s(?:title|alt|placeholder|value|content|href|src|srcset|action|cite|poster|aria-[\w-]+|label|summary|data-[\w.:-]*)\s*=\s*)"""
-    r"""(?:(["'])(.*?)\2|([^\s"'=<>`]+))""",
-    re.IGNORECASE | re.DOTALL,
+_ATTRIBUTE = re.compile(r"""(\s([\w:.-]+)\s*=\s*)(?:(["'])(.*?)\3|([^\s"'>]+))""", re.DOTALL)
+# Attributes about layout and behaviour. Any other can hold data: data-*, id, name, src, onclick...
+_LAYOUT_ATTRIBUTES = frozenset(
+    ["class", "style", "type", "rel", "lang", "dir", "width", "height", "align", "valign", "border", "charset", "media", "target", "role", "colspan", "rowspan", "method", "http-equiv", "xmlns", "hidden", "disabled", "checked", "selected", "readonly", "required", "tabindex", "enctype", "loading", "crossorigin", "integrity", "as", "sizes", "bgcolor", "color", "cellpadding", "cellspacing", "span", "scope", "maxlength", "min", "max", "step", "rows", "cols", "autocomplete", "spellcheck", "draggable", "accesskey", "xml:lang"]
 )
 _SKIPPED_TAG = re.compile(r"<(script|style)\b[^>]*>|</(script|style)\s*>", re.IGNORECASE)
-# In a script or stylesheet only strings and comments can hold data: the code around them stays.
-_CODE_TEXT = re.compile(
-    r""""(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`|/\*.*?\*/|(?<![:\w])//[^\n]*""",
-    re.DOTALL,
-)
-_SLOT = re.compile("\ue000(\\d+)\ue001")
-# How a slot's new text goes back: as page text or a quoted attribute (escaped), an unquoted
-# attribute (escaped, and given quotes), or raw, inside a comment or script.
-_TEXT, _QUOTED, _UNQUOTED, _RAW = "text", "quoted", "unquoted", "raw"
+_STYLE_TEXT = re.compile(r""""(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|/\*.*?\*/|(?<=url\()[^)'"]+(?=\))""", re.DOTALL)
+_SLOT = re.compile("(\\d+)")
 
 
-def _html(text: str, anonymizer: Anonymizer) -> str:
-    """Anonymize a page's text, comments, script strings and descriptive attributes. The markup stays."""
-    raws: list[str] = []  # What each slot held, as the anonymizer should read it.
+def _html(text: str, anonymizer: Anonymizer) -> tuple[str, list[str]]:
+    """Anonymize the text and the attributes of a page, leaving the markup alone.
+
+    Comments and scripts are removed: nothing in them is shown to a reader, and code can't be
+    anonymized and still mean anything. Styles stay, as they hold no text of the page, apart from
+    the strings and comments in them.
+    """
+    raws: list[str] = []  # What each slot held, unescaped.
     originals: list[str] = []
-    modes: list[str] = []
+    quoted: list[bool] = []
+    unescaped: set[int] = set()  # Slots inside a stylesheet, where entities mean nothing.
 
-    def slot(raw: str, original: str, mode: str) -> str:
-        raws.append(raw if mode == _RAW else html.unescape(raw))
+    def slot(raw: str, original: str, in_attribute: bool) -> str:
+        raws.append(html.unescape(raw))
         originals.append(original)
-        modes.append(mode)
-        return f"\ue000{len(raws) - 1}\ue001"
+        quoted.append(in_attribute)
+        return f"{len(raws) - 1}"
 
     def attribute(match: re.Match[str]) -> str:
-        prefix, quote, value, bare = match.groups()
-        if bare is not None:
-            return f"{prefix}{slot(bare, bare, _UNQUOTED)}"
-        return f"{prefix}{quote}{slot(value, value, _QUOTED)}{quote}"
+        prefix, name, quote, quoted_value, bare_value = match.groups()
+        if name.lower() in _LAYOUT_ATTRIBUTES:
+            return match.group(0)
+        if quote:
+            return f"{prefix}{quote}{slot(quoted_value, quoted_value, True)}{quote}"
+        return f"{prefix}{slot(bare_value, bare_value, True)}"
 
-    def comment(match: re.Match[str]) -> str:
-        return match.group(1) + slot(match.group(2), match.group(2), _RAW) + match.group(3)
-
-    def code_text(match: re.Match[str]) -> str:
+    def style_text(match: re.Match[str]) -> str:
         whole = match.group()
-        inner = whole[2:-2] if whole.startswith("/*") else whole[2:] if whole.startswith("//") else whole[1:-1]
-        at = whole.index(inner) if inner else 0
-        return whole[:at] + (slot(inner, inner, _RAW) if inner.strip() else inner) + whole[at + len(inner) :]
+        before = 2 if whole.startswith("/*") else 1 if whole[0] in "'\"" else 0
+        inner = whole[before : len(whole) - before]
+        if not inner.strip():
+            return whole
+        unescaped.add(len(raws))
+        return whole[:before] + slot(inner, inner, False) + whole[len(whole) - before :]
 
     out: list[str] = []
     position = 0
-    in_code = False
+    skipping = dropping = False
+    comments = scripts = 0
     for match in _TAG.finditer(text):
         between = text[position : match.start()]
-        if in_code:
-            out.append(_CODE_TEXT.sub(code_text, between))
+        if dropping:
+            scripts += bool(between.strip())
+        elif skipping:
+            out.append(_STYLE_TEXT.sub(style_text, between))
         elif not between.strip():
             out.append(between)
         else:
             lead = between[: len(between) - len(between.lstrip())]
             trail = between[len(between.rstrip()) :]
-            out.append(lead + slot(between.strip(), between.strip(), _TEXT) + trail)
+            out.append(lead + slot(between.strip(), between.strip(), False) + trail)
         tag = match.group()
+        position = match.end()
+        if tag.startswith("<!--"):
+            comments += 1
+            continue
         skipper = _SKIPPED_TAG.fullmatch(tag)
         if skipper and not tag.endswith("/>"):
-            in_code = skipper.group(1) is not None
-        if tag.startswith("<!--"):
-            out.append(_COMMENT.sub(comment, tag))
-        else:
-            out.append(_ATTRIBUTE.sub(attribute, tag))
-        position = match.end()
+            skipping = skipper.group(1) is not None
+            dropping = skipping and skipper.group(1).lower() == "script"
+        out.append(_ATTRIBUTE.sub(attribute, tag))
     tail = text[position:]
-    if in_code:
-        out.append(_CODE_TEXT.sub(code_text, tail))
+    if dropping:
+        scripts += bool(tail.strip())
+    elif skipping:
+        out.append(_STYLE_TEXT.sub(style_text, tail))
     elif tail.strip():
-        out.append(tail[: len(tail) - len(tail.lstrip())] + slot(tail.strip(), tail.strip(), _TEXT))
+        out.append(tail[: len(tail) - len(tail.lstrip())] + slot(tail.strip(), tail.strip(), False))
         out.append(tail[len(tail.rstrip()) :])
     else:
         out.append(tail)
@@ -173,12 +180,14 @@ def _html(text: str, anonymizer: Anonymizer) -> str:
         index = int(match.group(1))
         if results[index] == raws[index]:
             return originals[index]  # Unchanged, so the original spelling (and entities) stay.
-        if modes[index] == _RAW:
-            return results[index]
-        escaped = html.escape(results[index], quote=modes[index] != _TEXT)
-        return f'"{escaped}"' if modes[index] == _UNQUOTED else escaped
+        return results[index] if index in unescaped else html.escape(results[index], quote=quoted[index])
 
-    return _SLOT.sub(fill, "".join(out))
+    notes = []
+    if comments:
+        notes.append(f"{comments} HTML comment(s) were removed")
+    if scripts:
+        notes.append(f"the contents of {scripts} script(s) were removed")
+    return _SLOT.sub(fill, "".join(out)), notes
 
 
 def _html_to_text(markup: str) -> str:
@@ -233,22 +242,29 @@ def _eml(data: bytes, anonymizer: Anonymizer) -> str:
 
 _PARAGRAPH_TAG = re.compile(r"<w:p(?:\s[^>]*?)?(/?)>|</w:p>")
 _RUN_TEXT = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.DOTALL)
-# Text with no place in the visible paragraph: field codes, and what tracked changes deleted.
-_SEPARATE_TEXT = re.compile(r"(<w:(?:instrText|delInstrText|delText)(?:\s[^>]*)?>)(.*?)(</w:(?:instrText|delInstrText|delText)>)", re.DOTALL)
-_TEXT_PART = re.compile(r"word/(?:glossary/)?(document|header\d*|footer\d*|comments\w*|footnotes|endnotes)\.xml")
+_FIELD_CODE = re.compile(r"(<w:instrText(?:\s[^>]*)?>)(.*?)(</w:instrText>)", re.DOTALL)
+_TEXT_PART = re.compile(r"word/(?:glossary/)?(document|header\d*|footer\d*|comments|footnotes|endnotes)\.xml")
 _PERSONAL_PROPERTIES = re.compile(
-    r"(<(?:dc:creator|cp:lastModifiedBy|dc:title|dc:subject|cp:keywords|dc:description|Company|Manager|HyperlinkBase)\b[^>]*>).*?(</)",
+    r"(<(?:dc:creator|cp:lastModifiedBy|dc:title|dc:subject|cp:keywords|dc:description|cp:category|cp:contentStatus|Company|Manager|HyperlinkBase|Template)\b[^>]*>).*?(</)",
     re.DOTALL,
 )
-_PEOPLE_ATTRIBUTE = re.compile(r"""(\b[wW]\d*:(?:author|initials|userId|providerId)=")([^"]*)(")""")
-_DESCRIBING_ATTRIBUTE = re.compile(r"""(\b(?:descr|title|w:tooltip|w:alias)=")([^"]*)(")""")
+# Text a reader no longer sees, kept in the file by tracked changes.
+_TRACKED_REMOVALS = re.compile(r"<w:(del|moveFrom)(?:\s[^>]*[^/>])?>.*?</w:\1>", re.DOTALL)
+_REVISION_AUTHOR = re.compile(r'(\s(?:\w+:)?(?:author|lastModifiedBy)=")([^"]*)(")')
+_REVISION_IDENTITY = re.compile(r'(\s(?:\w+:)?(?:initials|userId|providerId)=")[^"]*(")')
+_DESCRIPTIVE = re.compile(r'(\s(?:\w+:)?(?:descr|title|tooltip)="|<w:(?:alias|tag)\s+w:val=")([^"]*)(")')
+_CUSTOM_XML = re.compile(r"customXml/item\d+\.xml")
+_XML_HEADER = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+# Parts emptied rather than removed: the rest of the package refers to them, and Word complains if they go.
+_EMPTY_PARTS = {
+    "word/people.xml": _XML_HEADER + '<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"/>',
+    "docProps/custom.xml": _XML_HEADER + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"/>',
+}
 _PICTURE_NAME = re.compile(r"""(<(?:wp:docPr|pic:cNvPr)\b[^>]*?\bname=")([^"]*)(")""")
-_XML_TEXT = re.compile(r">[^<]+<")
 _RELATIONSHIP = re.compile(r"<Relationship\b[^>]*>")
 _TARGET = re.compile(r'(Target=")([^"]*)(")')
 _OUTSIDE_LINK = re.compile(r'TargetMode="External"|Target="mailto:', re.IGNORECASE)
-_DATA_PART = re.compile(r"customXml/item\d*\.xml|docProps/custom\.xml")
-_UNREAD_PART = re.compile(r"word/(?:media|embeddings)/.+|docProps/thumbnail\.\w+")
+_LINK_ADDRESS = re.compile(r"([a-z][a-z0-9+.-]*://[^/?#]*)(.*)", re.IGNORECASE | re.DOTALL)
 
 
 def _xml_text(content: bytes) -> str:
@@ -270,37 +286,59 @@ def _docx(data: bytes, anonymizer: Anonymizer) -> Output:
         if sum(info.file_size for info in source.infolist()) > _MAX_UNZIPPED_BYTES:
             raise SourceError("the .docx file is too large to read safely")
         buffer = io.BytesIO()
-        unread = 0
-        cleared_data = False
+        images = embedded = removals = 0
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
             for info in source.infolist():
                 name = info.filename
                 try:
                     content = source.read(name)
-                except (zipfile.BadZipFile, EOFError, OSError, NotImplementedError, RuntimeError, ValueError):
-                    raise SourceError("the .docx file is damaged") from None
-                except Exception as error:  # zlib.error, for one.
+                except Exception as error:  # zipfile's own, and zlib's, for a damaged file.
                     raise SourceError(f"the .docx file is damaged ({type(error).__name__})") from None
-                if _UNREAD_PART.fullmatch(name):
-                    unread += 1
+                if name.startswith("word/media/") or name.startswith("docProps/thumbnail"):
+                    images += 1
+                elif name.startswith("word/embeddings/"):
+                    embedded += 1
+                    content = b""
+                elif name in _EMPTY_PARTS:
+                    content = _EMPTY_PARTS[name].encode("utf-8")
+                elif _CUSTOM_XML.fullmatch(name):
+                    content = (_XML_HEADER + "<root/>").encode("utf-8")
                 elif _TEXT_PART.fullmatch(name):
-                    content = _docx_text_part(_xml_text(content), anonymizer).encode("utf-8")
+                    xml, removed = _TRACKED_REMOVALS.subn("", _xml_text(content))
+                    removals += removed
+                    content = _docx_text_part(_docx_attributes(xml, anonymizer), anonymizer).encode("utf-8")
+                elif name.startswith("word/") and name.endswith(".xml"):
+                    content = _docx_attributes(_xml_text(content), anonymizer).encode("utf-8")
                 elif name in ("docProps/core.xml", "docProps/app.xml"):
                     content = _PERSONAL_PROPERTIES.sub(r"\1\2", _xml_text(content)).encode("utf-8")
-                elif _DATA_PART.fullmatch(name):
-                    content = _XML_TEXT.sub("><", _xml_text(content)).encode("utf-8")
-                    cleared_data = True
-                elif name.endswith(".rels"):
-                    content = _external_targets(_xml_text(content), anonymizer).encode("utf-8")
-                elif name.endswith(".xml") and name.startswith("word/"):
-                    content = _people_attributes(_xml_text(content), anonymizer).encode("utf-8")
+                elif name.startswith("word/_rels/") and name.endswith(".rels"):
+                    content = _link_targets(_xml_text(content), anonymizer).encode("utf-8")
                 target.writestr(info, content)
-    notes = ["document properties such as author and company were cleared, and tracked-change authors replaced"]
-    if cleared_data:
-        notes.append("custom properties and embedded data parts were cleared")
-    if unread:
-        notes.append(f"{unread} embedded image(s), object(s) or preview(s) were not processed")
+    notes = ["document properties such as author and company were cleared"]
+    if images:
+        notes.append(f"{images} embedded image(s) were not processed")
+    if embedded:
+        notes.append(f"{embedded} embedded file(s) were emptied")
+    if removals:
+        notes.append(f"{removals} tracked deletion(s) were removed")
     return Output(buffer.getvalue(), ".docx", notes)
+
+
+def _docx_attributes(xml: str, anonymizer: Anonymizer) -> str:
+    """Who made each revision and comment, and the descriptions on pictures and content controls."""
+
+    def author(match: re.Match[str]) -> str:
+        value = html.unescape(match.group(2))
+        if not value.strip():
+            return match.group()
+        return match.group(1) + xml_escape(anonymizer.placeholder_for("PERSON", value)) + match.group(3)
+
+    def descriptive(match: re.Match[str]) -> str:
+        return match.group(1) + xml_escape(anonymizer.anonymize(html.unescape(match.group(2))), {'"': "&quot;"}) + match.group(3)
+
+    xml = _REVISION_AUTHOR.sub(author, xml)
+    xml = _REVISION_IDENTITY.sub(r"\1\2", xml)
+    return _PICTURE_NAME.sub(descriptive, _DESCRIPTIVE.sub(descriptive, xml))
 
 
 def _paragraphs(xml: str) -> list[list[tuple[int, int]]]:
@@ -343,9 +381,9 @@ def _docx_text_part(xml: str, anonymizer: Anonymizer) -> str:
             changes.append((*run.span(), f'<w:t xml:space="preserve">{xml_escape(new)}</w:t>' if position == 0 else "<w:t></w:t>"))
     result = _apply_changes(xml, changes)
 
-    codes = list(_SEPARATE_TEXT.finditer(result))
+    codes = list(_FIELD_CODE.finditer(result))
     cleaned = anonymizer.anonymize_segments([html.unescape(code.group(2)) for code in codes])
-    result = _apply_changes(
+    return _apply_changes(
         result,
         [
             (*code.span(), code.group(1) + xml_escape(new) + code.group(3))
@@ -353,7 +391,6 @@ def _docx_text_part(xml: str, anonymizer: Anonymizer) -> str:
             if new != html.unescape(code.group(2))
         ],
     )
-    return _people_attributes(_described_attributes(result, anonymizer), anonymizer)
 
 
 def _apply_changes(text: str, changes: list[tuple[int, int, str]]) -> str:
@@ -367,38 +404,17 @@ def _apply_changes(text: str, changes: list[tuple[int, int, str]]) -> str:
     return "".join(out)
 
 
-def _people_attributes(xml: str, anonymizer: Anonymizer) -> str:
-    """Who made a tracked change or comment, wherever Word records it."""
+def _link_targets(xml: str, anonymizer: Anonymizer) -> str:
+    """Where links go, which can name a person. A web address keeps its host, so a link with nothing to hide
+    still works. Parts inside the document aren't touched, or it wouldn't open."""
 
     def replace(match: re.Match[str]) -> str:
-        value = html.unescape(match.group(2)).strip()
-        return match.group(1) + (xml_escape(anonymizer.placeholder_for("PERSON", value)) if value else "") + match.group(3)
-
-    return _PEOPLE_ATTRIBUTE.sub(replace, xml)
-
-
-def _described_attributes(xml: str, anonymizer: Anonymizer) -> str:
-    """Alt text, titles and picture names are text someone wrote."""
-
-    def replace(match: re.Match[str]) -> str:
-        value = html.unescape(match.group(2))
-        return match.group(1) + xml_escape(anonymizer.anonymize(value), {'"': "&quot;"}) + match.group(3)
-
-    return _PICTURE_NAME.sub(replace, _DESCRIBING_ATTRIBUTE.sub(replace, xml))
-
-
-def _external_targets(xml: str, anonymizer: Anonymizer) -> str:
-    """Where links go, which can name a person. Parts inside the document stay, or it wouldn't open."""
-
-    def target(match: re.Match[str]) -> str:
         address = html.unescape(match.group(2))
-        return match.group(1) + xml_escape(anonymizer.anonymize(address), {'"': "&quot;"}) + match.group(3)
+        web = _LINK_ADDRESS.fullmatch(address)
+        new = web.group(1) + anonymizer.anonymize(web.group(2)) if web else anonymizer.anonymize(address)
+        return match.group(1) + xml_escape(new, {'"': "&quot;"}) + match.group(3)
 
-    def relationship(match: re.Match[str]) -> str:
-        whole = match.group()
-        return _TARGET.sub(target, whole) if _OUTSIDE_LINK.search(whole) else whole
-
-    return _RELATIONSHIP.sub(relationship, xml)
+    return _RELATIONSHIP.sub(lambda match: _TARGET.sub(replace, match.group()) if _OUTSIDE_LINK.search(match.group()) else match.group(), xml)
 
 
 # --- PDF ---------------------------------------------------------------------------------------------
@@ -543,7 +559,7 @@ def restore_bytes(data: bytes, suffix: str, mapping: dict[str, str]) -> bytes:
         return _restore_docx(data, mapping)
     text = data.decode("utf-8-sig")
     if suffix in (".html", ".htm"):
-        # Comments and scripts hold placeholders as they are; everywhere else they are escaped.
+        # A stylesheet holds placeholders as they are; everywhere else they are escaped.
         raw = PLACEHOLDER.sub(lambda m: mapping.get(m.group(), m.group()), text)
         return _restore_escaped(raw, mapping, quote=True).encode("utf-8")
     return PLACEHOLDER.sub(lambda m: mapping.get(m.group(), m.group()), text).encode("utf-8")
@@ -567,7 +583,7 @@ def _restore_docx(data: bytes, mapping: dict[str, str]) -> bytes:
     with source, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
         for info in source.infolist():
             content = source.read(info.filename)
-            if info.filename.endswith((".xml", ".rels")):
+            if info.filename.startswith("word/") and info.filename.endswith(".xml"):
                 content = _restore_escaped(content.decode("utf-8"), mapping, quote=False).encode("utf-8")
             target.writestr(info, content)
     return buffer.getvalue()
