@@ -116,6 +116,8 @@ HEADERLESS_NOTE = (
     "the first row looked like data rather than a header, so the columns are called column_N; "
     "if it is a header, list its names under keep_names or with --keep-name"
 )
+# Backwards-compatible alias used by older call sites.
+FIRST_ROW_IS_DATA = HEADERLESS_NOTE
 _CAMEL_CASE = re.compile(r"[a-z0-9][A-Z]")
 _LOWERCASE_NAME = re.compile(r"[a-z][a-z0-9 .-]*")
 _CELL_WORDS = re.compile(r"[a-z]+")
@@ -145,6 +147,11 @@ def first_row_is_data(cells: Iterable[object], keep_names: Collection[str] = ())
         return False
     familiar = sum(any(word in _HEADER_WORDS for word in _CELL_WORDS.findall(cell.lower())) for cell in texts)
     return familiar * 2 < len(present)
+
+
+def row_is_data(row: list[str]) -> bool:
+    """Backward-compatible wrapper for older call sites."""
+    return first_row_is_data(row)
 
 
 def positional_names(count: int) -> list[str]:
