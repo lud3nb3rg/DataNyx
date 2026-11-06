@@ -16,7 +16,7 @@ from ..schema import (
     Union,
     Unknown,
 )
-from .naming import entity_facts, pascal_case, python_field_name, unique, unique_label
+from .naming import entity_facts, field_notes, pascal_case, python_field_name, unique
 
 _FORMAT_TYPES = {
     "date": "_dt.date",
@@ -110,7 +110,8 @@ class _Builder:
                 default = f" = Field({''.join(arguments)})"
             else:
                 default = "" if field.required else " = None"
-            tag = f"  # {unique_label(field)}" if field.unique else ""
+            hints = [item for item in field_notes(field) if item != field.native_type]
+            tag = f"  # {', '.join(hints)}" if hints else ""
             lines.append(f"    {attribute}: {annotation}{default}{tag}")
 
         settings = []

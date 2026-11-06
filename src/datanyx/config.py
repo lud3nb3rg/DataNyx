@@ -36,7 +36,7 @@ ENVIRONMENT_VARIABLE = "DATANYX_CONFIG"
 
 _LIST, _PATHS, _PATH, _STR, _BOOL, _NUMBER = "list of text", "list of paths", "path", "text", "true or false", "number"
 SPEC: dict[str, dict[str, str]] = {
-    "schema": {"map_paths": _LIST, "keep_names": _LIST, "scale_hints": _BOOL, "infer_keys": _BOOL, "views": _BOOL, "max_rows": _NUMBER},
+    "schema": {"map_paths": _LIST, "keep_names": _LIST, "scale_hints": _BOOL, "infer_keys": _BOOL, "column_hints": _BOOL, "views": _BOOL, "max_rows": _NUMBER},
     "anonymize": {
         "model": _STR, "models": _LIST, "hide": _LIST, "keep": _LIST, "keep_entities": _LIST,
         "detectors": _PATHS, "packs": _LIST, "backends": _LIST,
@@ -57,6 +57,7 @@ class Config:
     keep_names: tuple[str, ...] = ()
     scale_hints: bool | None = None
     infer_keys: bool | None = None
+    column_hints: bool | None = None
     views: bool | None = None
     max_rows: int | None = None
     model: str | None = None
@@ -225,6 +226,7 @@ def _build(files: list[Path], data: dict[str, Any]) -> Config:
         keep_names=tuple(get("schema", "keep_names", [])),
         scale_hints=get("schema", "scale_hints"),
         infer_keys=get("schema", "infer_keys"),
+        column_hints=get("schema", "column_hints"),
         views=get("schema", "views"),
         max_rows=get("schema", "max_rows"),
         model=get("anonymize", "model"),
@@ -272,7 +274,7 @@ def describe(config: Config, reveal: bool = False) -> str:
         lines.append(f"  {label}: {text}")
 
     sections = (
-        ("schema", (("map_paths", config.map_paths), ("keep_names", config.keep_names), ("scale_hints", config.scale_hints), ("infer_keys", config.infer_keys), ("views", config.views), ("max_rows", config.max_rows))),
+        ("schema", (("map_paths", config.map_paths), ("keep_names", config.keep_names), ("scale_hints", config.scale_hints), ("infer_keys", config.infer_keys), ("column_hints", config.column_hints), ("views", config.views), ("max_rows", config.max_rows))),
         (
             "anonymize",
             (("model", config.model), ("models", config.models), ("packs", config.packs), ("backends", config.backends), ("hide", config.hide), ("keep", config.keep), ("keep_entities", config.keep_entities),
@@ -316,6 +318,8 @@ STARTER = """# DataNyx project settings. Commands read this file from the projec
 # row counts as an order of magnitude, and yes/no flags for unique and joinable key columns.
 # scale_hints = true
 # infer_keys = true
+# Coarse ranges for each column: distinct values, how often it is missing, how long its text gets.
+# column_hints = true
 
 # Also describe database views (names and columns; a view's definition is never read).
 # views = true

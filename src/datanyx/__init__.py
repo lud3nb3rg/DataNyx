@@ -33,8 +33,8 @@ def extract(
     """
     policy = policy or KeyPolicy()
     target = remote_url(target) or target  # A URL may be named by an environment variable.
-    if policy.infer_keys and policy.evidence is None:
-        policy = replace(policy, evidence=Evidence())
+    if (policy.infer_keys or policy.column_hints) and policy.evidence is None:
+        policy = replace(policy, evidence=Evidence(keys=policy.infer_keys, profiles=policy.column_hints))
     try:
         if os.path.isdir(target):
             if namespace is not None:
@@ -49,13 +49,20 @@ def extract(
     except RecursionError:
         raise SourceError("input is too deeply nested") from None
     schema = apply_selection(schema, policy)
-    if policy.infer_keys and policy.evidence is not None:
+    if (policy.infer_keys or policy.column_hints) and policy.evidence is not None:
         schema = apply_evidence(schema, policy.evidence)
-        if not any(e.foreign_keys or _has_unique(e) for e in schema.entities):
+        if policy.column_hints and not any(_has_profile(e) for e in schema.entities):
+            schema = replace(schema, notes=(*schema.notes, "no column hints: this kind of source can't give them without reading rows, or no table had enough rows"))
+        if policy.infer_keys and not any(e.foreign_keys or e.inferred_unique_keys or _has_unique(e) for e in schema.entities):
             schema = replace(schema, notes=(*schema.notes, "no unique columns or joins were inferred; this kind of source may not support it, or no key-looking column qualified"))
     if policy.scale_hints and not any(entity.scale for entity in schema.entities):
         schema = replace(schema, notes=(*schema.notes, "no row-count hints: this kind of source can't give one without reading it"))
     return schema
+
+
+def _has_profile(entity) -> bool:
+    node = getattr(entity.node, "items", entity.node)
+    return any(field.profile for field in getattr(node, "fields", {}).values())
 
 
 def _has_unique(entity) -> bool:

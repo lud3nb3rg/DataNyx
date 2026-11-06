@@ -69,6 +69,10 @@ def _table(entity: Entity, native: bool) -> str:
     unique = [column for column, field in node.fields.items() if field.unique and not field.unique_declared]
     if entity.view:
         guesses.append("-- a view in the source, shown here as a table")
+    guesses.extend(
+        f"-- inferred unique together (not enforced): {', '.join(map(_quote, columns))}" for columns in entity.inferred_unique_keys
+    )
+    guesses.extend(f"-- {_quote(column)}: {', '.join(field.profile)}" for column, field in node.fields.items() if field.profile)
     if unique:
         guesses.append(f"-- inferred unique (not enforced): {', '.join(map(_quote, unique))}")
     if entity.scale:

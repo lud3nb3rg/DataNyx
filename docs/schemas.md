@@ -169,6 +169,9 @@ JSON arrays and Excel; databases already declare their keys. What comes out is a
 guess, never a count or a value. To keep it from saying more than it should:
 
 - only columns *named* like keys (`id`, `user_id`, `uuid`, `code`, ...) are examined;
+- two such columns that are unique only *together* (an order and its line number) are reported as a composite key, and a
+  table that holds the same two columns, with every pair of values in that key, is a composite join. The two names must
+  be the same in both tables;
 - a table needs at least 20 rows, and the column no nulls and no repeats, to be called unique;
 - a join needs the names to match (`orders.customer_id` with `customers.id`, or the same specific name in both
   tables) and every value to be contained, because small integer ids sit inside each other all the time;
@@ -197,6 +200,41 @@ unique.
 `--views` also describes a database's views (and PostgreSQL's materialized views): their names and columns, marked
 `view`, and in JSON Schema `x-view`. A view's definition is never read, and it has no keys of its own. They are off by
 default so existing output doesn't change; set `views = true` under `[schema]` to turn them on for a project.
+
+## Column hints
+
+`--column-hints` says a little about the *shape* of each column, as ranges and never as numbers or values. It is
+off by default, because each hint says something about the data:
+
+```sh
+datanyx schema ./exports/customers.csv --column-hints --format text
+```
+
+```
+root: array<{
+  id: integer  -- 100 to 999 distinct values, never missing
+  status: string  -- 2 to 9 distinct values, never missing, text up to 9 characters
+  nickname: string | null  -- 100 to 999 distinct values, often missing, text up to 9 characters
+}>
+```
+
+| Hint | Values it can take |
+|---|---|
+| How many different values | `one value only`, `2 to 9`, `10 to 99`, `100 to 999`, `1,000 or more distinct values` |
+| How often it is missing (empty or null) | `never`, `rarely` (under a tenth), `often` (up to half), `mostly missing` |
+| How long the longest text is | `text up to 9`, `99`, `999 characters`, or `1,000 characters or more` |
+
+A column with 3 values is a category an agent can group by; one with 1,000 or more is not. A column that is mostly
+missing is a poor join key. These are the questions the hints are for. Things to know:
+
+- A table needs at least 20 rows, and a table that was cut short by `--max-rows` gets none. Columns with a hidden
+  name get none either.
+- It reads CSV, TSV, JSON Lines, JSON arrays and Excel, as `--infer-keys` does. Databases and the formats that carry
+  their own schema say that no hint is available.
+- Counting distinct values keeps a hash of each value in memory while the file is read, up to 1,000 per column, and throws
+  them away.
+- Set `column_hints = true` under `[schema]` to make it the project's default. For the MCP server it is an option of
+  whoever starts it (`datanyx mcp --column-hints`), and an agent can't turn it on or off.
 
 ## Huge files
 

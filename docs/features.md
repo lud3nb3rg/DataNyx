@@ -11,8 +11,8 @@
 - **Databases are never queried for rows.** Schemas come from the catalog alone, and SQLite
   files are opened with an authorizer that refuses to read user tables.
 - **Optional size and key hints.** `--scale-hints` gives a table's size as an order of magnitude, and
-  `--infer-keys` flags unique columns and likely joins as yes/no guesses. Both are off by default and
-  never show a count or a value.
+  `--infer-keys` flags unique columns, composite keys and likely joins as yes/no guesses, and `--column-hints` gives each
+  column ranges for its distinct values, missing values and text length. All are off by default and never show a count or a value.
 - **Built for big databases.** Declared unique keys, views, `--include`/`--exclude` patterns, `--max-tables` and a
   one-line-per-table `summary` format.
 - **Six output formats:** JSON Schema, a compact text form, TypeScript, Pydantic, SQL and a short summary.

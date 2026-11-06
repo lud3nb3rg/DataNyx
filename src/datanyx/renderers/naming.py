@@ -46,8 +46,14 @@ def unique_label(field) -> str | None:
     return "unique" if field.unique_declared else "unique (inferred)"
 
 
+def field_notes(field) -> list[str]:
+    """Everything a comment beside a field says: its source type, its uniqueness, and any column hints."""
+    return [item for item in (field.native_type, unique_label(field), *field.profile) if item]
+
+
 def entity_facts(entity) -> list[str]:
     """What an entity adds beyond its columns, as plain phrases for comment lines."""
     facts = ["view"] if entity.view else []
     facts += [f"unique ({', '.join(columns)})" for columns in entity.unique_keys]
+    facts += [f"unique ({', '.join(columns)})  -- inferred from the values" for columns in entity.inferred_unique_keys]
     return facts

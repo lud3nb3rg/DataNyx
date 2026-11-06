@@ -4,6 +4,8 @@
 
 **Added**
 
+- `--column-hints` (and `column_hints` under `[schema]`, and `datanyx mcp --column-hints`) gives each column of a CSV, TSV, JSON Lines, JSON array or Excel table ranges for how many distinct values it has, how often it is missing and how long its text gets. Never a number or a value.
+- `--infer-keys` now also finds composite keys (two key-looking columns unique together) and composite joins, marked as guesses in every format.
 - `--max-rows N` (and `max_rows` under `[schema]`) reads only the first N rows of a CSV, TSV, JSON Lines or Excel file, or of a streamed JSON array. A file cut short says so and gets no size hint or key guesses. `datanyx mcp --max-rows` sets it for the server.
 - `datanyx mcp --debug-log FILE` records where each unexpected failure happened (exception types, file, line and function; never a message or value) in a private file for the owner.
 - The test suite runs in parallel with `pytest -n auto`, and CI enforces a coverage floor of 88%.

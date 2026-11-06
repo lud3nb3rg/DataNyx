@@ -76,6 +76,8 @@ class KeyPolicy:
         because a flat record with many string fields is common and legitimate.
     scale_hints: also record each table's row count as an order of magnitude.
     infer_keys: also flag key-looking columns that are unique, and joins between tables.
+    column_hints: also give each column of a table coarse ranges for how many distinct values it has,
+        how often it is missing, and how long its text gets.
     delimiter: the one-character separator of CSV and TSV input, instead of the usual one.
     views: also describe database views (names and columns only; a view's definition is never read).
     include, exclude: glob patterns on table (or file) names; only matching names are described, minus
@@ -93,6 +95,7 @@ class KeyPolicy:
     map_threshold_scalars: int = 32
     scale_hints: bool = False
     infer_keys: bool = False
+    column_hints: bool = False
     delimiter: str | None = None
     views: bool = False
     include: tuple[str, ...] = ()

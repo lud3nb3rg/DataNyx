@@ -17,7 +17,7 @@ from ..schema import (
     Union,
     Unknown,
 )
-from .naming import entity_facts, unique_label
+from .naming import entity_facts, field_notes
 
 _INDENT = "  "
 
@@ -45,7 +45,7 @@ def _entity(entity: Entity) -> str:
 def _field(name: str, field: Field, depth: int) -> str:
     marker = "" if field.required else "?"
     line = f"{name}{marker}: {_node(field.node, depth)}"
-    notes = [item for item in (field.native_type, unique_label(field)) if item]
+    notes = field_notes(field)
     return f"{line}  -- {', '.join(notes)}" if notes else line
 
 

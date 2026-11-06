@@ -232,7 +232,7 @@ def data(tmp_path_factory):
 
 
 def _hint_policies():
-    return [KeyPolicy(), KeyPolicy(scale_hints=True, infer_keys=True)]
+    return [KeyPolicy(), KeyPolicy(scale_hints=True, infer_keys=True, column_hints=True)]
 
 
 def test_library_output_never_holds_the_canary(data):
@@ -254,7 +254,7 @@ def test_command_line_output_never_holds_the_canary(data, capsys, tmp_path):
     runs = []
     for target in [*map(str, made.values()), str(root)]:
         for name in RENDERERS:
-            runs.append(["schema", target, "--format", name, "--scale-hints", "--infer-keys"])
+            runs.append(["schema", target, "--format", name, "--scale-hints", "--infer-keys", "--column-hints"])
         runs.append(["synth", target, "--rows", "30"])
     runs += [["scan", str(root)], ["diff", str(root), str(root)]]
     for argv in runs:
@@ -269,7 +269,7 @@ def test_mcp_tools_never_hold_the_canary(data, tmp_path):
 
     root, made = data
     log = tmp_path / "audit.jsonl"
-    server = create_server([root], audit_log=log, scale_hints=True, infer_keys=True)
+    server = create_server([root], audit_log=log, scale_hints=True, infer_keys=True, column_hints=True)
 
     def call(tool, arguments):
         async def run():

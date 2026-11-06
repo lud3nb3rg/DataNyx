@@ -57,6 +57,8 @@ def _entity(entity: Entity) -> dict:
         ]
     if entity.unique_keys:
         result["x-unique-keys"] = [list(columns) for columns in entity.unique_keys]
+    if entity.inferred_unique_keys:
+        result["x-unique-keys-inferred"] = [list(columns) for columns in entity.inferred_unique_keys]
     if entity.view:
         result["x-view"] = True
     if entity.scale:
@@ -72,6 +74,8 @@ def _field(field: Field) -> dict:
         result["x-unique"] = True
         if field.unique_declared:
             result["x-unique-declared"] = True
+    if field.profile:
+        result["x-profile"] = list(field.profile)
     return result
 
 

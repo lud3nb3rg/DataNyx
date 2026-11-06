@@ -19,7 +19,7 @@ from ..schema import (
     Union,
     Unknown,
 )
-from .naming import entity_facts, pascal_case, unique, unique_label
+from .naming import entity_facts, field_notes, pascal_case, unique
 
 _INDENT = "  "
 _PLAIN_KEY = re.compile(r"[A-Za-z_$][\w$]*")
@@ -84,7 +84,7 @@ def _object(node: Object, depth: int) -> str:
     for name, field in node.fields.items():
         key = name if _PLAIN_KEY.fullmatch(name) else json.dumps(name)
         marker = "" if field.required else "?"
-        notes = [item for item in (field.native_type, unique_label(field)) if item]
+        notes = field_notes(field)
         comment = f" // {', '.join(notes)}" if notes else ""
         lines.append(f"{pad}{key}{marker}: {_node(field.node, depth + 1)};{comment}")
     body = "{\n" + "\n".join(lines) + "\n" + _INDENT * depth + "}"

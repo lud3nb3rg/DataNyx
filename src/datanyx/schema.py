@@ -60,6 +60,8 @@ class Field:
     unique: bool = False
     #: True when the source itself declares the column unique (a constraint or a unique index), so it is no guess.
     unique_declared: bool = False
+    #: Set only by `--column-hints`: coarse ranges taken from the values ("10 to 99 distinct values", "rarely missing").
+    profile: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,8 @@ class Entity:
     scale: str | None = None
     #: Sets of columns the source declares unique together (a constraint or unique index); one column is on its `Field`.
     unique_keys: tuple[tuple[str, ...], ...] = ()
+    #: Sets of columns found unique together by `--infer-keys`. A guess, not a constraint.
+    inferred_unique_keys: tuple[tuple[str, ...], ...] = ()
     #: True for a database view: it has columns but no keys of its own, and holds no data itself.
     view: bool = False
 
