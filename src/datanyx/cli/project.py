@@ -82,11 +82,19 @@ _OPTIONAL = (
 )
 
 
+def _installed(util, module: str) -> bool:
+    """Whether a module can be imported. A dotted name needs its parent package, which may be what is missing."""
+    try:
+        return util.find_spec(module) is not None
+    except ImportError:
+        return False
+
+
 def _run_doctor(args: argparse.Namespace) -> int:
     import importlib.util
 
     for label, module, install in _OPTIONAL:
-        found = importlib.util.find_spec(module) is not None
+        found = _installed(importlib.util, module)
         print(f"{'ok     ' if found else 'missing'}  {label}" + ("" if found else f'  ->  pip install "{install}"'))
     if importlib.util.find_spec("spacy") is not None:
         import spacy.util

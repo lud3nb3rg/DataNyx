@@ -37,19 +37,31 @@ class ArrowSource(Source):
         return unnamed(self.kind, arrow_table_node(arrow_schema, policy, notes, pa), tuple(notes), scale_for(policy, rows))
 
 
+_MAX_BATCHES_COUNTED = 10_000
+
+
 def _read_schema(ipc, pa, source):
     """The schema, and the row count when the file kind can give it from metadata (the stream kind can't)."""
+    if isinstance(source, str):
+        # Memory-mapped, so reading a batch's length touches its header and not its values.
+        with pa.memory_map(source) as mapped:
+            return _read_schema(ipc, pa, mapped)
     try:
         reader = ipc.open_file(source)
     except pa.ArrowInvalid:
         # Not the random-access file kind: try the streaming kind, whose row count would need a full read.
-        if hasattr(source, "seek"):
-            source.seek(0)
-        else:
-            source = pa.OSFile(source)
+        source.seek(0)
         return ipc.open_stream(source).schema, None
+    return reader.schema, _count_rows(reader, pa)
+
+
+def _count_rows(reader, pa):
     try:
-        rows = reader.count_rows()  # From each batch's metadata; no values are read.
+        return reader.count_rows()  # From each batch's metadata; no values are read.
     except (AttributeError, pa.ArrowException):
-        rows = None
-    return reader.schema, rows
+        pass
+    try:
+        batches = reader.num_record_batches
+        return sum(reader.get_batch(i).num_rows for i in range(batches)) if batches <= _MAX_BATCHES_COUNTED else None
+    except (AttributeError, pa.ArrowException):
+        return None

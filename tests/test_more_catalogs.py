@@ -383,3 +383,18 @@ def test_command_line_reads_the_new_formats(tmp_path, capsys):
     assert "1 table" in capsys.readouterr().out
     assert main(["schema", str(path), "--source", "iceberg"]) == 1  # Not an Iceberg table.
     capsys.readouterr()
+
+
+def test_doctor_copes_with_a_missing_parent_package(monkeypatch, capsys):
+    import importlib.util
+
+    real = importlib.util.find_spec
+
+    def find_spec(name, *args):
+        if "." in name:  # A dotted name imports its parent first, which raises when that is what is missing.
+            raise ModuleNotFoundError(f"No module named {name.split('.')[0]!r}")
+        return real(name, *args)
+
+    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
+    assert main(["doctor"]) == 0
+    assert "Snowflake" in capsys.readouterr().out
