@@ -201,6 +201,10 @@ def create_server(
     audit = AuditLog(audit_log)
     hide_terms = list(hide)
 
+    def key_policy(map_paths: Sequence[str] | None = None) -> KeyPolicy:
+        """One policy for every tool, so they all describe the data alike. Only the owner sets the hints."""
+        return KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys)
+
     def tool(function: Callable[..., str]) -> Callable[..., str]:
         """Register a tool: refusals and failures become fixed messages, and every call is recorded."""
         guarded = _guard(function)
@@ -228,9 +232,9 @@ def create_server(
     ) -> str:
         """Describe the structure of a file, folder or database, with no values.
 
-        target: a path to a CSV, TSV, JSON, JSON Lines, YAML, XML, Excel, Parquet or
-            SQLite file, a folder of those, or env:NAME naming an environment variable
-            that holds a database URL.
+        target: a path to a file, a folder of files, or env:NAME naming an environment
+            variable that holds a database URL. Files: CSV, TSV, JSON, JSON Lines, YAML, XML,
+            Excel, Parquet, ORC, Avro, SAS, Stata, SPSS, SQLite, DuckDB, FHIR and HL7 v2.
         format: "text" (compact) or "json-schema".
         recursive: for a folder, include subfolders.
         map_paths: paths such as "$.users" whose keys should all be hidden.
@@ -238,7 +242,7 @@ def create_server(
         """
         if format not in RENDERERS:
             raise SourceError(f"format must be one of {sorted(RENDERERS)}")
-        policy = KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys)
+        policy = key_policy(map_paths)
         schema = extract(
             access.check(target), policy=policy, namespace=database_schema, recursive=recursive
         )
@@ -263,7 +267,7 @@ def create_server(
         """
         if not 1 <= rows <= MAX_SAMPLE_ROWS:
             raise SourceError(f"rows must be between 1 and {MAX_SAMPLE_ROWS}")
-        policy = KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys)
+        policy = key_policy(map_paths)
         schema = extract(access.check(target), policy=policy, namespace=database_schema, recursive=recursive)
         tables = synthesize(schema, rows)
         if len(tables) == 1:
@@ -293,7 +297,7 @@ def create_server(
         if language not in LANGUAGES:
             raise SourceError(f"language must be one of {list(LANGUAGES)}")
         tables, guessed = load_tables(
-            [access.check(target)], [table] if table else [], namespace=database_schema
+            [access.check(target)], [table] if table else [], policy=key_policy(), namespace=database_schema
         )
         return format_diagnostics(run_check(code, tables, language, dialect or guessed))
 
@@ -324,8 +328,8 @@ def create_server(
         old, new: a schema saved with `datanyx schema -o`, or any file, folder or env:NAME database.
         Changes are sorted into breaking, compatible and info.
         """
-        first = snapshot(access.check(old), namespace=database_schema)
-        second = snapshot(access.check(new), namespace=database_schema)
+        first = snapshot(access.check(old), key_policy(), namespace=database_schema)
+        second = snapshot(access.check(new), key_policy(), namespace=database_schema)
         return render_diff(diff_schemas(first, second))
 
     @tool

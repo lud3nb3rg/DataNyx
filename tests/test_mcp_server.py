@@ -149,3 +149,14 @@ def test_cli_http_needs_a_token_and_a_valid_address(monkeypatch, capsys):
     monkeypatch.setenv("DATANYX_MCP_TOKEN", TOKEN)
     assert main(["--no-config", "mcp", "--http", "nonsense"]) == 1
     assert "HOST:PORT" in capsys.readouterr().err
+
+
+def test_every_tool_describes_data_with_the_owners_hints(tmp_path):
+    """A schema saved from describe_data must compare as unchanged against the live file in schema_diff."""
+    (tmp_path / "t.csv").write_text("id,v\n" + "".join(f"{i},x\n" for i in range(1, 30)), encoding="utf-8")
+    server = create_server([tmp_path], scale_hints=True, infer_keys=True)
+    saved = call(server, "describe_data", {"target": str(tmp_path / "t.csv"), "format": "json-schema"}).content[0].text
+    assert "x-scale" in saved and "x-unique" in saved
+    (tmp_path / "saved.json").write_text(saved.split("\n\nNotes:")[0], encoding="utf-8")
+    diff = call(server, "schema_diff", {"old": str(tmp_path / "saved.json"), "new": str(tmp_path / "t.csv")}).content[0].text
+    assert diff == "No differences."
