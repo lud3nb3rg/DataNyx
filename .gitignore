@@ -32,3 +32,5 @@ pseudonyms.key
 *.key
 
 site/
+
+.claude/

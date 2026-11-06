@@ -157,6 +157,9 @@ def classify(name: str, values: Iterable[Any], is_key: bool = False) -> Treatmen
     if kind == "keep":
         return Treatment("keep", reason)
     # With nothing to look at, the name is all there is: the column may fill up after the sample.
+    if is_key and present and not strings and kind not in _NUMERIC_KINDS:
+        # A numeric key or foreign key is permuted whatever its name says, or its joins would break.
+        return Treatment("id", "it is a key, so joins must keep working")
     if present and not strings and kind not in _NUMERIC_KINDS:
         return Treatment("keep", "the name suggests personal data, but the values aren't text", review=True)
     if is_key and kind in ("text",):
