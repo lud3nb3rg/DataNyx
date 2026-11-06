@@ -46,8 +46,7 @@ needs a tool you may not have: [`pypi-attestations`](https://pypi.org/project/py
 Two lists of what is inside come with a release. The GitHub Release has `datanyx-X.Y.Z.cdx.json`, a
 [CycloneDX](https://cyclonedx.org/) list of the package's locked dependencies. The image carries its own SBOM and its
 build provenance in the registry: `docker buildx imagetools inspect ghcr.io/lud3nb3rg/datanyx:X.Y.Z --format '{{ json .SBOM }}'`.
-The verification of the PyPI attestation was run against 0.1.0 when this was written; the GitHub attestations, the signature
-and the SBOM start with the first release made after they were added.
+Release 0.1.0 predates the GitHub attestations, the signature and the SBOM, so only its PyPI attestation can be checked. Later releases are built with all of them.
 
 ## As a pre-commit hook
 
@@ -57,7 +56,7 @@ kind, count and line) and never the value. Add this to `.pre-commit-config.yaml`
 ```yaml
 repos:
   - repo: https://github.com/lud3nb3rg/DataNyx   # this repository
-    rev: v0.1.0
+    rev: v0.2.0
     hooks:
       - id: datanyx-scan
 ```
@@ -76,7 +75,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: lud3nb3rg/DataNyx@v0.1.0           # this repository
+      - uses: lud3nb3rg/DataNyx@v0.2.0           # this repository
         with:
           command: scan
           path: .
@@ -86,7 +85,7 @@ jobs:
 For a schema check on pull requests, save the schema you expect and compare against it:
 
 ```yaml
-      - uses: lud3nb3rg/DataNyx@v0.1.0
+      - uses: lud3nb3rg/DataNyx@v0.2.0
         with:
           command: diff
           path: schema.json data/export.csv     # the earlier schema, then the later one

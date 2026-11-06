@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "datanyx"
-version = "0.1.0"
+version = "0.2.0"
 description = "Turn sensitive data into a value-free schema that AI agents can work from."
 readme = "README.md"
 requires-python = ">=3.10"

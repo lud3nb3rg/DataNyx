@@ -15,7 +15,7 @@ from .sources import Source, SourceError, describe_folder, resolve_source, table
 from .sources.files import remote_url
 from .text import DEFAULT_MODEL
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def extract(

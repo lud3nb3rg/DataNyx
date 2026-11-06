@@ -23,7 +23,7 @@ inputs:
     required: false
     default: "false"
   version:
-    description: "The datanyx version to install (a pip specifier such as ==0.1.0). Empty installs the latest."
+    description: "The datanyx version to install (a pip specifier such as ==0.2.0). Empty installs the latest."
     required: false
     default: ""
   python-version:

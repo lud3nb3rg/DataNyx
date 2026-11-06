@@ -2,7 +2,7 @@
 #
 #   repos:
 #     - repo: lud3nb3rg/DataNyx
-#       rev: v0.1.0
+#       rev: v0.2.0
 #       hooks:
 #         - id: datanyx-scan
 #

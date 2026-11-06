@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.2.0 (2026-11-06)
+
+New sources and options, fixes from a full security audit, and releases that can be verified. Several of the fixes change behaviour: read **Changes that may need action** below before upgrading.
+
 **Added**
 
 - Releases are checkable: PyPI attestations, a GitHub build-provenance attestation for the wheel and sdist, a CycloneDX SBOM, and a signed container image with provenance and an SBOM. A GitHub Release is created from `CHANGELOG.md` when a version is tagged. See [Checking a release](docs/deployment.md#checking-a-release).
