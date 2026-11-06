@@ -21,7 +21,7 @@ from ..scale import scale_for
 from ..schema import DataSchema, Entity
 from .base import Source, SourceError
 from .files import EMPTY_TABLE, missing_extra, records_observation
-from .sql_source import _resolve_env
+from .sql_source import _resolve_env, is_mongodb_url
 
 SAMPLE_SIZE = 500
 MAX_COLLECTIONS = 100
@@ -33,7 +33,7 @@ class MongoDbSource(Source):
     kind = "mongodb"
 
     def matches(self, target: str) -> bool:
-        return target.startswith(_SCHEMES)
+        return is_mongodb_url(target)
 
     def extract(self, target: str, policy: KeyPolicy, namespace: str | None = None) -> DataSchema:
         url = _resolve_env(target)

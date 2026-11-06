@@ -38,7 +38,7 @@ mapping files inside a path you protect, or outside the project, since the guard
 | `-o`, `--output` | The new file. Existing files are never overwritten, and a database is rebuilt, not edited |
 | `--plan` | Show what each column would become, and stop |
 | `--key-file FILE` | A secret key, created if missing. **With the same key, the same value gets the same fake in every run**, so a fresh export lines up with the last. Without it, a new random key is used and the fakes won't match another run's |
-| `--mapping FILE` | Also save which fake stands for which real value. It holds real data |
+| `--mapping FILE` | Also save which fake stands for which real value, for every kind. It holds real data |
 | `--column NAME=KIND` | Treat a column as this kind (repeatable); `TABLE.COLUMN=KIND` for one table of a database |
 | `--keep-column NAME` | Leave a column as it is |
 | `--strict` | Replace text columns that weren't recognised, instead of keeping them |
@@ -49,22 +49,28 @@ database, its name, then what its values look like. The kinds are `name`, `first
 `email`, `phone`, `address`, `city`, `company`, `postal`, `id`, `token`, `date`, `text`, `ip`, `url`,
 `category` (distinct words), `keep` and `drop`.
 
-- **Names, emails, companies, cities and addresses** come from word lists, so they look real. Two
-  different real names never get the same fake. Emails are `first.last42@example.com`.
+- **Names, emails, companies, cities and addresses** are made of invented, pronounceable words, such as
+  `Brealkos Daventi`, in a space large enough that two real values practically never draw the same fake.
+  So a value's fake doesn't depend on what else is in the file, and a fresh export lines up with the last.
+  Two different real values never share a fake: should they clash, the later one is drawn again, and with
+  `--key-file` a note says that fake may differ in another run. Emails are `first.last42@example.com`.
 - **Whole-number ids** go through a keyed permutation of their own range, so the result has the same
   number of digits and **two ids can never become one**. That is what keeps foreign keys valid: the
   `PRAGMA foreign_key_check` of a pseudonymized database is clean, and joins return the same row counts.
 - **Phone numbers, postal codes, account numbers and other codes** keep their shape: a digit becomes a
-  digit, a letter a letter, `+44` and the punctuation stay.
+  digit, a letter a letter, `+44` and the punctuation stay. In `+14155552671` nothing shows where the
+  country code ends, so only `+1` stays. A number stored as a number stays one.
 - **Dates** are kept, except birth dates, which move by one secret number of days, so the gaps between
   them survive. A date not written as `YYYY-MM-DD` is kept and counted.
 - **Free text** goes through [text anonymization](anonymization.md#text-anonymization), so names inside it become
   placeholders like `<PERSON_1>` (these don't match the fake name in the `name` column).
-- **JSON keys** work the same as columns, wherever the key appears. A key that is itself data, such as
-  an email used as a key, is replaced, and agrees with the same email used as a value. Text under such a
-  key is replaced too, as is a CSV cell past the last column: there's no name to judge either by.
+- **JSON keys** work the same as columns, wherever the key appears, even first seen after the sample. A key
+  that is itself data, such as an email used as a key, is replaced, and agrees with the same email used as a
+  value. Text under such a key, or with no key at all, is replaced going by what it looks like.
+- **CSV**: blank lines before the header are fine, columns are told apart by position even if two share a
+  name, and a cell past the last column is replaced, as there's no name to judge it by.
 - **SQLite**: tables, keys and indexes are copied, and views too. **Triggers are left out**, since they
-  can hold data or change values, and virtual tables are skipped. So are column defaults, `CHECK` constraints,
+  can hold data or change values, and virtual tables are skipped with what they keep their contents in. So are column defaults, `CHECK` constraints,
   comments, and any view or index with a literal in it, as those are text that can hold real values. Binary
   values are emptied unless you name the column with `--keep-column`. The notes at the end say what happened.
 
@@ -79,6 +85,7 @@ database, its name, then what its values look like. The kinds are `name`, `first
 - Anyone with the key file can test a guess ("is this the fake for Ana Silva?"), so keep it with the
   real data, not with the copy. The key file is readable by its owner only.
 - A phone number or postal code made by changing digits can, by chance, be a real one.
+- Fakes from before this format changed won't match: re-export everything that has to line up.
 
 ```python
 from datanyx.pseudonymize import Options, Pseudonymizer, load_key, pseudonymize_file

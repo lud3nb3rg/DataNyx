@@ -128,9 +128,15 @@ def _by_values(values: list[str]) -> tuple[str, str] | None:
     return None
 
 
+# What a name can promise about a column whose values are numbers: 14155552671 is still a phone.
+_NUMERIC_KINDS = frozenset({"id", "date", "phone", "postal", "token"})
+
+
 def classify(name: str, values: Iterable[Any], is_key: bool = False) -> Treatment:
-    """What one column holds. Columns that aren't text can only be ids (or kept)."""
+    """What one column holds. A name that says text-only data doesn't fit numbers, so those are kept and flagged."""
     sample = list(values)
+    has_binary = any(isinstance(v, (bytes, memoryview)) for v in sample)
+    present = [v for v in sample if v is not None and v != ""]
     strings = [v for v in sample if isinstance(v, str) and v.strip()]
     # Text worth a second look: not a number or a date written as text.
     texty = [v for v in strings if not _is_number(v) and not _DATE_VALUE.fullmatch(v.strip())]
@@ -146,12 +152,13 @@ def classify(name: str, values: Iterable[Any], is_key: bool = False) -> Treatmen
     if guess is None:
         if is_key:
             return Treatment("id", "it is a key, so joins must keep working")
-        return Treatment("keep", "nothing personal was recognised", review=bool(texty))
+        return Treatment("keep", "nothing personal was recognised", review=bool(texty) or has_binary)
     kind, reason = guess
     if kind == "keep":
         return Treatment("keep", reason)
-    if not strings and kind not in ("id", "date"):
-        return Treatment("keep", "it isn't text", review=False)
+    # With nothing to look at, the name is all there is: the column may fill up after the sample.
+    if present and not strings and kind not in _NUMERIC_KINDS:
+        return Treatment("keep", "the name suggests personal data, but the values aren't text", review=True)
     if is_key and kind in ("text",):
         return Treatment("id", "it is a key, so joins must keep working")
     return Treatment(kind, reason)

@@ -4,8 +4,10 @@ Everything is derived from a secret key with HMAC, so the fake for a value is th
 column, table and file that holds it (joins keep working) and, with the same key, in every run.
 Without the key nobody can work out which real value a fake came from, or test a guess.
 
-- Names, emails, companies, cities and addresses come from word lists and look plausible. Two
-  different real names never get the same fake: a clash is re-drawn.
+- Names, emails, companies, cities and addresses are made of invented, pronounceable words. There
+  are enough of them that two real values practically never draw the same fake, so a value's fake
+  doesn't depend on what else is in the file, and files made with one key line up. Should two ever
+  clash, the later one is re-drawn and `redraws` counts it: that fake may differ in another run.
 - Whole-number ids go through a keyed permutation of their own range, so the result has the same
   number of digits and two ids can never become one. This is what keeps foreign keys valid.
 - Other codes (phone numbers, postal codes, account numbers) keep their shape: a digit becomes a
@@ -27,12 +29,13 @@ from typing import Any
 
 from ..text.anonymizer import Anonymizer
 
-FIRST_NAMES = ["Ana", "Omar", "Li", "Sofia", "Noah", "Amara", "Jonas", "Mei", "Lucas", "Priya", "Elena", "Tomas", "Hana", "Marco", "Ines", "Kofi", "Yara", "Pavel", "Nadia", "Ravi", "Clara", "Idris", "Mila", "Hugo", "Zoe", "Arjun", "Freya", "Diego", "Aiko", "Leon", "Nora", "Samir", "Vera", "Felix", "Lena", "Tariq", "Alma", "Bruno", "Dina", "Emil", "Greta", "Haruto", "Isla", "Jamal", "Kira", "Luca", "Maya", "Nico", "Olga", "Pia", "Quinn", "Rosa", "Sven", "Tess", "Uma", "Vik", "Wren", "Xavi", "Yuki", "Zane"]
-LAST_NAMES = ["Silva", "Haddad", "Chen", "Rossi", "Okafor", "Novak", "Larsen", "Tanaka", "Moreau", "Singh", "Duarte", "Kowal", "Berg", "Costa", "Dubois", "Eze", "Fischer", "Garcia", "Horvat", "Ivanov", "Jensen", "Khan", "Lopez", "Meyer", "Nakamura", "Olsen", "Petrov", "Quinn", "Reyes", "Santos", "Tran", "Ueda", "Vogel", "Weber", "Yilmaz", "Zhang", "Adler", "Brandt", "Castro", "Dalton", "Ellis", "Ford", "Grant", "Hale", "Ito", "Joshi", "Klein", "Lund", "Mori", "Nash", "Ortiz", "Pike"]
-CITIES = ["Lisbon", "Osaka", "Leeds", "Austin", "Porto", "Lyon", "Turin", "Quito", "Bergen", "Kyoto", "Cork", "Gdansk", "Malmo", "Brno", "Tartu", "Split", "Bilbao", "Ghent", "Aarhus", "Utrecht", "Graz", "Salerno", "Vigo", "Cadiz", "Tampere", "Oulu", "Riga", "Kaunas", "Plovdiv", "Varna", "Cluj", "Bari"]
-COMPANIES = ["Acme Labs", "Northwind Trading", "Globex", "Initech Works", "Umbra Foods", "Blue Heron Co", "Cobalt Systems", "Delta Freight", "Ember Analytics", "Fjord Logistics", "Garnet Health", "Harbor Mills", "Indigo Retail", "Juniper Energy", "Kestrel Media", "Lantern Partners", "Meadow Farms", "Nectar Foods", "Onyx Capital", "Pebble Studio", "Quartz Labs", "Ripple Payments"]
-STREETS = ["Maple Street", "Harbor Road", "Station Avenue", "Orchard Lane", "Mill Court", "Cedar Way", "Elm Street", "Park Road", "Bridge Street", "Hill Avenue", "Lake Drive", "River Road", "Church Lane", "Garden Close", "Market Square", "Forest Way"]
 WORDS = ["amber", "basil", "cobalt", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper", "kestrel", "lantern", "meadow", "nectar", "onyx", "pebble", "quartz", "ripple", "saffron", "timber", "umber", "velvet", "willow", "yarrow", "zephyr"]
+_ONSETS = ("b", "br", "c", "d", "dr", "f", "g", "gr", "h", "j", "k", "kr", "l", "m", "n", "p", "r", "s", "st", "t", "tr", "v", "w", "z")
+_VOWELS = ("a", "e", "i", "o", "u", "ai", "ea", "io")
+_CODAS = ("", "", "", "n", "r", "l", "s")
+_STREET_TYPES = ("Street", "Road", "Avenue", "Lane", "Court", "Way", "Drive", "Close", "Square")
+_COMPANY_TYPES = ("Labs", "Trading", "Foods", "Works", "Systems", "Freight", "Analytics", "Logistics", "Health", "Mills", "Retail", "Energy", "Media", "Partners", "Capital")
+_MAX_DRAWS = 64  # Past this, a kind's fakes are running out, so a serial number is added.
 
 _DATE_PREFIX = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(.*)$", re.DOTALL)
 KINDS = (
@@ -56,6 +59,8 @@ class Pseudonymizer:
         self.pairs: dict[str, dict[str, str]] = {}
         self.counts: dict[str, int] = {}
         self.unparsed: dict[str, int] = {}
+        #: Fakes drawn again after a clash. These may not line up with another run's.
+        self.redraws = 0
         digest = hmac.new(key, b"date-offset", hashlib.sha256).digest()
         offset = int.from_bytes(digest[:4], "big") % 730 - 365
         self._days = offset or 97
@@ -66,6 +71,7 @@ class Pseudonymizer:
         if value is None or value == "" or kind == "keep":
             return value
         if kind == "drop":
+            self.counts[kind] = self.counts.get(kind, 0) + 1
             return None
         if isinstance(value, bool):
             return value
@@ -73,6 +79,8 @@ class Pseudonymizer:
         result = handler(value)
         if result != value:
             self.counts[kind] = self.counts.get(kind, 0) + 1
+            if self._record:
+                self.pairs.setdefault(kind, {}).setdefault(str(result), str(value))
         return result
 
     # --- derivation -----------------------------------------------------------------------------
@@ -92,57 +100,61 @@ class Pseudonymizer:
             return cached
         taken = self._taken.setdefault(kind, set())
         attempt = 0
-        while True:
-            fake = make(self._random(kind, normalized, attempt))
-            if fake not in taken:
-                break
+        fake = make(self._random(kind, normalized))
+        while fake in taken:
             attempt += 1
+            self.redraws += 1
+            rng = self._random(kind, normalized, attempt)
+            fake = make(rng)
+            if attempt >= _MAX_DRAWS:  # The range of serial numbers grows, so this always ends.
+                fake = _with_serial(fake, rng.randrange(10 ** (3 + attempt // _MAX_DRAWS)))
         taken.add(fake)
         self._cache[(kind, normalized)] = fake
-        if self._record:
-            self.pairs.setdefault(kind, {}).setdefault(fake, text)
         return fake
 
     # --- kinds -----------------------------------------------------------------------------------
 
     def _name(self, value: Any) -> str:
-        return self._unique("name", value, lambda rng: f"{rng.choice(FIRST_NAMES)} {rng.choice(LAST_NAMES)}")
+        return self._unique("name", value, lambda rng: f"{_word(rng)} {_word(rng)}")
 
     def _first_name(self, value: Any) -> str:
-        return self._random("first_name", str(value).strip().casefold()).choice(FIRST_NAMES)
+        return self._unique("first_name", value, _word)
 
     def _last_name(self, value: Any) -> str:
-        return self._random("last_name", str(value).strip().casefold()).choice(LAST_NAMES)
+        return self._unique("last_name", value, _word)
 
     def _email(self, value: Any) -> str:
         def make(rng: random.Random) -> str:
-            return f"{rng.choice(FIRST_NAMES).lower()}.{rng.choice(LAST_NAMES).lower()}{rng.randint(10, 99)}@example.com"
+            return f"{_word(rng).lower()}.{_word(rng).lower()}{rng.randint(10, 99)}@example.com"
 
         return self._unique("email", value, make)
 
     def _city(self, value: Any) -> str:
-        return self._random("city", str(value).strip().casefold()).choice(CITIES)
+        return self._unique("city", value, _word)
 
     def _company(self, value: Any) -> str:
-        return self._random("company", str(value).strip().casefold()).choice(COMPANIES)
+        return self._unique("company", value, lambda rng: f"{_word(rng)} {rng.choice(_COMPANY_TYPES)}")
 
     def _address(self, value: Any) -> str:
-        rng = self._random("address", str(value).strip().casefold())
-        return f"{rng.randint(1, 250)} {rng.choice(STREETS)}"
+        return self._unique("address", value, lambda rng: f"{rng.randint(1, 250)} {_word(rng)} {rng.choice(_STREET_TYPES)}")
 
     def _category(self, value: Any) -> str:
-        return self._unique("category", value, lambda rng: f"{rng.choice(WORDS)}-{rng.randint(100, 999)}")
+        return self._unique("category", value, lambda rng: f"{rng.choice(WORDS)}-{rng.randint(100000, 999999)}")
 
-    def _phone(self, value: Any) -> str:
+    def _phone(self, value: Any) -> str | int | float:
         text = str(value)
-        keep = 0
-        if text.lstrip().startswith("+"):
-            match = re.match(r"\s*\+\d+", text)
-            keep = match.end() if match else 0  # The country code stays.
-        return _shape(text, self._random("phone", re.sub(r"\D", "", text)), keep)
+        digits = re.sub(r"\D", "", text)
+        keep = _country_code_length(text)
+        fake = text
+        for attempt in range(16):  # A very short number can draw itself.
+            fake = _shape(text, self._random("phone", digits, attempt), keep)
+            if fake != text:
+                break
+        return _same_type(value, fake)
 
-    def _postal(self, value: Any) -> str:
-        return _shape(str(value), self._random("postal", str(value).strip().casefold()))
+    def _postal(self, value: Any) -> str | int | float:
+        text = str(value)
+        return _same_type(value, self._unique("postal", text, lambda rng: _shape(text, rng)))
 
     def _token(self, value: Any) -> str:
         text = str(value)
@@ -202,10 +214,43 @@ class Pseudonymizer:
             return self._unique("id", digits, lambda rng: _shape(digits, rng), normalize=False)
         low, high = (0, 10**length) if padded or length == 1 else (10 ** (length - 1), 10**length)
         moved = str(low + _permute(self._key, b"id", int(digits) - low, high - low))
-        moved = moved.zfill(length) if padded else moved
-        if self._record:
-            self.pairs.setdefault("id", {}).setdefault(moved, digits)
-        return moved
+        return moved.zfill(length) if padded else moved
+
+
+def _word(rng: random.Random) -> str:
+    """An invented, pronounceable word. Three syllables give about a billion of them."""
+    return "".join(rng.choice(_ONSETS) + rng.choice(_VOWELS) + rng.choice(_CODAS) for _ in range(3)).capitalize()
+
+
+def _with_serial(fake: str, serial: int) -> str:
+    if "@" in fake:
+        local, domain = fake.split("@", 1)
+        return f"{local}.{serial}@{domain}"
+    return f"{fake} {serial}"
+
+
+def _country_code_length(text: str) -> int:
+    """How much of a phone number is its country code, which stays.
+
+    `+44 20...` shows where the code ends. `+14155552671` doesn't, so only its first digit is kept:
+    the rest could be the number itself."""
+    separated = re.match(r"\s*\+\d{1,3}(?!\d)", text)
+    if separated:
+        return separated.end()
+    unbroken = re.match(r"\s*\+\d", text)
+    return unbroken.end() if unbroken else 0
+
+
+def _same_type(value: Any, fake: str) -> str | int | float:
+    """A number stays a number: a phone column can be an INTEGER or a JSON number."""
+    try:
+        if isinstance(value, int):
+            return int("1" + fake[1:] if fake.startswith("0") else fake)
+        if isinstance(value, float):
+            return float(fake)
+    except ValueError:
+        pass
+    return fake
 
 
 def _shape(text: str, rng: random.Random, keep: int = 0) -> str:

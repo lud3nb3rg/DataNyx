@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import re
 import sys
-from collections.abc import Collection, Iterable, Iterator
+from collections.abc import Collection, Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import IO
 
 from ..formats import detect_format
@@ -57,6 +58,11 @@ def read_bytes(target: str) -> bytes:
         raise SourceError(f"cannot read input: {error.strerror}") from None
 
 
+def sqlite_read_only_uri(path: str | Path) -> str:
+    """A URI that opens a SQLite file read-only, whatever its name holds: `#`, `?` and `%` are escaped."""
+    return f"{Path(path).resolve().as_uri()}?mode=ro"
+
+
 def missing_extra(what: str, extra: str) -> SourceError:
     return SourceError(f"reading {what} needs an extra package; install datanyx[{extra}]")
 
@@ -94,7 +100,10 @@ def coerce_text(text: str) -> object:
     if not stripped:
         return None
     if _INTEGER.fullmatch(stripped):
-        return int(stripped)
+        try:
+            return int(stripped)
+        except ValueError:  # Past Python's limit of digits, so it's no ordinary number.
+            return text
     if _FLOAT.fullmatch(stripped):
         return float(stripped)
     lowered = stripped.lower()
@@ -142,7 +151,7 @@ def positional_names(count: int) -> list[str]:
     return [f"column_{position}" for position in range(1, count + 1)]
 
 
-def column_names(header: list[object]) -> list[str]:
+def column_names(header: Sequence[object]) -> list[str]:
     """Unique names for header cells. Empty ones get a positional name, never a value."""
     names: list[str] = []
     seen: set[str] = set()

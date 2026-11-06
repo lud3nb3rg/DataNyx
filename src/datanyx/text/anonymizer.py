@@ -9,7 +9,9 @@ spans are merged, so no part of a detected span can survive.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from collections.abc import Iterable
+from itertools import accumulate
 
 from .detectors import PERSON, TERM, Detector, Span
 
@@ -22,7 +24,8 @@ _PARTICLES = {
 }
 
 
-_PLACEHOLDER = re.compile(r"<[A-Z_]+_\d+>")
+#: A placeholder such as <PERSON_1>. Its group is the kind. Every module that reads them uses this one.
+PLACEHOLDER = re.compile(r"<([A-Z_]+)_\d+>")
 
 
 def anonymize(
@@ -43,12 +46,12 @@ def anonymize(
 
 def restore(text: str, mapping: dict[str, str]) -> str:
     """Put real values back in place of placeholders; unknown placeholders stay as they are."""
-    return _PLACEHOLDER.sub(lambda match: mapping.get(match.group(), match.group()), text)
+    return PLACEHOLDER.sub(lambda match: mapping.get(match.group(), match.group()), text)
 
 
 def unknown_placeholders(text: str, mapping: dict[str, str]) -> list[str]:
     """Placeholders in `text` with no value in `mapping`, such as ones an agent invented."""
-    return sorted(set(_PLACEHOLDER.findall(text)) - set(mapping))
+    return sorted(_placeholders_in(text) - set(mapping))
 
 
 def anonymize_with_mapping(
@@ -96,15 +99,18 @@ class Anonymizer:
         self._counters: dict[str, int] = {}
         self._mapping: dict[str, str] = {}
         self._literals: set[str] = set()
+        self._known: dict[tuple[str, str], str] = {}  # What `placeholder_for` was told: found in text from then on.
         self.changes = 0
 
     @property
     def mapping(self) -> dict[str, str]:
         return dict(self._mapping)
 
-    def anonymize(self, text: str) -> str:
-        self._literals.update(_PLACEHOLDER.findall(text))
-        detected = [span for detector in self._detectors for span in detector.find(text)]
+    def anonymize(self, text: str, detectors: Iterable[Detector] | None = None) -> str:
+        """`detectors` replaces the usual ones for this call, for text a model would only mangle."""
+        self._literals.update(_placeholders_in(text))
+        chosen = self._detectors if detectors is None else detectors
+        detected = [span for detector in chosen for span in detector.find(text)]
         kept = [
             span
             for span in detected
@@ -112,12 +118,9 @@ class Anonymizer:
         ]
         # Also drop what's inside a kept span: "2024-01-02" matches the ID pattern too, and
         # that shouldn't hide a date the user asked to keep.
-        spans = [
-            span
-            for span in detected
-            if not any(k.start <= span.start and span.end <= k.end for k in kept)
-        ]
+        spans = _outside(detected, kept)
         spans.extend(_literal_spans(text, self._hide_terms))
+        spans.extend(self._known_spans(text))
         spans.extend(_other_occurrences(text, spans, self._keep_terms))
         return self._replace(text, _merge(spans))
 
@@ -149,7 +152,13 @@ class Anonymizer:
             self._placeholders[key] = _next_placeholder(kind, self._counters, self._literals)
         placeholder = self._placeholders[key]
         self._remember(placeholder, " ".join(value.split()))
+        self._known[key] = " ".join(value.split())  # A sender's name in a message is the same person.
         return placeholder
+
+    def _known_spans(self, text: str) -> Iterable[Span]:
+        for (kind, _), value in self._known.items():
+            if value not in self._keep_terms and kind not in self._keep_kinds:
+                yield from _find_surface(text, value, kind)
 
     def _remember(self, placeholder: str, value: str) -> None:
         if len(value) > len(self._mapping.get(placeholder, "")):
@@ -172,6 +181,25 @@ class Anonymizer:
             position = span.end
         output.append(text[position:])
         return "".join(output)
+
+
+def _placeholders_in(text: str) -> set[str]:
+    return {match.group() for match in PLACEHOLDER.finditer(text)}
+
+
+def _outside(spans: list[Span], kept: list[Span]) -> list[Span]:
+    """The spans not wholly inside a kept one, in one pass however many there are of each."""
+    if not kept:
+        return list(spans)
+    ordered = sorted(kept, key=lambda span: span.start)
+    starts = [span.start for span in ordered]
+    furthest = list(accumulate((span.end for span in ordered), max))  # The latest end among those started by here.
+
+    def inside(span: Span) -> bool:
+        position = bisect_right(starts, span.start)
+        return position > 0 and furthest[position - 1] >= span.end
+
+    return [span for span in spans if not inside(span)]
 
 
 _SEGMENT_BREAK = "\n\u2063\n"  # An invisible separator on its own line, which no match crosses.
@@ -282,4 +310,4 @@ def _normalize(surface: str) -> str:
     return " ".join(surface.split()).casefold()
 
 
-__all__ = ["Anonymizer", "anonymize", "anonymize_with_mapping", "restore", "unknown_placeholders"]
+__all__ = ["PLACEHOLDER", "Anonymizer", "anonymize", "anonymize_with_mapping", "restore", "unknown_placeholders"]

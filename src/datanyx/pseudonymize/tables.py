@@ -16,15 +16,14 @@ import sqlite3
 from collections import defaultdict
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from ..formats import detect_format
 from ..privacy import looks_like_data
 from ..sources.base import SourceError
-from ..sources.files import HEADERLESS_NOTE, first_row_is_data, positional_names
+from ..sources.files import HEADERLESS_NOTE, column_names, first_row_is_data, positional_names, sqlite_read_only_uri
 from .fakes import Pseudonymizer
-from .plan import Treatment, build_plan
+from .plan import Treatment, build_plan, classify
 
 SAMPLE_ROWS = 2000
 BATCH = 1000
@@ -71,6 +70,8 @@ def pseudonymize_file(source: str, target: str | None, kind: str, pseudo: Pseudo
             raise SourceError(f"can't pseudonymize {kind} files")
     except UnicodeDecodeError:
         raise SourceError("input is not valid UTF-8") from None
+    except csv.Error:
+        raise SourceError(f"input isn't valid {kind.upper()}") from None
     except ValueError as error:
         if "text anonymizer" in str(error):
             raise SourceError("free text columns need a text anonymizer to be passed in") from None
@@ -83,17 +84,21 @@ def pseudonymize_file(source: str, target: str | None, kind: str, pseudo: Pseudo
 # --- CSV and TSV ------------------------------------------------------------------------------------
 
 
+def _has_cells(row: list[str]) -> bool:
+    return any(cell.strip() for cell in row)
+
+
 def _delimited(source: str, target: str | None, delimiter: str, pseudo: Pseudonymizer, options: Options, report: Report) -> None:
     csv.field_size_limit(1 << 24)
     with open(source, encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream, delimiter=delimiter)
-        first = next(reader, None)
+        first = next((row for row in reader if _has_cells(row)), None)
         if first is None:
             raise SourceError("the file is empty")
         headerless = first_row_is_data(first, options.keep)
-        header = positional_names(len(first)) if headerless else first
-        columns: dict[str, list[Any]] = {name: [] for name in header}
-        names = list(columns)
+        # Unique names, by position: two columns can share a name in the file.
+        names = positional_names(len(first)) if headerless else column_names(first)
+        columns: dict[str, list[Any]] = {name: [] for name in names}
         if headerless:
             report.notes.append(HEADERLESS_NOTE)
             for name, cell in zip(names, first):
@@ -103,18 +108,23 @@ def _delimited(source: str, target: str | None, delimiter: str, pseudo: Pseudony
                 break
             for name, cell in zip(names, row):
                 columns[name].append(cell)
-    plan = build_plan(columns, overrides=options.overrides, keep=options.keep, strict=options.strict)
+    overrides, keep = _for_renamed_columns(names, first, options)
+    plan = build_plan(columns, overrides=overrides, keep=keep, strict=options.strict)
     report.plans["file"] = plan
     if options.plan_only or target is None:
         return
-    kinds = [plan[name].kind for name in header]
+    kinds = [plan[name].kind for name in names]
     with open(source, encoding="utf-8-sig", newline="") as stream, open(target, "x", encoding="utf-8", newline="") as out:
         reader = csv.reader(stream, delimiter=delimiter)
         writer = csv.writer(out, delimiter=delimiter, lineterminator="\n")
         extra_cells = False
-        for index, row in enumerate(reader):
-            if index == 0 and not headerless:
-                writer.writerow(row)
+        at_header = not headerless
+        started = False
+        for row in reader:
+            started = started or _has_cells(row)
+            if not started or at_header:
+                writer.writerow(row)  # Blank lines before the header, and the header itself.
+                at_header = at_header and not started
                 continue
             extra_cells = extra_cells or len(row) > len(kinds)
             # A cell past the last column has no name to judge it by, so it is replaced whatever it is.
@@ -122,6 +132,19 @@ def _delimited(source: str, target: str | None, delimiter: str, pseudo: Pseudony
             report.rows += 1
         if extra_cells:
             report.notes.append("some rows had more cells than the header; the extra cells were replaced")
+
+
+def _for_renamed_columns(names: list[str], header: list[str], options: Options) -> tuple[dict[str, str], frozenset[str]]:
+    """What was asked for a column also applies under the name it has here: a second `email` is `email_2`."""
+    overrides = {name.lower(): kind for name, kind in options.overrides.items()}
+    keep = {name.lower() for name in options.keep}
+    for name, original in zip(names, header):
+        if name != original:
+            if original.lower() in overrides:
+                overrides[name.lower()] = overrides[original.lower()]
+            if original.lower() in keep:
+                keep.add(name.lower())
+    return overrides, frozenset(keep)
 
 
 # --- JSON and JSON Lines -----------------------------------------------------------------------------
@@ -138,18 +161,36 @@ def _collect(node: Any, key: str, found: dict[str, list[Any]]) -> None:
         found[key].append(node)
 
 
-def _transform(node: Any, key: str, plan: Mapping[str, Treatment], pseudo: Pseudonymizer) -> Any:
+_KEEPS_FLOATS = frozenset({"date", "phone", "postal"})
+UNNAMED_NOTE = "text with no key, or under a key that is itself data, was replaced going by what it looks like"
+
+
+def _transform(node: Any, key: str, plan: dict[str, Treatment], pseudo: Pseudonymizer, options: Options, report: Report) -> Any:
     if isinstance(node, dict):
-        return {_key(name, pseudo): _transform(value, name, plan, pseudo) for name, value in node.items()}
+        return {_key(name, pseudo): _transform(value, name, plan, pseudo, options, report) for name, value in node.items()}
     if isinstance(node, list):
-        return [_transform(item, key, plan, pseudo) for item in node]
-    treatment = plan.get(key)
-    if treatment is None:
-        # Under a key that is itself data, nothing says what the text is, so it can't be kept.
-        return pseudo.apply("category", node) if isinstance(node, str) and key and looks_like_data(key) else node
-    if isinstance(node, (bool, float)) and treatment.kind not in ("date",):
+        return [_transform(item, key, plan, pseudo, options, report) for item in node]
+    treatment = _treatment_for(node, key, plan, options, report)
+    if isinstance(node, bool) or (isinstance(node, float) and treatment.kind not in _KEEPS_FLOATS):
         return node
     return pseudo.apply(treatment.kind, node)
+
+
+def _treatment_for(node: Any, key: str, plan: dict[str, Treatment], options: Options, report: Report) -> Treatment:
+    if key in plan:
+        return plan[key]
+    if key and not looks_like_data(key):  # First seen after the sample: decided now, and shown in the plan.
+        plan[key] = build_plan({key: [node]}, overrides=options.overrides, keep=options.keep, strict=options.strict)[key]
+        return plan[key]
+    # No key at all, or one that is itself data, says nothing: only the value can.
+    if not isinstance(node, str):
+        return Treatment("keep", "a number or empty value with no name")
+    found = classify("", [node])
+    if found.kind == "keep" and not found.review:
+        return found  # A date, or a number written as text.
+    if UNNAMED_NOTE not in report.notes:
+        report.notes.append(UNNAMED_NOTE)
+    return found if found.kind not in ("keep", "text") else Treatment("category", UNNAMED_NOTE)
 
 
 def _key(name: str, pseudo: Pseudonymizer) -> str:
@@ -177,7 +218,7 @@ def _json(source: str, target: str | None, pseudo: Pseudonymizer, options: Optio
     plan = _plan_for(found, options, report)
     if options.plan_only or target is None:
         return
-    result = _transform(data, "", plan, pseudo)
+    result = _transform(data, "", plan, pseudo, options, report)
     with open(target, "x", encoding="utf-8", newline="") as out:
         out.write(json.dumps(result, ensure_ascii=False, indent=2 if "\n" in text.strip() else None))
     report.rows = len(result) if isinstance(result, list) else 1
@@ -204,7 +245,7 @@ def _jsonl(source: str, target: str | None, pseudo: Pseudonymizer, options: Opti
         return
     with open(target, "x", encoding="utf-8", newline="") as out:
         for record in _lines(source):
-            out.write(json.dumps(_transform(record, "", plan, pseudo), ensure_ascii=False) + "\n")
+            out.write(json.dumps(_transform(record, "", plan, pseudo, options, report), ensure_ascii=False) + "\n")
             report.rows += 1
 
 
@@ -259,6 +300,8 @@ def _value_end(sql: str, start: int) -> int:
         position += 1
     if sql[position : position + 1] == "(":
         return _parenthesis_end(sql, position)
+    if sql[position : position + 1] in ('"', "`", "["):  # SQLite reads DEFAULT "x" as a string too.
+        return _literal_end(sql, position)
     if sql[position : position + 1] in ("+", "-"):
         position += 1
     while position < len(sql) and (sql[position].isalnum() or sql[position] in "_."):
@@ -312,36 +355,47 @@ def clean_ddl(sql: str) -> str:
     return "".join(out)
 
 
+def _shadow_tables(reader: sqlite3.Connection) -> set[str]:
+    """The tables a virtual table keeps its contents in, such as a full-text index's copy of the text."""
+    try:
+        return {row[0] for row in reader.execute("select name from pragma_table_list where type = 'shadow'")}
+    except sqlite3.Error:  # SQLite before 3.37.
+        return set()
+
+
 def _sqlite(source: str, target: str | None, pseudo: Pseudonymizer, options: Options, report: Report) -> None:
     try:
-        reader = sqlite3.connect(f"{Path(source).resolve().as_uri()}?mode=ro", uri=True)
+        reader = sqlite3.connect(sqlite_read_only_uri(source), uri=True)
     except sqlite3.Error:
         raise SourceError("cannot open the database") from None
     writer: sqlite3.Connection | None = None
     try:
         entries = reader.execute(
-            "select type, name, sql from sqlite_master where sql is not null and name not like 'sqlite_%' order by rowid"
+            r"select type, name, sql from sqlite_master where sql is not null and name not like 'sqlite\_%' escape '\' order by rowid"
         ).fetchall()
-        tables = [(name, sql) for kind, name, sql in entries if kind == "table"]
+        shadows = _shadow_tables(reader)
+        tables = []
+        for kind, name, sql in entries:
+            if kind != "table":
+                continue
+            if sql.upper().startswith("CREATE VIRTUAL") or name in shadows:
+                report.notes.append(f"skipped the virtual table {name}")
+            else:
+                tables.append((name, sql))
         if target is not None and not options.plan_only:
             writer = sqlite3.connect(target)
             for name, sql in tables:
-                if sql.upper().startswith("CREATE VIRTUAL"):
-                    report.notes.append(f"skipped the virtual table {name}")
-                    continue
                 cleaned = clean_ddl(sql)
                 if cleaned != sql:
                     report.notes.append(f"left comments, column defaults and CHECK constraints out of the table {name}, as they can hold real values")
                 writer.execute(cleaned)
-        for name, sql in tables:
-            if sql.upper().startswith("CREATE VIRTUAL"):
-                continue
+        for name, _sql in tables:
             _table(reader, writer, name, pseudo, options, report)
         if writer is not None:
             for kind, name, sql in entries:
                 if kind == "trigger":
                     report.notes.append(f"left out the trigger {name}, which could hold data or change values")
-                elif kind in ("index", "view"):
+                elif kind in ("index", "view") and name not in shadows:
                     cleaned = clean_ddl(sql)
                     if "'" in cleaned:
                         report.notes.append(f"left out the {kind} {name}, whose text holds values")

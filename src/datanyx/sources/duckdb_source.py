@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from ..formats import detect_format
 from ..privacy import KeyPolicy
 from ..scale import scale_for
 from ..schema import (
@@ -19,19 +18,17 @@ from ..schema import (
     Boolean,
     DataSchema,
     Entity,
-    Field,
     ForeignKey,
     Integer,
     Node,
     Null,
     Number,
-    Object,
     String,
     Union,
     Unknown,
 )
 from .base import Source, SourceError
-from .catalog import merge_nodes
+from .catalog import build_object
 from .files import extension, missing_extra
 
 _EXTENSIONS = (".duckdb", ".ddb")
@@ -131,32 +128,19 @@ def _describe(connection, policy: KeyPolicy, schema: str, kind: str) -> DataSche
             and all(n in visible[table] for n in names)
             and all(n in visible[referenced] for n in referenced_names)
         )
-        entity = _entity(table, columns[table], visible[table], set(key), shown_key, keys, policy, notes)
+        entity = _entity(table, columns[table], set(key), shown_key, keys, policy, notes)
         entities.append(replace(entity, scale=scale_for(policy, sizes.get(table))))
     return DataSchema(kind, tuple(entities), tuple(notes))
 
 
-def _entity(table, columns, visible, key_columns, primary_key, foreign_keys, policy: KeyPolicy, notes: list[str]) -> Entity:
-    fields: dict[str, Field] = {}
-    hidden: list[Node] = []
-    hidden_names: list[str] = []
+def _entity(table, columns, key_columns, primary_key, foreign_keys, policy: KeyPolicy, notes: list[str]) -> Entity:
+    entries = []
     for name, data_type, nullable in columns:
         node = _type_node(data_type)
         if nullable and name not in key_columns and not isinstance(node, Unknown):
             node = Union((node, Null()))
-        if name in visible:
-            fields[name] = Field(node, True, _native(data_type))
-        else:
-            hidden.append(node)
-            hidden_names.append(name)
-    extra = key_format = None
-    if hidden:
-        reason = "configured map path" if f"$.{table}" in policy.map_paths else "key shape"
-        notes.append(f"hid data-like columns at $.{table} ({reason})")
-        extra = merge_nodes(hidden)
-        formats = {detect_format(name) for name in hidden_names}
-        key_format = formats.pop() if len(formats) == 1 else None
-    return Entity(table, Object(fields, extra, key_format), primary_key, foreign_keys, True)
+        entries.append((name, node, _native(data_type)))
+    return Entity(table, build_object(entries, f"$.{table}", policy, notes), primary_key, foreign_keys, True)
 
 
 def _type_node(data_type: str) -> Node:

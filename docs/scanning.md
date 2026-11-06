@@ -32,7 +32,7 @@ datanyx scan ./project                         # patterns for emails, phones, ca
 datanyx scan ./project --ner                   # also names, organisations and places (slow)
 datanyx scan ./project --kinds EMAIL --kinds SECRET
 datanyx scan ./project --format json           # for scripts
-datanyx scan ./project --fail-on-findings      # exit 1 if anything is found: a CI step or pre-commit hook
+datanyx scan ./project --fail-on-findings      # exit 1 if anything is found or couldn't be read: a CI step or pre-commit hook
 datanyx scan ./project --exclude 'fixtures' --exclude '*.lock'
 ```
 
@@ -40,7 +40,7 @@ datanyx scan ./project --exclude 'fixtures' --exclude '*.lock'
 |---|---|
 | `--kinds` | What to look for (repeatable). The default is `EMAIL`, `PHONE`, `CREDIT_CARD`, `IBAN`, `IP_ADDRESS`, `MAC_ADDRESS`, `ADDRESS` and `SECRET`. `all` adds dates, money, URLs and bare IDs, which match too much ordinary code to be useful by default |
 | `--ner` | Also find names, organisations and places with the NER model. Slow, so it is opt-in |
-| `--exclude GLOB` | Skip names matching a pattern (repeatable). `.git`, `node_modules`, virtual environments and caches are skipped already |
+| `--exclude GLOB` | Skip names matching a pattern (repeatable), in a folder or among files named one by one, as a pre-commit hook passes them. `.git`, `node_modules`, virtual environments and caches are skipped already |
 | `--max-size MB` | Skip larger files (default 5) |
 | `--include-examples` | Also count `example.com` emails and loopback or documentation IP addresses, which are ignored by default |
 | `--show-paths` | Show real file names, including ones that look like data |
@@ -60,7 +60,8 @@ through the MCP server's `scan_folder` tool, which always hides such names.
 
 **Limits.** It finds what patterns find, so it misses names (without `--ner`), free-text
 descriptions of a person, and anything in a binary file: spreadsheets, Parquet files and databases
-are listed as not scanned, because they can't be read as text. Phone numbers are matched more
+are listed as not scanned, because they can't be read as text, and the report then doesn't claim
+the folder is clean. UTF-16 and UTF-32 text files are read. Phone numbers are matched more
 strictly than in anonymization (dates, version numbers and IPs are not counted), so some real
 ones in unusual formats can be missed. Expect some false positives, such as test fixtures; the
 scan of this repository finds the fake cards and keys in its own tests.

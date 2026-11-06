@@ -79,5 +79,7 @@ class YamlSource(Source):
                 raise SourceError(f"invalid YAML{where}") from None
             except UnicodeDecodeError:
                 raise SourceError("input is not valid UTF-8") from None
+            except ValueError:  # A date that doesn't exist, for one. Its own text can quote the file.
+                raise SourceError("invalid YAML: a value in it can't be read") from None
         node, notes = infer(observation, policy)
         return unnamed(self.kind, node, notes, scale_for(policy, items_seen(observation)))

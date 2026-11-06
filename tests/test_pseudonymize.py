@@ -23,7 +23,6 @@ from datanyx.pseudonymize import (
     pseudonymize_file,
     render_plan,
 )
-from datanyx.pseudonymize.fakes import FIRST_NAMES
 from datanyx.sources import SourceError
 from datanyx.text import Anonymizer, DictionaryDetector, PatternDetector
 
@@ -112,7 +111,7 @@ def test_other_kinds_nulls_and_counts():
     assert fakes.apply("drop", "anything") is None and fakes.apply("keep", "x") == "x"
     for value in (None, "", True):
         assert fakes.apply("name", value) == value
-    assert fakes.apply("first_name", "Ana") in FIRST_NAMES
+    assert re.fullmatch(r"[A-Z][a-z]+", fakes.apply("first_name", "Ana"))
     assert fakes.counts["token"] == 2  # Applied twice above.
     fake = fakes.apply("name", "Real Person")
     assert fakes.pairs["name"][fake] == "Real Person"

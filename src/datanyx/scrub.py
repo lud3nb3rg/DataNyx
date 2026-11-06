@@ -10,8 +10,9 @@ What it does, in order:
 1. Secrets: values of environment variables that look like credentials, and the
    password inside a URL, are replaced.
 2. Paths: your home folder, working folder and username are shortened.
-3. In a Python traceback, `File` lines and the code under them are left alone. Every
-   other line is treated as a message, even an indented one.
+3. In a Python traceback, the code under a `File` line is left alone apart from terms to
+   hide, and a `File` line loses only what its path gives away. Every other line is treated
+   as a message.
 4. In messages, anything in quotes is replaced unless it is a name the schema made
    public: error messages quote values far more often than names.
 5. Detectors (emails, IDs, and names if a NER model is used) replace what they find.
@@ -30,7 +31,7 @@ import re
 from dataclasses import dataclass, field
 
 from .schema import Array, DataSchema, Node, Object, Union
-from .text import Detector, PatternDetector, anonymize
+from .text import Anonymizer, Detector, PatternDetector, SecretDetector
 from .text.secrets import redact_url_credentials
 
 VALUE = "<VALUE>"
@@ -54,6 +55,7 @@ _EXCEPTION_LINE = re.compile(
 )
 _QUOTED = re.compile(r"""(?<!\w)(?:[bBrRuUfF]{1,2})?(['"])((?:(?!\1)[^\n\\]|\\.){0,100000})\1(?!\w)""")
 _NUMBER = re.compile(r"(?<![\w.])(?:\d{4,}|\d+\.\d+)(?![\w])")
+_FILE_PATH = re.compile(r'^(\s+File ")(.*?)(".*)$')
 
 # Words that are about how the data is stored rather than what is in it.
 _COMMON_WORDS = frozenset(
@@ -75,7 +77,7 @@ class ScrubPolicy:
 
     allowed_names: frozenset[str] = frozenset()
     hide_terms: tuple[str, ...] = ()
-    detectors: tuple[Detector, ...] = field(default_factory=lambda: (PatternDetector(),))
+    detectors: tuple[Detector, ...] = field(default_factory=lambda: (PatternDetector(), SecretDetector()))
     redact_numbers: bool = True
 
 
@@ -88,6 +90,8 @@ def scrub(text: str, policy: ScrubPolicy | None = None) -> str:
     lines = text.split("\n")
     kinds = _classify(lines)
     messages = [index for index, kind in enumerate(kinds) if kind == "message"]
+    structure = [index for index, kind in enumerate(kinds) if kind == "structure"]
+    anonymizer = Anonymizer(policy.detectors, policy.hide_terms)
 
     prefixes: dict[int, str] = {}
     bodies: list[str] = []
@@ -97,10 +101,21 @@ def scrub(text: str, policy: ScrubPolicy | None = None) -> str:
         prefixes[index] = prefix
         bodies.append(_redact_quoted(body, policy.allowed_names))
 
-    for index, body in zip(messages, _detect(bodies, policy)):
+    for index, body in zip(messages, _detect(bodies, anonymizer)):
         if policy.redact_numbers:
             body = _NUMBER.sub(NUMBER, body)
         lines[index] = prefixes[index] + body
+
+    # A traceback's code is the agent's own, so it stays, except for terms to hide: "always remove
+    # this term" has no exceptions. A `File` line's path isn't code, so patterns look at it too, though
+    # not a language model, which would only mangle a path.
+    patterns = [detector for detector in policy.detectors if not getattr(detector, "uses_model", False)]
+    for index in structure:
+        path = _FILE_PATH.match(lines[index])
+        if path:
+            lines[index] = path.group(1) + anonymizer.anonymize(path.group(2), detectors=patterns) + anonymizer.anonymize(path.group(3), detectors=())
+        else:
+            lines[index] = anonymizer.anonymize(lines[index], detectors=())
     return "\n".join(lines)
 
 
@@ -126,9 +141,10 @@ def visible_names(schema: DataSchema) -> frozenset[str]:
 
 
 def _hide_secrets(text: str) -> str:
-    for name, value in os.environ.items():
-        if _SECRET_NAME.search(name) and len(value) >= _MIN_SECRET_LENGTH:
-            text = text.replace(value, SECRET)
+    # Longest first: a password inside a database URL mustn't break the URL's own match.
+    values = {value for name, value in os.environ.items() if _SECRET_NAME.search(name) and len(value) >= _MIN_SECRET_LENGTH}
+    for value in sorted(values, key=len, reverse=True):
+        text = text.replace(value, SECRET)
     return redact_url_credentials(text)
 
 
@@ -179,16 +195,15 @@ def _redact_quoted(text: str, allowed: frozenset[str]) -> str:
     return _QUOTED.sub(replace, text)
 
 
-def _detect(bodies: list[str], policy: ScrubPolicy) -> list[str]:
+def _detect(bodies: list[str], anonymizer: Anonymizer) -> list[str]:
     """Run the detectors over all message text at once, so one person keeps one placeholder."""
     if not bodies:
         return bodies
-    joined = "\n".join(bodies)
-    result = anonymize(joined, policy.detectors, policy.hide_terms).split("\n")
+    result = anonymizer.anonymize("\n".join(bodies)).split("\n")
     if len(result) == len(bodies):
         return result
     # A match spanned lines, which breaks the pairing, so do each line on its own.
-    return [anonymize(body, policy.detectors, policy.hide_terms) for body in bodies]
+    return [anonymizer.anonymize(body) for body in bodies]
 
 
 def _name_forms(name: str) -> set[str]:

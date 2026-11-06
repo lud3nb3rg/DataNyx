@@ -39,6 +39,46 @@ A security release: the fixes from a full audit. Each of these closed a way past
 - `datanyx protect` warns if Claude Code is older than 2.1.295, before which a hook that fails to start lets tool calls through.
 - Releases: actions pinned to commits, read-only default permissions, the image's base and dependencies pinned (by the hashes in `uv.lock`), and Dependabot to keep them current.
 
+**Also fixed, from a full code review**
+
+Changes that may need action:
+
+- `pseudonymize`: names, cities, companies and addresses are now invented, pronounceable words rather than a short word list, so different values no longer merge and a fake doesn't depend on row order. Fakes made with an existing key file change: re-export anything that has to line up. With `--key-file`, a note says if any fake had to be drawn again.
+- The MCP server: a `sqlite:///` URL under `--allow-urls`, or in an allowed `env:NAME`, must point under `--root`.
+
+The guard:
+
+- It also refuses `dd if=`, `-fdata/x`, `@data/x`, brace expansion (`{data,src}/x.csv`), here-strings, `$PWD/data/x`, a Glob brace list, encoded PowerShell commands, shortened options, and git commands that print protected files or revert the setup (`git show HEAD:x`, `git grep`, `git diff` and `git log -p` when git holds the data, `git checkout -- .`, `git reset --hard`). `datanyx run` checks the command it starts as a command of its own.
+- A substitution or subshell is checked from where it runs: `(cd /tmp); cat data/x.csv` and `echo $(cat data/x.csv); cd /tmp` no longer get through. Comments aren't commands, and a here-document is text.
+- Git Bash and WSL paths are understood on Windows. `mv /tmp/x .` and `git commit -m "about .claude/settings.json"` are no longer refused, and `git clean` is allowed for a folder that doesn't hold the setup.
+- `protect` no longer leaves deny rules behind for paths it stopped protecting.
+
+Real data in output:
+
+- `pseudonymize`: unbroken phone numbers (`+14155552671`), numeric phones and postcodes, a default written `DEFAULT "x"`, full-text index contents, bare top-level JSON values, and JSON keys first seen after the sample. `--mapping` now records every kind.
+- `anonymize`: Word text after a text box, picture names and the paths of links out of the document, and strings and comments in HTML stylesheets. A sender or display name known from a chat or email's structure is now hidden in message bodies too.
+- `scrub`: terms to hide now reach traceback lines, patterns reach `File` paths, and longer secrets are replaced first. A password holding `@` is removed whole, here and in the audit log.
+
+The MCP server:
+
+- `scan_folder` uses the server's custom detectors, packs and scan settings. `anonymize_file` uses every configured model. A MongoDB URL in `env:NAME` reaches the MongoDB source. The mcp 1.x fallback keeps the host and security settings.
+
+Scan:
+
+- Excludes apply to files named one by one, so they work in the pre-commit hook. `.duckdb`, `.ddb`, `.zsav`, `.por` and `.xpt` are flagged as data files, including when too large. `--backend` findings such as SSN are no longer filtered out, and `--kinds` accepts them.
+
+Crashes and wrong answers:
+
+- `pseudonymize` no longer hangs when a kind's fakes run out, and handles database paths holding `#`, `?` or `%`, duplicate CSV headers, blank lines before a header, and tables named like `sqlite2_users`.
+- `synth` on an input with no tables, `anonymize --keep-names` with `a.txt` and `a.eml`, a damaged `.docx` in a folder, a CSV cell of thousands of digits, a YAML date that doesn't exist, recursive YAML aliases and deep XML are all clear errors or per-file notes now. `synth --format sqlite` works from Avro and Stata. One bad audit line no longer hides the log.
+- `check`: `df.join(other, on=...)` no longer reports a false error, `SUM(DISTINCT x)` is type-checked, a time column accepts a time, and attribute checks work without pandas installed.
+- `eval --kind` with a kind nobody labelled is an error, and nothing measured no longer passes `--min-recall`.
+- `init --local` finds the repository from a subfolder. HL7 reads every MLLP frame, and HL7 and FHIR say when they stop at their type limit. A FHIR type FHIR doesn't define is shown as `Resource_N`. `--infer-keys` works on JSON large enough to be streamed. A server denying foreign keys for one table costs only a note. Connection timeouts are set per driver.
+
+Internals:
+
+- A single pass for kept spans in the anonymizer, and `check` no longer imports pandas. SQL and DuckDB share `build_object` for hiding names, so their notes now read "hid data-like names". One home for the Luhn check, the placeholder pattern and the SQLite URI. Output encoding is set once, in `main`.
+
 ## 0.1.0 (2026-11-06)
 
 The first release.

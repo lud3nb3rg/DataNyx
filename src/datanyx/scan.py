@@ -12,7 +12,8 @@ report yourself.
 What it finds is what the text detectors find: emails, phone numbers, card and IBAN
 numbers, IP addresses, addresses and credentials, plus names, organisations and places
 when a NER model is used. Binary files (spreadsheets, Parquet, databases) can't be read
-as text, so they are listed as not scanned.
+as text, so they are listed as not scanned, and a report that left out such a file, one
+too large, or one it couldn't open doesn't claim to be complete.
 """
 
 from __future__ import annotations
@@ -56,7 +57,8 @@ MAX_LINES_LISTED = 20
 # Containers that hold records but can't be read as text.
 _DATA_EXTENSIONS = frozenset(
     {".xlsx", ".xlsm", ".xls", ".parquet", ".pq", ".feather", ".orc", ".avro", ".db", ".sqlite", ".sqlite3", ".mdb",
-     ".accdb", ".sav", ".dta", ".sas7bdat", ".pkl", ".pickle", ".npy", ".npz", ".h5", ".hdf5", ".zip", ".gz", ".7z", ".tar"}
+     ".accdb", ".sav", ".zsav", ".por", ".dta", ".sas7bdat", ".xpt", ".duckdb", ".ddb", ".pkl", ".pickle", ".npy", ".npz",
+     ".h5", ".hdf5", ".zip", ".gz", ".7z", ".tar"}
 )
 # Binary files that can't hold records as text. Any other file that can't be read is reported.
 _MEDIA_EXTENSIONS = frozenset(
@@ -115,13 +117,17 @@ def scan(
     *,
     detectors: Sequence[Detector] | None = None,
     kinds: Iterable[str] | None = None,
+    backend_kinds: Iterable[str] = (),
     excludes: Iterable[str] = (),
     max_bytes: int = DEFAULT_MAX_BYTES,
     include_examples: bool = False,
     show_paths: bool = False,
     policy: KeyPolicy | None = None,
 ) -> ScanReport:
-    """Scan files and folders. `detectors` default to patterns plus the secret detector."""
+    """Scan files and folders. `detectors` default to patterns plus the secret detector.
+
+    `backend_kinds` are also reported when a model-based detector finds them, but not when a pattern
+    does: a backend the user named is there for its SSNs, while pattern-matched dates are noise."""
     targets = [target] if isinstance(target, str) else list(target)
     if not targets or not all(os.path.exists(item) for item in targets):
         raise SourceError("cannot read input: no such file or folder")
@@ -136,13 +142,15 @@ def scan(
         display = _display(relative, position, policy, show_paths)
         if display != relative:
             report.hidden_names += 1
-        _scan_file(path, display, finders, chosen, max_bytes, include_examples, report)
+        _scan_file(path, display, finders, chosen, frozenset(backend_kinds), max_bytes, include_examples, report)
     report.findings.sort(key=lambda item: (-item.total, item.display))
     return report
 
 
 def _list_files(target: str, skip: Sequence[str], many: bool = False) -> list[tuple[str, str]]:
     if os.path.isfile(target):
+        if _file_is_excluded(target, skip):
+            return []
         # Several files can share a name, so a list keeps the path the caller gave (a pre-commit hook passes them).
         return [(target, target.replace(os.sep, "/") if many else os.path.basename(target))]
     found: list[tuple[str, str]] = []
@@ -154,6 +162,18 @@ def _list_files(target: str, skip: Sequence[str], many: bool = False) -> list[tu
             if not os.path.islink(path) and not _excluded(relative, skip) and not _excluded(name, skip):
                 found.append((path, relative))
     return found
+
+
+def _file_is_excluded(path: str, patterns: Sequence[str]) -> bool:
+    """The rules a folder scan would apply to this file, as a pre-commit hook passes files one by one.
+
+    Only the part below the working folder counts: where a checkout lives is no reason to skip it."""
+    try:
+        relative = os.path.relpath(path).replace(os.sep, "/")
+    except ValueError:  # Another drive.
+        relative = os.path.basename(path)
+    parts = [os.path.basename(path)] if relative.startswith("../") else relative.split("/")
+    return _excluded("/".join(parts), patterns) or any(_excluded(part, patterns) for part in parts)
 
 
 def _excluded(name: str, patterns: Sequence[str]) -> bool:
@@ -171,6 +191,7 @@ def _scan_file(
     display: str,
     detectors: Sequence[Detector],
     kinds: frozenset[str],
+    backend_kinds: frozenset[str],
     max_bytes: int,
     include_examples: bool,
     report: ScanReport,
@@ -179,6 +200,8 @@ def _scan_file(
     try:
         size = os.path.getsize(path)
         if size > max_bytes:
+            if extension in _DATA_EXTENSIONS:
+                report.not_scanned_data.append(display)
             report.too_large += 1
             if extension not in _MEDIA_EXTENSIONS:
                 report.unscanned.append(display)
@@ -198,11 +221,13 @@ def _scan_file(
         return
 
     report.scanned += 1
-    spans = _resolve(
-        [span for detector in detectors for span in detector.find(text) if span.kind in kinds],
-        text,
-        include_examples,
-    )
+    found = [
+        span
+        for detector in detectors
+        for span in detector.find(text)
+        if span.kind in kinds or (span.kind in backend_kinds and getattr(detector, "uses_model", False))
+    ]
+    spans = _resolve(found, text, include_examples)
     if not spans:
         return
     counts: Counter = Counter()
@@ -295,8 +320,10 @@ def _text(report: ScanReport) -> str:
     head = f"Scanned {report.scanned:,} file{'s' if report.scanned != 1 else ''}"
     lines = [head + (f" ({', '.join(skipped)} skipped)." if skipped else ".")]
 
-    if report.clean:
+    if report.clean and report.complete:
         lines.append("No personal data or secrets found by the patterns used.")
+    elif report.clean:
+        lines.append("Nothing found in the files that were read, but some weren't, so this doesn't show the folder is clean.")
     else:
         lines += ["", f"{len(report.findings):,} file{'s' if len(report.findings) != 1 else ''} with findings:"]
         width = min(max(len(item.display) for item in report.findings), 60)
@@ -340,6 +367,7 @@ def _json(report: ScanReport) -> str:
         {
             "scanned": report.scanned,
             "skipped": {"too_large": report.too_large, "binary": report.binary},
+            "complete": report.complete,
             "totals": dict(report.totals),
             "files": [{"path": item.display, "counts": item.counts, "lines": item.lines} for item in report.findings],
             "not_scanned_data_files": report.not_scanned_data,

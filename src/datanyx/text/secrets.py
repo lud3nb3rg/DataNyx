@@ -36,13 +36,17 @@ _PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
     (re.compile(r"\b[sr]k_live_[0-9A-Za-z]{16,}\b"), 0),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"), 0),
     # scheme://user:password@host: the credentials, not the address.
-    (re.compile(r"(?<=://)[^/\s:@'\"<>]{1,256}:([^@\s'\"<>]{3,256})(?=@)"), 1),  # Bounded: "x://x://x://..." would otherwise take minutes.
+    # A password can hold an @, so it ends at the last one before the host. Bounded: "x://x://x://..." would otherwise take minutes.
+    (re.compile(r"(?<=://)[^/\s:@'\"<>]{1,256}:([^/\s'\"<>]{3,256})(?=@)"), 1),
     (re.compile(rf"(?i)\b\w*{_NAME}\w*[\"']?\s*(?::|=|=>)\s*[bBuUrR]?[\"']?([^\s\"',;]{{8,}})"), 1),
+    # `token` only as the end of a name: max_tokens and token_type aren't credentials.
+    (re.compile(r"(?i)\b\w*token[\"']?\s*(?::|=|=>)\s*[bBuUrR]?[\"']?([^\s\"',;]{8,})"), 1),
 )
 
 
-_URL_LOGIN = re.compile(r"(?<=://)[^/\s@'\"<>?#]+(?=@)")
-_URL_SECRET_PARAMETER = re.compile(r"(?i)([?&](?:password|passwd|pwd|pass|token|secret|api[_-]?key|access[_-]?token|sslpassword)=)[^&\s'\"<>#]+")
+# Up to the last @ before the address's end: a password can hold one.
+_URL_LOGIN = re.compile(r"(?<=://)[^/\s'\"<>?#]+(?=@)")
+_URL_SECRET_PARAMETER = re.compile(r"(?i)([?&](?:password|passwd|pwd|pass|token|secret|api[_-]?key|access[_-]?token|auth[_-]?token|sslpassword)=)[^&\s'\"<>#]+")
 
 
 def redact_url_credentials(text: str) -> str:

@@ -32,6 +32,7 @@ from .renderers import RENDERERS
 from .schema import Array, Object
 from .scrub import ScrubPolicy, scrub, shape, visible_names
 from .sources import SourceError, source_kinds
+from .sources.files import read_bytes
 from .synth import FORMATS as SYNTH_FORMATS
 from .synth import MAX_ROWS, file_name, render_table, synthesize, write_sqlite
 from .text import (
@@ -49,8 +50,8 @@ from .text import (
     restore,
     unknown_placeholders,
 )
+from .text.backends import BACKEND_KINDS, build_backend
 from .text.backends import availability as backend_availability
-from .text.backends import build_backend
 from .text.batch import BatchResult, anonymize_folder, anonymize_stream, restore_folder
 from .text.documents import anonymize_bytes, can_handle, restore_bytes
 from .text.mapping import MappingFile, read_mapping
@@ -537,8 +538,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _use_utf8() -> None:
+    """Names can be non-ASCII, which legacy Windows encodings can't print."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
+
+def _keep_line_endings() -> None:
+    """For text passed through: Windows would otherwise turn each line ending into two characters."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(newline="")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _use_utf8()
     try:
         commands = {"eval": _run_eval, "pseudonymize": _run_pseudonymize, "diff": _run_diff, "audit": _run_audit, "init": _run_init, "config": _run_config, "scan": _run_scan, "protect": _run_protect, "hook": _run_hook, "check": _run_check, "scrub": _run_scrub, "run": _run_command, "synth": _run_synth, "doctor": _run_doctor, "mcp": _run_mcp, "anonymize": _run_anonymize, "restore": _run_restore, "schema": _run_schema}
         return commands[args.command](args)
@@ -575,10 +590,6 @@ def _models(args: argparse.Namespace) -> list[str]:
     return given or list(config.models) or ([config.model] if config.model else [DEFAULT_MODEL])
 
 
-def _model(args: argparse.Namespace) -> str:
-    return _models(args)[0]
-
-
 def _backend_detectors(args: argparse.Namespace) -> list[Detector]:
     return [build_backend(spec) for spec in [*_cfg(args).backends, *getattr(args, "backend", [])]]
 
@@ -605,13 +616,22 @@ def _run_init(args: argparse.Namespace) -> int:
     target.write_text(STARTER_LOCAL if args.local else STARTER, encoding="utf-8")
     print(f"Created {name}")
     if args.local:
-        ignore = Path(".gitignore")
-        existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
-        if Path(".git").exists() and name not in existing.splitlines():
-            separator = "" if not existing or existing.endswith(chr(10)) else chr(10)
-            ignore.write_text(existing + separator + name + chr(10), encoding="utf-8")
-            print(f"Added {name} to .gitignore, so the terms in it stay private.")
+        _keep_out_of_git(target.resolve())
     return 0
+
+
+def _keep_out_of_git(path: Path) -> None:
+    """Add a file to the .gitignore of the repository it is in, wherever in the repository that is."""
+    root = next((folder for folder in path.parents if (folder / ".git").exists()), None)
+    if root is None:
+        return
+    entry = path.relative_to(root).as_posix()
+    ignore = root / ".gitignore"
+    existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+    if entry not in existing.splitlines():
+        separator = "" if not existing or existing.endswith(chr(10)) else chr(10)
+        ignore.write_text(existing + separator + entry + chr(10), encoding="utf-8")
+        print(f"Added {entry} to .gitignore, so the terms in it stay private.")
 
 
 def _run_diff(args: argparse.Namespace) -> int:
@@ -619,8 +639,6 @@ def _run_diff(args: argparse.Namespace) -> int:
     old = snapshot(args.old, policy, args.source, args.schema, args.recursive)
     new = snapshot(args.new, policy, args.source, args.schema, args.recursive)
     differences = diff_schemas(old, new)
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
     print(render_diff(differences, args.format))
     failed = {"never": False, "any": bool(differences), "breaking": has_breaking(differences)}[args.fail_on]
     return 1 if failed else 0
@@ -628,15 +646,11 @@ def _run_diff(args: argparse.Namespace) -> int:
 
 def _run_audit(args: argparse.Namespace) -> int:
     records, unreadable = read_log(args.log, args.since)
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
     print(summarize_log(records, unreadable, args.format))
     return 0
 
 
 def _run_config(args: argparse.Namespace) -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
     print(describe(_cfg(args), args.reveal))
     return 0
 
@@ -651,12 +665,8 @@ def _run_schema(args: argparse.Namespace) -> int:
         print(f"note: {note}", file=sys.stderr)
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(output + "\n")
+        _write_text(args.output, output + "\n")
     else:
-        # Field names can be non-ASCII, which legacy Windows encodings can't print.
-        if hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8")
         print(output)
     return 0
 
@@ -674,8 +684,9 @@ def _run_scan(args: argparse.Namespace) -> int:
     detectors: list[Detector] = [*custom, PatternDetector(), SecretDetector()]  # Custom first: it wins ties.
     if ner:
         detectors.extend(SpacyDetector(name) for name in _models(args))
-    detectors.extend(_backend_detectors(args))  # Named on purpose, so always used.
-    builtin = set(ENTITY_KINDS) | {SECRET}
+    backends = _backend_detectors(args)
+    detectors.extend(backends)  # Named on purpose, so always used, and so is what they report.
+    builtin = set(ENTITY_KINDS) | {SECRET} | (set(BACKEND_KINDS) if backends else set())
     requested = list(args.kinds) or list(config.scan_kinds)
     if requested:
         unknown = sorted(set(requested) - builtin - custom_kinds - {"all"})
@@ -688,13 +699,12 @@ def _run_scan(args: argparse.Namespace) -> int:
         args.path,
         detectors=detectors,
         kinds=kinds,
+        backend_kinds=BACKEND_KINDS if backends and not requested else (),
         excludes=[*config.scan_exclude, *args.exclude],
         max_bytes=int(max_size * 1024 * 1024),
         include_examples=args.include_examples or bool(config.scan_include_examples),
         show_paths=args.show_paths,
     )
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
     print(render_report(report, args.format))
     if not args.fail_on_findings:
         return 0
@@ -732,8 +742,6 @@ def _run_protect(args: argparse.Namespace) -> int:
     if not changes:
         print("Already up to date.")
         return 0
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
     for change in changes:
         action = "delete" if change.after is None else ("create" if not change.before else "update")
         shown = os.path.relpath(change.path, project)
@@ -768,8 +776,6 @@ def _run_check(args: argparse.Namespace) -> int:
     tables, guessed = load_tables(args.against, args.table, args.source, policy, args.schema, args.recursive)
     findings = check_code(code, tables, language, args.dialect or guessed)
 
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
     print(format_diagnostics(findings, "<stdin>" if args.code == "-" else args.code, args.format))
     failed = any(item.severity == "error" for item in findings) or (args.strict and bool(findings))
     return 1 if failed else 0
@@ -802,8 +808,7 @@ def _run_scrub(args: argparse.Namespace) -> int:
     if args.output:
         _write_text(args.output, cleaned)
     else:
-        if hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8", newline="")
+        _keep_line_endings()
         sys.stdout.write(cleaned)
     return 0
 
@@ -839,9 +844,6 @@ def _run_command(args: argparse.Namespace) -> int:
     if args.save_stderr:
         _write_new(args.save_stderr, raw_err, private=True)
 
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8")
     if raw_err:
         sys.stderr.write(scrub(raw_err, policy))
         if not raw_err.endswith(chr(10)):
@@ -860,6 +862,10 @@ def _run_synth(args: argparse.Namespace) -> int:
     if not 0 <= args.rows <= MAX_ROWS:
         raise SourceError(f"--rows must be between 0 and {MAX_ROWS}")
     tables = synthesize(schema, args.rows, args.seed)
+    if not tables:
+        for note in schema.notes:
+            print(f"note: {note}", file=sys.stderr)
+        raise SourceError("the input has no tables to make fake data for")
 
     for note in schema.notes:
         print(f"note: {note}", file=sys.stderr)
@@ -877,8 +883,7 @@ def _run_synth(args: argparse.Namespace) -> int:
     if not args.output:
         if len(tables) > 1:
             raise SourceError("this input has several tables; pass -o FOLDER, or use --format sqlite")
-        if hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8", newline="")
+        _keep_line_endings()
         sys.stdout.write(render_table(tables[0], args.format))
     elif folder:
         os.makedirs(args.output, exist_ok=True)
@@ -918,28 +923,28 @@ def _owner_only(file: str, flags: int) -> int:
 
 
 _OPTIONAL = (
-    ("CSV, TSV, JSON, XML, SQLite", "sqlalchemy", "built in", None),
-    ("YAML", "yaml", "datanyx[yaml]", None),
-    ("Excel", "openpyxl", "datanyx[excel]", None),
-    ("Parquet and ORC", "pyarrow", "datanyx[parquet] or datanyx[orc]", None),
-    ("Avro", "fastavro", "datanyx[avro]", None),
-    ("DuckDB", "duckdb", "datanyx[duckdb]", None),
-    ("SAS, Stata and SPSS", "pyreadstat", "datanyx[stats]", None),
-    ("MongoDB", "pymongo", "datanyx[mongodb]", None),
-    ("Large JSON streaming", "ijson", "datanyx[streaming]", None),
-    ("MCP server", "mcp", "datanyx[mcp]", None),
-    ("PostgreSQL", "psycopg", "datanyx[postgres]", None),
-    ("MySQL / MariaDB", "pymysql", "datanyx[mysql]", None),
-    ("SQL Server", "pymssql", "datanyx[mssql]", None),
-    ("Oracle", "oracledb", "datanyx[oracle]", None),
-    ("Text anonymization", "spacy", "datanyx[text]", None),
+    ("CSV, TSV, JSON, XML, SQLite", "sqlalchemy", "built in"),
+    ("YAML", "yaml", "datanyx[yaml]"),
+    ("Excel", "openpyxl", "datanyx[excel]"),
+    ("Parquet and ORC", "pyarrow", "datanyx[parquet] or datanyx[orc]"),
+    ("Avro", "fastavro", "datanyx[avro]"),
+    ("DuckDB", "duckdb", "datanyx[duckdb]"),
+    ("SAS, Stata and SPSS", "pyreadstat", "datanyx[stats]"),
+    ("MongoDB", "pymongo", "datanyx[mongodb]"),
+    ("Large JSON streaming", "ijson", "datanyx[streaming]"),
+    ("MCP server", "mcp", "datanyx[mcp]"),
+    ("PostgreSQL", "psycopg", "datanyx[postgres]"),
+    ("MySQL / MariaDB", "pymysql", "datanyx[mysql]"),
+    ("SQL Server", "pymssql", "datanyx[mssql]"),
+    ("Oracle", "oracledb", "datanyx[oracle]"),
+    ("Text anonymization", "spacy", "datanyx[text]"),
 )
 
 
 def _run_doctor(args: argparse.Namespace) -> int:
     import importlib.util
 
-    for label, module, install, _ in _OPTIONAL:
+    for label, module, install in _OPTIONAL:
         found = importlib.util.find_spec(module) is not None
         print(f"{'ok     ' if found else 'missing'}  {label}" + ("" if found else f'  ->  pip install "{install}"'))
     if importlib.util.find_spec("spacy") is not None:
@@ -966,7 +971,7 @@ def _run_mcp(args: argparse.Namespace) -> int:
     run(
         args.root or [str(root) for root in config.mcp_roots] or ["."],
         args.allow_urls or bool(config.mcp_allow_urls),
-        _model(args),
+        _models(args),
         [*config.keep_entities, *args.keep_entity],
         hide=config.hide,
         detectors=[*_custom_detectors(args), *_backend_detectors(args)],
@@ -976,6 +981,11 @@ def _run_mcp(args: argparse.Namespace) -> int:
         scale_hints=bool(args.scale_hints or config.scale_hints),
         infer_keys=bool(args.infer_keys or config.infer_keys),
         allow_env=[*config.mcp_allow_env, *args.allow_env],
+        scan_settings={
+            "excludes": list(config.scan_exclude),
+            "max_bytes": int((config.scan_max_size or 5.0) * 1024 * 1024),
+            "include_examples": bool(config.scan_include_examples),
+        },
     )
     return 0
 
@@ -1009,10 +1019,12 @@ def _run_eval(args: argparse.Namespace) -> int:
     if args.min_recall is not None and not 0 <= args.min_recall <= 1:
         raise SourceError("--min-recall is a fraction from 0 to 1")
     cases = load_cases(args.cases)
+    labelled = {kind for case in cases for kind in case.sensitive}
+    unknown = sorted(set(args.kind) - labelled)
+    if unknown:
+        raise SourceError(f"nothing in the file is labelled {unknown[0]}; it has {', '.join(sorted(labelled))}")
     make = _anonymizer_factory(args, ner=not args.no_ner)
     report = evaluate(cases, make, set(args.kind) or None)
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
     print(render_eval(report, args.show_misses, args.format))
     if args.min_recall is not None:
         failing = report.below(args.min_recall)
@@ -1044,14 +1056,12 @@ def _run_pseudonymize(args: argparse.Namespace) -> int:
         if mapping_file is not None:
             mapping_file.close()
 
-    if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8")
     for table, plan in report.plans.items():
         print(render_plan("Plan" if table == "file" else f"Plan for table {table}", plan), file=sys.stderr)
         print(file=sys.stderr)
     kept = [name for plan in report.plans.values() for name, t in plan.items() if t.review]
     if kept:
-        print(f"Kept as they are, and holding text: {', '.join(kept)}. Check them, and use --column NAME=KIND or --strict.", file=sys.stderr)
+        print(f"Kept as they are, and worth a look: {', '.join(kept)}. Check them, and use --column NAME=KIND or --strict.", file=sys.stderr)
     if args.plan:
         print("Nothing was written. Run it again with -o OUTPUT to write the copy.", file=sys.stderr)
         return 0
@@ -1063,6 +1073,8 @@ def _run_pseudonymize(args: argparse.Namespace) -> int:
         print(f"note: {pseudo.unparsed.get('date', 0)} date value(s) weren't in YYYY-MM-DD form and were kept", file=sys.stderr)
     if not args.key_file:
         print("note: no --key-file, so these fakes won't match the ones from another run", file=sys.stderr)
+    elif pseudo.redraws:
+        print(f"note: {pseudo.redraws} fake(s) clashed and were drawn again, so they may not match another run's", file=sys.stderr)
     print("note: numbers, categories and dates that were kept can still identify people in combination; see the documentation", file=sys.stderr)
     return 0
 
@@ -1078,7 +1090,7 @@ def _run_anonymize(args: argparse.Namespace) -> int:
     if args.input == "-":
         data, suffix = sys.stdin.buffer.read(), ".txt"
     else:
-        data = _read_bytes(args.input)
+        data = read_bytes(args.input)
         suffix = Path(args.input).suffix.lower()
         if not can_handle(args.input):
             suffix = ".txt"  # Anything else is read as plain text, as it always has been.
@@ -1095,8 +1107,7 @@ def _run_anonymize(args: argparse.Namespace) -> int:
     if args.output:
         _write_bytes(args.output, output.data)
     else:
-        if hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8", newline="")
+        _keep_line_endings()
         sys.stdout.write(output.data.decode("utf-8"))
     return 0
 
@@ -1154,8 +1165,7 @@ def _run_stream(args: argparse.Namespace) -> int:
     if args.output:
         out = open(args.output, "w", encoding="utf-8", newline="")
     else:
-        if hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8", newline="")
+        _keep_line_endings()
         out = sys.stdout
     try:
         anonymize_stream(sys.stdin.buffer, anonymizer, out.write, out.flush, sync)
@@ -1181,7 +1191,7 @@ def _run_restore(args: argparse.Namespace) -> int:
         return 0
     suffix = Path(args.input).suffix.lower() if args.input != "-" else ".txt"
     if suffix in (".docx", ".html", ".htm"):
-        _write_bytes(args.output, restore_bytes(_read_bytes(args.input), suffix, placeholders))
+        _write_bytes(args.output, restore_bytes(read_bytes(args.input), suffix, placeholders))
         return 0
     text = _read_text(args.input)
     unknown_names = unknown_placeholders(text, placeholders)
@@ -1199,8 +1209,11 @@ def _check_paths_differ(*paths: str | None) -> None:
 
 
 def _write_text(path: str, text: str) -> None:
-    with open(path, "w", encoding="utf-8", newline="") as stream:
-        stream.write(text)
+    try:
+        with open(path, "w", encoding="utf-8", newline="") as stream:
+            stream.write(text)
+    except OSError as error:
+        raise SourceError(f"cannot write the output: {error.strerror}") from None
 
 
 def _write_mapping(path: str, mapping: dict[str, str]) -> None:
@@ -1209,14 +1222,6 @@ def _write_mapping(path: str, mapping: dict[str, str]) -> None:
         mapping_file.write(mapping)
     finally:
         mapping_file.close()
-
-
-def _read_bytes(target: str) -> bytes:
-    try:
-        with open(target, "rb") as stream:
-            return stream.read()
-    except OSError as error:
-        raise SourceError(f"cannot read input: {error.strerror}") from None
 
 
 def _write_bytes(path: str, data: bytes) -> None:
@@ -1229,14 +1234,7 @@ def _write_bytes(path: str, data: bytes) -> None:
 
 def _read_text(target: str) -> str:
     # Read as bytes so that line endings pass through unchanged.
-    try:
-        if target == "-":
-            data = sys.stdin.buffer.read()
-        else:
-            with open(target, "rb") as stream:
-                data = stream.read()
-    except OSError as error:
-        raise SourceError(f"cannot read input: {error.strerror}") from None
+    data = read_bytes(target)
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:

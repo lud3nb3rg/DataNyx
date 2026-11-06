@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..sources.base import SourceError
-from .anonymizer import Anonymizer
+from .anonymizer import PLACEHOLDER, Anonymizer
 from .documents import anonymize_file, can_handle, restore_bytes
 
 # What a handler turns each kind of file into.
@@ -80,9 +80,13 @@ def anonymize_folder(
     result = BatchResult(skipped=dict(skipped))
 
     planned: list[tuple[Path, str, Path]] = []
+    used: set[str] = set()
     for number, (path, relative) in enumerate(documents, start=1):
         suffix = output_suffix(path.suffix)
         name = str(Path(relative).with_suffix(suffix).as_posix()) if keep_names else f"file_{number:03d}{suffix}"
+        if os.path.normcase(name) in used:  # a.eml and a.txt both end up as text: keep them apart.
+            name = f"{relative}{suffix}"
+        used.add(os.path.normcase(name))
         planned.append((path, relative, out / name))
     existing = [str(destination.relative_to(out)) for _, _, destination in planned if destination.exists()]
     if existing:
@@ -91,14 +95,18 @@ def anonymize_folder(
     try:
         for path, relative, destination in planned:
             name = destination.relative_to(out).as_posix()
+            label = name if not keep_names else relative
             try:
                 output = anonymize_file(path, anonymizer)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with open(destination, "xb") as stream:
+                    stream.write(output.data)
             except SourceError as error:
-                result.failed.append(f"{name if not keep_names else relative}: {error}")
+                result.failed.append(f"{label}: {error}")
                 continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with open(destination, "xb") as stream:
-                stream.write(output.data)
+            except Exception as error:  # One bad file shouldn't end the run. Only its type: the text can quote data.
+                result.failed.append(f"{label}: it couldn't be read ({type(error).__name__})")
+                continue
             result.files[name] = relative
             result.notes.extend(note for note in output.notes if note not in result.notes)
     finally:
@@ -138,11 +146,10 @@ def restore_folder(source: str, target: str, placeholders: dict[str, str], files
 
 
 def _unknown(data: bytes, suffix: str, placeholders: dict[str, str]) -> set[str]:
-    import re
-
     if suffix == ".docx":
         return set()
-    return {found for found in re.findall(r"<[A-Z_]+_\d+>", data.decode("utf-8", errors="replace")) if found not in placeholders}
+    text = data.decode("utf-8", errors="replace")
+    return {match.group() for match in PLACEHOLDER.finditer(text)} - set(placeholders)
 
 
 def anonymize_stream(

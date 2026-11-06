@@ -40,11 +40,11 @@ name the schema shows, is hidden.
 
 **How text is cleaned**, in order:
 
-1. Secrets go: the values of environment variables that look like credentials, and the
-   password inside a URL.
+1. Secrets go: the values of environment variables that look like credentials, the
+   password or token inside a URL, and values assigned to names like `password` or `api_key`.
 2. Your home folder, working folder and username are shortened to `~`, `.` and `<USER>`.
-3. In a Python traceback the `File` lines and the code under them are left alone. They are
-   your script, not the data. Every other line is a message.
+3. In a Python traceback the code under each `File` line is left alone, since it is your own, and
+   a `File` line loses only what its path gives away. Terms you asked to hide go everywhere. Every other line is a message.
 4. In a message, anything in quotes is replaced unless it is a name from the schema. Errors
    quote values far more often than they quote names.
 5. The same detectors as [text anonymization](anonymization.md#text-anonymization) replace emails, IDs and,

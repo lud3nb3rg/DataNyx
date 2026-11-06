@@ -27,7 +27,6 @@ from sqlalchemy.exc import ArgumentError, NoSuchModuleError
 from sqlalchemy.pool import NullPool
 from sqlalchemy.types import TypeEngine
 
-from ..formats import detect_format
 from ..privacy import KeyPolicy
 from ..scale import scale_for
 from ..schema import (
@@ -35,19 +34,18 @@ from ..schema import (
     Boolean,
     DataSchema,
     Entity,
-    Field,
     ForeignKey,
     Integer,
     Node,
     Null,
     Number,
-    Object,
     String,
     Union,
     Unknown,
 )
 from .base import Source, SourceError
-from .catalog import merge_nodes as _merge_nodes
+from .catalog import build_object
+from .files import sqlite_read_only_uri
 
 _FILE_EXTENSIONS = (".db", ".sqlite", ".sqlite3")
 _ENV_PREFIX = "env:"
@@ -61,12 +59,18 @@ _DEFAULT_DRIVERS = {
 }
 # Drivers otherwise wait minutes for an unreachable server, stalling an agent's session.
 _CONNECT_TIMEOUT_SECONDS = 10
+# By driver: each names its own argument, and another driver would refuse it. One not listed keeps its default.
 _CONNECT_TIMEOUT_ARGUMENTS = {
-    "postgresql": "connect_timeout",
-    "mysql": "connect_timeout",
-    "mariadb": "connect_timeout",
-    "mssql": "login_timeout",
-    "oracle": "tcp_connect_timeout",
+    "psycopg": "connect_timeout",
+    "psycopg2": "connect_timeout",
+    "pg8000": "timeout",
+    "pymysql": "connect_timeout",
+    "mysqldb": "connect_timeout",
+    "mariadbconnector": "connect_timeout",
+    "mysqlconnector": "connection_timeout",
+    "pymssql": "login_timeout",
+    "pyodbc": "timeout",
+    "oracledb": "tcp_connect_timeout",
 }
 _SQLITE_CATALOG_TABLES = ("sqlite_master", "sqlite_schema", "sqlite_temp_master", "sqlite_temp_schema")
 _MAX_NATIVE_TYPE_LENGTH = 64
@@ -97,7 +101,7 @@ class SqlSource(Source):
     kind = "sql"
 
     def matches(self, target: str) -> bool:
-        if target.startswith(("mongodb://", "mongodb+srv://")):
+        if is_mongodb_url(target):
             return False  # MongoDB has its own source.
         return (
             target.startswith(_ENV_PREFIX)
@@ -136,6 +140,12 @@ class SqlSource(Source):
             engine.dispose()
 
 
+def is_mongodb_url(target: str) -> bool:
+    """Whether this is a MongoDB URL, directly or in the environment variable it names."""
+    value = os.environ.get(target[len(_ENV_PREFIX) :], "") if target.startswith(_ENV_PREFIX) else target
+    return value.startswith(("mongodb://", "mongodb+srv://"))
+
+
 def _resolve_env(target: str) -> str:
     """Let the URL come from the environment, keeping passwords off the command line."""
     if not target.startswith(_ENV_PREFIX):
@@ -156,7 +166,7 @@ def _create_engine(target: str) -> Engine:
     if url.drivername in _DEFAULT_DRIVERS:
         url = url.set(drivername=_DEFAULT_DRIVERS[url.drivername])
     connect_args = {}
-    timeout_argument = _CONNECT_TIMEOUT_ARGUMENTS.get(url.get_backend_name())
+    timeout_argument = _CONNECT_TIMEOUT_ARGUMENTS.get(url.get_driver_name())
     if timeout_argument and timeout_argument not in url.query:
         connect_args[timeout_argument] = _CONNECT_TIMEOUT_SECONDS
     return sa.create_engine(url, poolclass=NullPool, connect_args=connect_args)
@@ -172,7 +182,7 @@ def _sqlite_engine(path: Path) -> Engine:
 
 def connect_sqlite_catalog_only(path: Path) -> sqlite3.Connection:
     # mode=ro also stops sqlite3 creating an empty file at a mistyped path.
-    connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    connection = sqlite3.connect(sqlite_read_only_uri(path), uri=True)
     connection.set_authorizer(_authorize_sqlite)
     return connection
 
@@ -208,7 +218,7 @@ def _describe(engine: Engine, policy: KeyPolicy, namespace: str | None, kind: st
 
     enforced = engine.dialect.name != "sqlite"
     entities = tuple(
-        _build_entity(table, _read_foreign_keys(inspector, table, tables, namespace), engine, enforced, policy, notes)
+        _build_entity(table, _foreign_keys_or_note(inspector, table, tables, namespace, notes), engine, enforced, policy, notes)
         for table in tables.values()
     )
     if policy.scale_hints:
@@ -266,6 +276,17 @@ def _read_table(inspector: Inspector, name: str, namespace: str | None, policy: 
     return _Table(name, columns, visible, frozenset(key), primary_key)
 
 
+def _foreign_keys_or_note(
+    inspector: Inspector, table: _Table, tables: dict[str, _Table], namespace: str | None, notes: list[str]
+) -> tuple[ForeignKey, ...]:
+    """A server may deny this for one table, which shouldn't cost the whole description."""
+    try:
+        return _read_foreign_keys(inspector, table, tables, namespace)
+    except Exception:
+        notes.append(f"could not read the foreign keys of the table at $.{table.name}")
+        return ()
+
+
 def _read_foreign_keys(
     inspector: Inspector, table: _Table, tables: dict[str, _Table], namespace: str | None
 ) -> tuple[ForeignKey, ...]:
@@ -317,25 +338,12 @@ def _build_entity(
     policy: KeyPolicy,
     notes: list[str],
 ) -> Entity:
-    fields = {}
-    hidden: list[Mapping[str, Any]] = []
-    for column in table.columns:
-        if column["name"] in table.visible:
-            native = _native_type(column["type"], engine)
-            fields[column["name"]] = Field(_column_node(column, table, enforced), True, native)
-        else:
-            hidden.append(column)
-
-    extra = key_format = None
-    if hidden:
-        configured = f"$.{table.name}" in policy.map_paths
-        reason = "configured map path" if configured else "key shape"
-        notes.append(f"hid data-like columns at $.{table.name} ({reason})")
-        extra = _merge_nodes([_column_node(column, table, enforced) for column in hidden])
-        formats = {detect_format(column["name"]) for column in hidden}
-        key_format = formats.pop() if len(formats) == 1 else None
-
-    return Entity(table.name, Object(fields, extra, key_format), table.primary_key, foreign_keys, True)
+    entries = [
+        (column["name"], _column_node(column, table, enforced), _native_type(column["type"], engine) if column["name"] in table.visible else None)
+        for column in table.columns
+    ]
+    node = build_object(entries, f"$.{table.name}", policy, notes)
+    return Entity(table.name, node, table.primary_key, foreign_keys, True)
 
 
 def _column_node(column: Mapping[str, Any], table: _Table, enforced: bool) -> Node:

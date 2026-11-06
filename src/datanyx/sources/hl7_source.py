@@ -34,16 +34,18 @@ class Hl7Source(Source):
     def extract(self, target: str, policy: KeyPolicy, namespace: str | None = None) -> DataSchema:
         reject_namespace(namespace)
         try:
-            text = read_bytes(target).decode("utf-8-sig").strip("\x0b\x1c")  # MLLP framing
+            text = read_bytes(target).decode("utf-8-sig")
         except UnicodeDecodeError:
             raise SourceError("input is not valid UTF-8") from None
-        segments = [line for line in re.split(r"\r\n|\r|\n", text) if line.strip()]
+        # MLLP frames each message, and a file can hold many, so any line can carry the markers.
+        lines = (line.strip("\x0b\x1c") for line in re.split(r"\r\n|\r|\n", text))
+        segments = [line for line in lines if line.strip()]
         if not segments or not segments[0].startswith("MSH") or len(segments[0]) < 8:
             raise SourceError("input isn't an HL7 v2 message (it should start with an MSH segment)")
 
         groups: dict[str, Observation] = {}
         field_sep = comp_sep = rep_sep = sub_sep = None
-        skipped = 0
+        skipped = over_limit = 0
         for line in segments:
             if line.startswith("MSH") and len(line) >= 8:  # A new message may use other separators.
                 field_sep, (comp_sep, rep_sep, _escape, sub_sep) = line[3], (list(line[4:8]) + [None] * 4)[:4]
@@ -56,6 +58,7 @@ class Hl7Source(Source):
                 skipped += 1
                 continue
             if segment not in groups and len(groups) >= _MAX_SEGMENT_TYPES:
+                over_limit += 1
                 continue
             fields = parts[2:] if segment == "MSH" else parts[1:]
             first = 3 if segment == "MSH" else 1
@@ -74,6 +77,8 @@ class Hl7Source(Source):
             entities.append(Entity(segment, node))
         if skipped:
             notes.append(f"skipped {skipped} line(s) that aren't HL7 segments")
+        if over_limit:
+            notes.append(f"left out {over_limit} segment(s) past the limit of {_MAX_SEGMENT_TYPES} segment types")
         return DataSchema(self.kind, tuple(entities), tuple(notes))
 
 

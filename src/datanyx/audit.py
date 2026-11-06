@@ -126,7 +126,7 @@ def read_log(path: str | Path, since: str | None = None) -> tuple[list[dict[str,
         try:
             entry = json.loads(line)
             when = _parse_time(entry["time"])
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, SourceError):  # SourceError: a time that can't be read.
             unreadable += 1
             continue
         if cutoff is None or when >= cutoff:
