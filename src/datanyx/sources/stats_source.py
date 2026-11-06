@@ -50,7 +50,7 @@ class _StatsSource(Source):
         types = meta.readstat_variable_types or {}
         formats = meta.original_variable_types or {}
         for name in meta.column_names:
-            declared = str(formats.get(name, ""))
+            declared = "" if formats.get(name) is None else str(formats[name])
             node = self._node(str(types.get(name, "double")), declared)
             entries.append((str(name), Union((node, Null())), declared if _SAFE_FORMAT.fullmatch(declared) else None))
         notes: list[str] = []

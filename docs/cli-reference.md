@@ -24,6 +24,7 @@ datanyx schema input [options]
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
 | `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
 | `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
@@ -45,6 +46,7 @@ datanyx synth input [options]
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
 | `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
 | `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
@@ -67,6 +69,7 @@ datanyx pseudonymize input [options]
 | `input` | the file to copy: .csv, .tsv, .json, .jsonl or a SQLite database |
 | `-o`, `--output` `OUTPUT` | the new file to write (never overwritten) |
 | `--source` `SOURCE` | input type (default: from the extension). Choices: `csv`, `tsv`, `json`, `jsonl`, `sqlite`. |
+| `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--key-file` `FILE` | a secret key, created if missing: with it the same value gets the same fake in every run. Keep it with the real data |
 | `--mapping` `FILE` | also save which fake stands for which real value, to a new file. It holds real data: keep it away from agents |
 | `--column` `NAME=KIND` | treat a column or key as this kind, overriding the guess (repeatable; TABLE.COLUMN for one table of a database) |
@@ -178,6 +181,7 @@ datanyx check code [options]
 | `-r`, `--recursive` | when an input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to use (default: the database's default) |
 | `--source` `SOURCE` | input type for --against (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--map-path` `PATH` | hide all keys or columns at a path (repeatable) |
 | `--keep-name` `NAME` | show this name even if it looks like data (repeatable) |
 
@@ -297,6 +301,7 @@ datanyx diff old new [options]
 | `-r`, `--recursive` | when an input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to use (default: the database's default) |
 | `--source` `SOURCE` | input type for live inputs (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--map-path` `PATH` | hide all keys or columns at a path (repeatable) |
 | `--keep-name` `NAME` | show this name even if it looks like data (repeatable) |
 

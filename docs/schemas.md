@@ -20,6 +20,7 @@ datanyx schema orders.csv --format typescript   # or pydantic, or sql
 | `-o`, `--output` | Write to a file instead of stdout |
 | `--schema` | Database schema to describe, instead of the database's default |
 | `--source` | Set the input type (`csv`, `tsv`, `json`, `jsonl`, `yaml`, `xml`, `excel`, `parquet`, `sql`) when it can't be detected |
+| `--delimiter` | The separator of a CSV or TSV file, such as `;`, `\|` or `tab`, when it isn't a comma (CSV) or a tab (TSV) |
 | `--map-path` | Hide all keys or columns at a path ([details](#adjusting-what-gets-hidden)) |
 | `--keep-name` | Show a name that was hidden automatically ([details](#adjusting-what-gets-hidden)) |
 

@@ -44,7 +44,7 @@ class DelimitedSource(Source):
         evidence = policy.evidence.table(None) if policy.evidence is not None else None
         with open_text(target) as stream:
             try:
-                names = _read_rows(csv.reader(stream, delimiter=self._delimiter), root, notes, evidence, policy.keep_names)
+                names = _read_rows(csv.reader(stream, delimiter=policy.delimiter or self._delimiter), root, notes, evidence, policy.keep_names)
             except csv.Error:
                 raise SourceError(f"input isn't valid {self.kind.upper()}") from None
             except UnicodeDecodeError:
