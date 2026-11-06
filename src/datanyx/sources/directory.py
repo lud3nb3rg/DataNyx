@@ -138,13 +138,19 @@ def _shared_fields(entities: list[Entity]) -> list[str]:
 
     Only names that are already visible in the schema are used.
     """
-    notes: list[str] = []
-    fields = [(entity.name, _record_fields(entity.node)) for entity in entities]
+    fields = [(entity.name or "", _record_fields(entity.node)) for entity in entities]
+    # Entities with the same shared fields are reported together, not pair by pair.
+    groups: dict[tuple[str, ...], list[str]] = {}
     for (first, first_fields), (second, second_fields) in combinations(fields, 2):
-        shared = sorted(first_fields & second_fields)
+        shared = tuple(sorted(first_fields & second_fields))
         if shared:
-            notes.append(f"{first} and {second} share fields: {', '.join(shared)}")
+            members = groups.setdefault(shared, [])
+            members.extend(name for name in (first, second) if name not in members)
+    notes: list[str] = []
+    for shared, members in groups.items():
         if len(notes) >= _MAX_SHARED_NOTES:
-            notes.append("more shared fields not listed")
+            notes.append(f"{len(groups) - _MAX_SHARED_NOTES} more groups of shared fields not listed")
             break
+        joined = members[0] + " and " + members[1] if len(members) == 2 else ", ".join(members[:-1]) + " and " + members[-1]
+        notes.append(f"{joined} share fields: {', '.join(shared)}")
     return notes

@@ -76,6 +76,7 @@ class KeyPolicy:
         because a flat record with many string fields is common and legitimate.
     scale_hints: also record each table's row count as an order of magnitude.
     infer_keys: also flag key-looking columns that are unique, and joins between tables.
+    delimiter: the one-character separator of CSV and TSV input, instead of the usual one.
     """
 
     map_paths: frozenset[str] = frozenset()
@@ -86,6 +87,7 @@ class KeyPolicy:
     map_threshold_scalars: int = 32
     scale_hints: bool = False
     infer_keys: bool = False
+    delimiter: str | None = None
     #: Collects key evidence while a source reads (`datanyx.keys.Evidence`); made by `extract`.
     evidence: Any = field(default=None, compare=False, repr=False)
 

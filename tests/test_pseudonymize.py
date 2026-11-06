@@ -450,3 +450,32 @@ def test_cli_errors(tmp_path, capsys):
     assert "unknown kind" in capsys.readouterr().err
     assert main(["pseudonymize", str(tmp_path / "missing.csv"), "-o", str(tmp_path / "m.csv")]) == 1
     assert main(["pseudonymize", source, "-o", str(tmp_path / "ok.csv"), "--mapping", source]) == 1
+
+
+def test_foreign_key_with_a_personal_looking_name_still_follows_its_parent(tmp_path):
+    path = tmp_path / "blog.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        create table users (id integer primary key, email text);
+        create table posts (id integer primary key, author integer references users(id));
+        """
+    )
+    for i in range(1, 21):
+        connection.execute("insert into users values (?,?)", (i, f"user{i}@acme-corp.io"))
+        connection.execute("insert into posts values (?,?)", (i, i))
+    connection.commit()
+    connection.close()
+    target, _ = run_file(tmp_path, str(path), "sqlite", output="copy.db")
+    copy = sqlite3.connect(target)
+    assert copy.execute("pragma foreign_key_check").fetchall() == []
+    assert copy.execute("select count(*) from posts join users on users.id = posts.author").fetchone() == (20,)
+
+
+def test_pseudonymize_reads_and_writes_a_custom_delimiter(tmp_path):
+    source = tmp_path / "people.csv"
+    source.write_text("customer_id;name;email\n1;Jessica Whitfield;jessica@acme-corp.io\n", encoding="utf-8")
+    target, _ = run_file(tmp_path, str(source), "csv", delimiter=";")
+    text = open(target, encoding="utf-8").read()
+    assert text.splitlines()[0] == "customer_id;name;email"
+    assert "Jessica" not in text and len(text.splitlines()[1].split(";")) == 3

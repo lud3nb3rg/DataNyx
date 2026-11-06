@@ -245,7 +245,7 @@ _RUN_TEXT = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.DOTALL)
 _FIELD_CODE = re.compile(r"(<w:instrText(?:\s[^>]*)?>)(.*?)(</w:instrText>)", re.DOTALL)
 _TEXT_PART = re.compile(r"word/(?:glossary/)?(document|header\d*|footer\d*|comments|footnotes|endnotes)\.xml")
 _PERSONAL_PROPERTIES = re.compile(
-    r"(<(?:dc:creator|cp:lastModifiedBy|dc:title|dc:subject|cp:keywords|dc:description|cp:category|cp:contentStatus|Company|Manager|HyperlinkBase|Template)\b[^>]*>).*?(</)",
+    r"(<(dc:creator|cp:lastModifiedBy|dc:title|dc:subject|cp:keywords|dc:description|cp:category|cp:contentStatus|Company|Manager|HyperlinkBase|Template)\b[^>]*(?<!/)>)[^<]*(</\2>)",
     re.DOTALL,
 )
 # Text a reader no longer sees, kept in the file by tracked changes.
@@ -310,7 +310,7 @@ def _docx(data: bytes, anonymizer: Anonymizer) -> Output:
                 elif name.startswith("word/") and name.endswith(".xml"):
                     content = _docx_attributes(_xml_text(content), anonymizer).encode("utf-8")
                 elif name in ("docProps/core.xml", "docProps/app.xml"):
-                    content = _PERSONAL_PROPERTIES.sub(r"\1\2", _xml_text(content)).encode("utf-8")
+                    content = _PERSONAL_PROPERTIES.sub(r"\1\3",_xml_text(content)).encode("utf-8")
                 elif name.startswith("word/_rels/") and name.endswith(".rels"):
                     content = _link_targets(_xml_text(content), anonymizer).encode("utf-8")
                 target.writestr(info, content)
