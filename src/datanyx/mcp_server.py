@@ -4,19 +4,22 @@ The agent can only get two things from it: a schema, and text with identifiers
 replaced by placeholders. Anything that could reveal what is being hidden is left
 out on purpose:
 
-- No `keep` options. Asking for a name to be kept visible is a way of testing
-  whether that name exists in the data.
+- No `keep` or `hide` options. Asking for a name to be kept visible, or to be hidden, is a
+  way of testing whether that name exists in the data. What to hide is the user's choice,
+  made when starting the server.
 - No restore, and no mapping file, since both hold the real values.
-- Files must be inside the folders the server was started with, and database URLs
-  are refused (use `env:NAME` so the password stays out of the conversation).
+- Files must be inside the folders the server was started with, whichever way they are
+  named: a path, a variable holding one, or a `sqlite:///` URL. Database URLs are refused
+  unless allowed (use `env:NAME` so the password stays out of the conversation).
 - Errors are reduced to fixed messages, because an exception can quote the data.
 """
 
 from __future__ import annotations
 
 import functools
+import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +30,7 @@ from .check import check_code as run_check
 from .diff import diff_schemas, render_diff, snapshot
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
-from .scan import render_report, scan
+from .scan import DEFAULT_KINDS, render_report, scan
 from .sources import SourceError
 from .synth import render_table, synthesize
 from .text import (
@@ -36,10 +39,12 @@ from .text import (
     SECRET,
     Detector,
     PatternDetector,
+    SecretDetector,
     SpacyDetector,
     anonymize,
     kinds_of,
 )
+from .text.backends import BACKEND_KINDS
 
 INSTRUCTIONS = (
     "Describes the user's data without revealing it. `describe_data` returns a schema "
@@ -54,6 +59,11 @@ INSTRUCTIONS = (
 )
 _ENV_PREFIX = "env:"
 MAX_SAMPLE_ROWS = 200
+_FILE_DATABASES = ("sqlite", "duckdb")
+# One answer for a variable that's unset, unusable or out of bounds: the agent can name any variable,
+# and shouldn't learn which exist or what they hold.
+_BAD_VARIABLE = "that env:NAME can't be used here; ask the user to set it to a database URL"
+_OUTSIDE = "that path is outside the folders this server may read"
 
 
 class Access:
@@ -65,17 +75,42 @@ class Access:
 
     def check(self, target: str) -> str:
         if target.startswith(_ENV_PREFIX):
+            self._check_variable(target[len(_ENV_PREFIX) :])
             return target
         if "://" in target:
-            if self.allow_urls:
-                return target
-            raise SourceError("database URLs aren't accepted here; ask the user to set one as env:NAME")
+            if not self.allow_urls:
+                raise SourceError("database URLs aren't accepted here; ask the user to set one as env:NAME")
+            if not self._url_allowed(target):
+                raise SourceError(_OUTSIDE)
+            return target
         if target == "-":
             raise SourceError("stdin isn't available; pass a path")
         resolved = Path(target).resolve()
-        if not any(resolved.is_relative_to(root) for root in self.roots):
-            raise SourceError("that path is outside the folders this server may read")
+        if not self._inside_roots(resolved):
+            raise SourceError(_OUTSIDE)
         return str(resolved)
+
+    def _check_variable(self, name: str) -> None:
+        value = os.environ.get(name, "")
+        allowed = self._url_allowed(value) if "://" in value else bool(value) and self._inside_roots(Path(value).resolve())
+        if not allowed:
+            raise SourceError(_BAD_VARIABLE)
+
+    def _url_allowed(self, url: str) -> bool:
+        """A URL can name a file, which is under the same rules as a path."""
+        if url.split("://", 1)[0].split("+", 1)[0].lower() not in _FILE_DATABASES:
+            return True
+        from sqlalchemy.engine import make_url
+        from sqlalchemy.exc import ArgumentError
+
+        try:
+            database = make_url(url).database
+        except (ArgumentError, ValueError):
+            return False
+        return not database or database == ":memory:" or self._inside_roots(Path(database).resolve())
+
+    def _inside_roots(self, resolved: Path) -> bool:
+        return any(resolved.is_relative_to(root) for root in self.roots)
 
 
 def _tool_error() -> type[Exception]:
@@ -112,20 +147,22 @@ def _guard(function: Callable[..., str]) -> Callable[..., str]:
 def create_server(
     roots: Sequence[str | Path] = (".",),
     allow_urls: bool = False,
-    model: str = DEFAULT_MODEL,
+    model: str | Sequence[str] = DEFAULT_MODEL,
     keep_entity: Sequence[str] = (),
     hide: Sequence[str] = (),
     custom_detectors: Sequence[Detector] = (),
     audit_log: str | Path | None = None,
     scale_hints: bool = False,
     infer_keys: bool = False,
+    scan_settings: Mapping[str, Any] | None = None,
 ):
     """Build the server.
 
-    `keep_entity`, `hide` and `custom_detectors` are the user's choices, made when starting
-    it. `audit_log` is a file that gets a record of every tool call (never values).
-    `scale_hints` and `infer_keys` add size buckets and key guesses to schemas; the agent can't switch
-    them on or off.
+    `model` is one spaCy model or several, such as one per language. `keep_entity`, `hide` and
+    `custom_detectors` are the user's choices, made when starting it. `audit_log` is a file that
+    gets a record of every tool call (never values). `scale_hints` and `infer_keys` add size buckets
+    and key guesses to schemas; the agent can't switch them on or off. `scan_settings` are options
+    for `scan` (`excludes`, `max_bytes`, `include_examples`).
     """
     try:
         from mcp.server.mcpserver import MCPServer as Server  # type: ignore[import-not-found]  # mcp 2.x
@@ -136,7 +173,11 @@ def create_server(
             raise SourceError("the MCP server needs the mcp package; install datanyx[mcp]") from None
 
     access = Access(roots, allow_urls)
+    models = [model] if isinstance(model, str) else list(model)
     detectors: list[Detector] = []  # Loaded on first use: the model is slow to start.
+    scan_options = dict(scan_settings or {})
+    custom_kinds = kinds_of(list(custom_detectors))
+    backend_kinds = BACKEND_KINDS if any(getattr(item, "uses_model", False) for item in custom_detectors) else frozenset()
     server = Server("datanyx", instructions=INSTRUCTIONS)
     audit = AuditLog(audit_log)
     hide_terms = list(hide)
@@ -245,10 +286,16 @@ def create_server(
         (the default), or others such as DATE and URL. File names that look like data are shown
         as file_N. Names of people and companies aren't found.
         """
-        allowed = {*ENTITY_KINDS, SECRET}
+        allowed = {*ENTITY_KINDS, SECRET, *custom_kinds, *backend_kinds}
         if kinds and not set(kinds) <= allowed:
             raise SourceError(f"kinds must be among {sorted(allowed)}")
-        report = scan(access.check(target), kinds=kinds or None)
+        report = scan(
+            access.check(target),
+            detectors=[*custom_detectors, PatternDetector(), SecretDetector()],  # Custom first: it wins ties.
+            kinds=kinds or {*DEFAULT_KINDS, *custom_kinds},
+            backend_kinds=() if kinds else backend_kinds,
+            **scan_options,
+        )
         return render_report(report)
 
     @tool
@@ -263,10 +310,10 @@ def create_server(
         return render_diff(diff_schemas(first, second))
 
     @tool
-    def anonymize_file(target: str, hide: list[str] | None = None) -> str:
-        """Return a text file with names and other identifiers replaced by placeholders.
+    def anonymize_file(target: str) -> str:
+        """Return a text file with names, credentials and other identifiers replaced by placeholders.
 
-        This is best effort and can miss things. hide: extra terms to always replace.
+        This is best effort and can miss things.
         """
         if target.startswith(_ENV_PREFIX) or "://" in target:
             raise SourceError("pass a path to a text file")
@@ -278,8 +325,8 @@ def create_server(
         except UnicodeDecodeError:
             raise SourceError("input is not valid UTF-8") from None
         if not detectors:
-            detectors.extend([*custom_detectors, PatternDetector(), SpacyDetector(model)])
-        return anonymize(text, detectors, [*hide_terms, *(hide or ())], (), keep_entity)
+            detectors.extend([*custom_detectors, PatternDetector(), SecretDetector(), *(SpacyDetector(name) for name in models)])
+        return anonymize(text, detectors, hide_terms, (), keep_entity)
 
     return server
 
@@ -299,9 +346,14 @@ class BearerAuth:
         self._token = token.encode()
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and not self._allowed(scope):
-            await send({"type": "http.response.start", "status": 401, "headers": [(b"www-authenticate", b"Bearer"), (b"content-length", b"0")]})
-            await send({"type": "http.response.body", "body": b""})
+        # Start-up and shutdown events carry no request. Anything else needs the token, so a kind
+        # of connection added to the app later can't arrive without one.
+        if scope["type"] != "lifespan" and not self._allowed(scope):
+            if scope["type"] == "http":
+                await send({"type": "http.response.start", "status": 401, "headers": [(b"www-authenticate", b"Bearer"), (b"content-length", b"0")]})
+                await send({"type": "http.response.body", "body": b""})
+            elif scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
             return
         await self.app(scope, receive, send)
 
@@ -330,7 +382,11 @@ def http_app(server, host: str, token: str):
             pass
     try:
         app = server.streamable_http_app(host=host, **options)
-    except TypeError:  # mcp 1.x: the host is a setting of the server
+    except TypeError:  # mcp 1.x: these are settings of the server
+        settings = server.settings
+        settings.host = host
+        if "transport_security" in options:
+            settings.transport_security = options["transport_security"]
         app = server.streamable_http_app()
     return BearerAuth(app, token)
 
@@ -338,7 +394,7 @@ def http_app(server, host: str, token: str):
 def run(
     roots: Sequence[str | Path],
     allow_urls: bool = False,
-    model: str = DEFAULT_MODEL,
+    model: str | Sequence[str] = DEFAULT_MODEL,
     keep_entity: Sequence[str] = (),
     hide: Sequence[str] = (),
     detectors: Sequence[Detector] = (),
@@ -347,12 +403,13 @@ def run(
     token: str | None = None,
     scale_hints: bool = False,
     infer_keys: bool = False,
+    scan_settings: Mapping[str, Any] | None = None,
 ) -> None:
     allowed = {*ENTITY_KINDS, SECRET, *kinds_of(list(detectors))}
     unknown = set(keep_entity) - allowed
     if unknown:
         raise SourceError(f"unknown entity kinds: {sorted(unknown)}")
-    server = create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys)
+    server = create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys, scan_settings)
     if http is None:
         server.run("stdio")
         return

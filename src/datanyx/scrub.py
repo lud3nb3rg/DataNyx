@@ -10,8 +10,9 @@ What it does, in order:
 1. Secrets: values of environment variables that look like credentials, and the
    password inside a URL, are replaced.
 2. Paths: your home folder, working folder and username are shortened.
-3. In a Python traceback, `File` lines and the code under them are left alone. Every
-   other line is treated as a message.
+3. In a Python traceback, the code under a `File` line is left alone apart from terms to
+   hide, and a `File` line loses only what its path gives away. Every other line is treated
+   as a message.
 4. In messages, anything in quotes is replaced unless it is a name the schema made
    public: error messages quote values far more often than names.
 5. Detectors (emails, IDs, and names if a NER model is used) replace what they find.
@@ -29,8 +30,9 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from .credentials import hide_url_credentials
 from .schema import Array, DataSchema, Node, Object, Union
-from .text import Detector, PatternDetector, anonymize
+from .text import Anonymizer, Detector, PatternDetector, SecretDetector
 
 VALUE = "<VALUE>"
 NUMBER = "<NUMBER>"
@@ -40,7 +42,6 @@ _SECRET_NAME = re.compile(
     r"(?i)(key|token|secret|passw|credential|auth|dsn|connection|database_url|_url$|^url$)"
 )
 _MIN_SECRET_LENGTH = 6
-_URL_CREDENTIALS = re.compile(r"(?<=://)[^/\s:@'\"]+:[^@\s'\"]+(?=@)")
 
 _TRACEBACK = re.compile(r"^Traceback \(most recent call last\):\s*$")
 _CHAIN = re.compile(r"^(During handling of the above exception|The above exception was the direct cause)")
@@ -48,7 +49,12 @@ _EXCEPTION_LINE = re.compile(
     r"^((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception|Warning|Exit|Interrupt|Failure))(:\s*)(.*)$"
 )
 _QUOTED = re.compile(r"""(?<!\w)(?:[bBrRuUfF]{1,2})?(['"])((?:(?!\1)[^\n\\]|\\.){0,300})\1(?!\w)""")
+# Longer ones, which the pattern above leaves alone to stay fast on lines full of stray quotes.
+_LONG_QUOTED = re.compile(r"""(['"])[^\n]{301,}?\1""")
 _NUMBER = re.compile(r"(?<![\w.])(?:\d{4,}|\d+\.\d+)(?![\w])")
+_TRACEBACK_FILE = re.compile(r"^\s+File \"")
+_FILE_PATH = re.compile(r'^(\s+File ")(.*?)(".*)$')
+_CARETS = re.compile(r"^\s+[\^~]+\s*$")
 
 # Words that are about how the data is stored rather than what is in it.
 _COMMON_WORDS = frozenset(
@@ -70,7 +76,7 @@ class ScrubPolicy:
 
     allowed_names: frozenset[str] = frozenset()
     hide_terms: tuple[str, ...] = ()
-    detectors: tuple[Detector, ...] = field(default_factory=lambda: (PatternDetector(),))
+    detectors: tuple[Detector, ...] = field(default_factory=lambda: (PatternDetector(), SecretDetector()))
     redact_numbers: bool = True
 
 
@@ -83,6 +89,8 @@ def scrub(text: str, policy: ScrubPolicy | None = None) -> str:
     lines = text.split("\n")
     kinds = _classify(lines)
     messages = [index for index, kind in enumerate(kinds) if kind == "message"]
+    structure = [index for index, kind in enumerate(kinds) if kind == "structure"]
+    anonymizer = Anonymizer(policy.detectors, policy.hide_terms)
 
     prefixes: dict[int, str] = {}
     bodies: list[str] = []
@@ -92,10 +100,21 @@ def scrub(text: str, policy: ScrubPolicy | None = None) -> str:
         prefixes[index] = prefix
         bodies.append(_redact_quoted(body, policy.allowed_names))
 
-    for index, body in zip(messages, _detect(bodies, policy)):
+    for index, body in zip(messages, _detect(bodies, anonymizer)):
         if policy.redact_numbers:
             body = _NUMBER.sub(NUMBER, body)
         lines[index] = prefixes[index] + body
+
+    # A traceback's code is the agent's own, so it stays, except for terms to hide: "always remove
+    # this term" has no exceptions. A `File` line's path isn't code, so patterns look at it too, though
+    # not a language model, which would only mangle a path.
+    patterns = [detector for detector in policy.detectors if not getattr(detector, "uses_model", False)]
+    for index in structure:
+        path = _FILE_PATH.match(lines[index])
+        if path:
+            lines[index] = path.group(1) + anonymizer.anonymize(path.group(2), detectors=patterns) + anonymizer.anonymize(path.group(3), detectors=())
+        else:
+            lines[index] = anonymizer.anonymize(lines[index], detectors=())
     return "\n".join(lines)
 
 
@@ -121,10 +140,11 @@ def visible_names(schema: DataSchema) -> frozenset[str]:
 
 
 def _hide_secrets(text: str) -> str:
-    for name, value in os.environ.items():
-        if _SECRET_NAME.search(name) and len(value) >= _MIN_SECRET_LENGTH:
-            text = text.replace(value, SECRET)
-    return _URL_CREDENTIALS.sub("<CREDENTIALS>", text)
+    # Longest first: a password inside a database URL mustn't break the URL's own match.
+    values = {value for name, value in os.environ.items() if _SECRET_NAME.search(name) and len(value) >= _MIN_SECRET_LENGTH}
+    for value in sorted(values, key=len, reverse=True):
+        text = text.replace(value, SECRET)
+    return hide_url_credentials(text)
 
 
 def _shorten_paths(text: str) -> str:
@@ -146,17 +166,25 @@ def _classify(lines: list[str]) -> list[str]:
     """Mark each line `structure` (a traceback's own lines) or `message`."""
     kinds = []
     in_traceback = False
+    after_file = False  # The one line under a `File` line is its code.
     for line in lines:
         if _TRACEBACK.match(line):
             kinds.append("structure")
-            in_traceback = True
+            in_traceback, after_file = True, False
         elif _CHAIN.match(line):
             kinds.append("structure")
-        elif in_traceback and line.startswith(" "):
-            kinds.append("structure")  # `File ...`, the code line, and the ^^^^ markers.
+            after_file = False
+        elif in_traceback and _TRACEBACK_FILE.match(line):
+            kinds.append("structure")
+            after_file = True
+        elif in_traceback and (after_file or _CARETS.match(line)) and line.startswith(" "):
+            kinds.append("structure")
+            after_file = False
         else:
             kinds.append("message")
-            in_traceback = False
+            after_file = False
+            # An indented line that isn't one of the above can be a value, but the traceback goes on.
+            in_traceback = in_traceback and line.startswith(" ")
     return kinds
 
 
@@ -166,19 +194,18 @@ def _redact_quoted(text: str, allowed: frozenset[str]) -> str:
         # An empty string holds no data, and "got an empty string" helps in debugging.
         return match.group(0) if not inner or inner in allowed or inner in _COMMON_WORDS else VALUE
 
-    return _QUOTED.sub(replace, text)
+    return _LONG_QUOTED.sub(VALUE, _QUOTED.sub(replace, text))
 
 
-def _detect(bodies: list[str], policy: ScrubPolicy) -> list[str]:
+def _detect(bodies: list[str], anonymizer: Anonymizer) -> list[str]:
     """Run the detectors over all message text at once, so one person keeps one placeholder."""
     if not bodies:
         return bodies
-    joined = "\n".join(bodies)
-    result = anonymize(joined, policy.detectors, policy.hide_terms).split("\n")
+    result = anonymizer.anonymize("\n".join(bodies)).split("\n")
     if len(result) == len(bodies):
         return result
     # A match spanned lines, which breaks the pairing, so do each line on its own.
-    return [anonymize(body, policy.detectors, policy.hide_terms) for body in bodies]
+    return [anonymizer.anonymize(body) for body in bodies]
 
 
 def _name_forms(name: str) -> set[str]:

@@ -20,8 +20,10 @@ from typing import Any
 from ..formats import detect_format
 from ..privacy import looks_like_data
 from ..sources.base import SourceError
+from ..sources.files import FIRST_ROW_IS_DATA, column_names, positional_names, row_is_data, sqlite_read_only_uri
 from .fakes import Pseudonymizer
-from .plan import Treatment, build_plan
+from .plan import Treatment, build_plan, classify
+from .sql_text import clean_table_sql, holds_text, without_comments
 
 SAMPLE_ROWS = 2000
 BATCH = 1000
@@ -68,6 +70,8 @@ def pseudonymize_file(source: str, target: str | None, kind: str, pseudo: Pseudo
             raise SourceError(f"can't pseudonymize {kind} files")
     except UnicodeDecodeError:
         raise SourceError("input is not valid UTF-8") from None
+    except csv.Error:
+        raise SourceError(f"input isn't valid {kind.upper()}") from None
     except ValueError as error:
         if "text anonymizer" in str(error):
             raise SourceError("free text columns need a text anonymizer to be passed in") from None
@@ -80,34 +84,69 @@ def pseudonymize_file(source: str, target: str | None, kind: str, pseudo: Pseudo
 # --- CSV and TSV ------------------------------------------------------------------------------------
 
 
+def _has_cells(row: list[str]) -> bool:
+    return any(cell.strip() for cell in row)
+
+
 def _delimited(source: str, target: str | None, delimiter: str, pseudo: Pseudonymizer, options: Options, report: Report) -> None:
     csv.field_size_limit(1 << 24)
     with open(source, encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream, delimiter=delimiter)
-        header = next(reader, None)
-        if header is None:
+        first = next((row for row in reader if _has_cells(row)), None)
+        if first is None:
             raise SourceError("the file is empty")
-        columns: dict[str, list[Any]] = {name: [] for name in header}
-        names = list(columns)
+        headerless = row_is_data(first)
+        names = positional_names(first) if headerless else column_names(first)
+        columns: dict[str, list[Any]] = {name: [] for name in names}
+        for row in ([first] if headerless else []):
+            for name, cell in zip(names, row):
+                columns[name].append(cell)
         for count, row in enumerate(reader):
             if count >= SAMPLE_ROWS:
                 break
-            for name, cell in zip(names, row):
+            for name, cell in zip(names, row):  # By position: two columns can share a name in the file.
                 columns[name].append(cell)
-    plan = build_plan(columns, overrides=options.overrides, keep=options.keep, strict=options.strict)
+    if headerless:
+        report.notes.append(FIRST_ROW_IS_DATA)
+    overrides, keep = _for_renamed_columns(names, first, options)
+    plan = build_plan(columns, overrides=overrides, keep=keep, strict=options.strict)
     report.plans["file"] = plan
     if options.plan_only or target is None:
         return
-    kinds = [plan[name].kind for name in header]
+    kinds = [plan[name].kind for name in names]
+    width = len(kinds)
+    beyond = 0
+    at_header = not headerless
+    started = False
     with open(source, encoding="utf-8-sig", newline="") as stream, open(target, "x", encoding="utf-8", newline="") as out:
         reader = csv.reader(stream, delimiter=delimiter)
         writer = csv.writer(out, delimiter=delimiter, lineterminator="\n")
-        for index, row in enumerate(reader):
-            if index == 0:
-                writer.writerow(row)
+        for row in reader:
+            started = started or _has_cells(row)
+            if not started or (at_header and started):
+                writer.writerow(row)  # Blank lines before the header, and the header itself.
+                at_header = at_header and not started
                 continue
-            writer.writerow([pseudo.apply(kinds[i], cell) if i < len(kinds) else cell for i, cell in enumerate(row)])
+            # A cell past the header has no column to say what it holds, so it can't be kept.
+            extra = max(len(row) - width, 0)
+            beyond += extra
+            writer.writerow([pseudo.apply(kinds[i], cell) for i, cell in enumerate(row[:width])] + [""] * extra)
             report.rows += 1
+    if beyond:
+        report.notes.append(f"blanked {beyond} cell(s) past the end of the header: nothing says what they hold")
+
+
+def _for_renamed_columns(names: list[str], header: list[str], options: Options) -> tuple[dict[str, str], frozenset[str]]:
+    """What was asked for a column also applies under the name it has here: a second `email` is `email_2`."""
+    overrides = {name.lower(): kind for name, kind in options.overrides.items()}
+    keep = {name.lower() for name in options.keep}
+    for name, original in zip(names, header):
+        if name != original:
+            if original.lower() in overrides:
+                overrides[name.lower()] = overrides[original.lower()]
+            if original.lower() in keep:
+                keep.add(name.lower())
+    return overrides, frozenset(keep)
 
 
 # --- JSON and JSON Lines -----------------------------------------------------------------------------
@@ -124,15 +163,38 @@ def _collect(node: Any, key: str, found: dict[str, list[Any]]) -> None:
         found[key].append(node)
 
 
-def _transform(node: Any, key: str, plan: Mapping[str, Treatment], pseudo: Pseudonymizer) -> Any:
+_KEEPS_FLOATS = frozenset({"date", "phone", "postal"})
+
+
+def _transform(node: Any, key: str, plan: dict[str, Treatment], pseudo: Pseudonymizer, options: Options, report: Report) -> Any:
     if isinstance(node, dict):
-        return {_key(name, pseudo): _transform(value, name, plan, pseudo) for name, value in node.items()}
+        return {_key(name, pseudo): _transform(value, name, plan, pseudo, options, report) for name, value in node.items()}
     if isinstance(node, list):
-        return [_transform(item, key, plan, pseudo) for item in node]
-    treatment = plan.get(key)
-    if treatment is None or (isinstance(node, (bool, float)) and treatment.kind not in ("date",)):
+        return [_transform(item, key, plan, pseudo, options, report) for item in node]
+    treatment = _treatment_for(node, key, plan, options, report)
+    if isinstance(node, bool) or (isinstance(node, float) and treatment.kind not in _KEEPS_FLOATS):
         return node
     return pseudo.apply(treatment.kind, node)
+
+
+def _treatment_for(node: Any, key: str, plan: dict[str, Treatment], options: Options, report: Report) -> Treatment:
+    if key in plan:
+        return plan[key]
+    if key and not looks_like_data(key):  # First seen after the sample: decided now, and shown in the plan.
+        plan[key] = build_plan({key: [node]}, overrides=options.overrides, keep=options.keep, strict=options.strict)[key]
+        return plan[key]
+    # No key at all, or one that is itself data, says nothing: only the value can.
+    if not isinstance(node, str):
+        return Treatment("keep", "a number or empty value with no name")
+    found = classify("", [node])
+    if found.kind == "keep" and not found.review:
+        return found  # A date, or a number written as text.
+    if UNNAMED_NOTE not in report.notes:
+        report.notes.append(UNNAMED_NOTE)
+    return found if found.kind not in ("keep", "text") else Treatment("category", UNNAMED_NOTE)
+
+
+UNNAMED_NOTE = "text with no key, or under a key that is itself data, was replaced going by what it looks like"
 
 
 def _key(name: str, pseudo: Pseudonymizer) -> str:
@@ -160,7 +222,7 @@ def _json(source: str, target: str | None, pseudo: Pseudonymizer, options: Optio
     plan = _plan_for(found, options, report)
     if options.plan_only or target is None:
         return
-    result = _transform(data, "", plan, pseudo)
+    result = _transform(data, "", plan, pseudo, options, report)
     with open(target, "x", encoding="utf-8", newline="") as out:
         out.write(json.dumps(result, ensure_ascii=False, indent=2 if "\n" in text.strip() else None))
     report.rows = len(result) if isinstance(result, list) else 1
@@ -187,7 +249,7 @@ def _jsonl(source: str, target: str | None, pseudo: Pseudonymizer, options: Opti
         return
     with open(target, "x", encoding="utf-8", newline="") as out:
         for record in _lines(source):
-            out.write(json.dumps(_transform(record, "", plan, pseudo), ensure_ascii=False) + "\n")
+            out.write(json.dumps(_transform(record, "", plan, pseudo, options, report), ensure_ascii=False) + "\n")
             report.rows += 1
 
 
@@ -206,37 +268,64 @@ def _scoped(table: str, overrides: Mapping[str, str]) -> dict[str, str]:
     return scoped
 
 
+def _shadow_tables(reader: sqlite3.Connection) -> set[str]:
+    """The tables a virtual table keeps its contents in, such as a full-text index's copy of the text."""
+    try:
+        return {row[0] for row in reader.execute("select name from pragma_table_list where type = 'shadow'")}
+    except sqlite3.Error:  # SQLite before 3.37.
+        return set()
+
+
+def _create_table(writer: sqlite3.Connection, name: str, sql: str, report: Report) -> None:
+    clean = clean_table_sql(sql)
+    writer.execute(clean.sql)
+    if clean.removed_checks:
+        report.notes.append(f"removed the CHECK constraints from {name}: their values could be data, and fakes wouldn't pass them")
+    if clean.blanked_text:
+        report.notes.append(f"blanked the text in the definition of {name}, such as defaults, which could be data")
+
+
+def _recreate(writer: sqlite3.Connection, kind: str, name: str, sql: str, report: Report) -> None:
+    if holds_text(sql):
+        report.notes.append(f"left out the {kind} {name}: its definition holds text, which could be data")
+        return
+    try:
+        writer.execute(without_comments(sql))
+    except sqlite3.Error:
+        report.notes.append(f"could not recreate the {kind} {name}")
+
+
 def _sqlite(source: str, target: str | None, pseudo: Pseudonymizer, options: Options, report: Report) -> None:
     try:
-        reader = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+        reader = sqlite3.connect(sqlite_read_only_uri(source), uri=True)
     except sqlite3.Error:
         raise SourceError("cannot open the database") from None
     writer: sqlite3.Connection | None = None
     try:
         entries = reader.execute(
-            "select type, name, sql from sqlite_master where sql is not null and name not like 'sqlite_%' order by rowid"
+            r"select type, name, sql from sqlite_master where sql is not null and name not like 'sqlite\_%' escape '\' order by rowid"
         ).fetchall()
-        tables = [(name, sql) for kind, name, sql in entries if kind == "table"]
+        shadows = _shadow_tables(reader)
+        tables = []
+        for kind, name, sql in entries:
+            if kind != "table":
+                continue
+            if sql.upper().startswith("CREATE VIRTUAL") or name in shadows:
+                report.notes.append(f"skipped the virtual table {name}")
+            else:
+                tables.append((name, sql))
         if target is not None and not options.plan_only:
             writer = sqlite3.connect(target)
             for name, sql in tables:
-                if sql.upper().startswith("CREATE VIRTUAL"):
-                    report.notes.append(f"skipped the virtual table {name}")
-                    continue
-                writer.execute(sql)
-        for name, sql in tables:
-            if sql.upper().startswith("CREATE VIRTUAL"):
-                continue
+                _create_table(writer, name, sql, report)
+        for name, _sql in tables:
             _table(reader, writer, name, pseudo, options, report)
         if writer is not None:
             for kind, name, sql in entries:
                 if kind == "trigger":
                     report.notes.append(f"left out the trigger {name}, which could hold data or change values")
                 elif kind in ("index", "view"):
-                    try:
-                        writer.execute(sql)
-                    except sqlite3.Error:
-                        report.notes.append(f"could not recreate the {kind} {name}")
+                    _recreate(writer, kind, name, sql, report)
             writer.commit()
     except sqlite3.Error as error:
         raise SourceError(f"the database could not be processed ({type(error).__name__})") from None
@@ -265,6 +354,7 @@ def _table(
         return
     kinds = [plan[name].kind for name in columns]
     marks = ", ".join("?" * len(columns))
+    before = pseudo.counts.get(_BLANKED, 0)
     cursor = reader.execute(f"select * from {_quote(table)}")
     while True:
         rows = cursor.fetchmany(BATCH)
@@ -275,10 +365,26 @@ def _table(
             [tuple(_cell(pseudo, kinds[i], value) for i, value in enumerate(row)) for row in rows],
         )
         report.rows += len(rows)
+    blanked = pseudo.counts.get(_BLANKED, 0) - before
+    if blanked:
+        report.notes.append(f"blanked {blanked} binary value(s) in {table}: a fake can't be made for them")
+
+
+_BLANKED = "binary value blanked"
 
 
 def _cell(pseudo: Pseudonymizer, kind: str, value: Any) -> Any:
-    return value if isinstance(value, bytes) else pseudo.apply(kind, value)
+    if not isinstance(value, bytes):
+        return pseudo.apply(kind, value)
+    if kind == "keep":
+        return value
+    if kind == "drop":
+        return pseudo.apply(kind, value)
+    try:
+        return str(pseudo.apply(kind, value.decode("utf-8"))).encode("utf-8")
+    except UnicodeDecodeError:
+        pseudo.counts[_BLANKED] = pseudo.counts.get(_BLANKED, 0) + 1
+        return None
 
 
 __all__ = ["Options", "Report", "detect_kind", "pseudonymize_file"]

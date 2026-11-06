@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+from .sources.base import SourceError
+
 
 def restrict_to_owner(path: str) -> bool:
     """Leave only the current user with access. POSIX modes are set when a file is created;
@@ -27,3 +29,13 @@ def restrict_to_owner(path: str) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return all(result.returncode == 0 for result in results) and bool(user)
+
+
+def restrict_to_owner_or_remove(path: str, what: str) -> None:
+    """For a file that holds real data or a secret: if others could read it, it mustn't exist at all."""
+    if not restrict_to_owner(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise SourceError(f"{what} couldn't be made private to you, so it wasn't kept")

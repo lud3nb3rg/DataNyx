@@ -11,13 +11,16 @@ from ..schema import DataSchema
 from .base import Source, SourceError
 from .files import (
     EMPTY_TABLE,
+    FIRST_ROW_IS_DATA,
     coerce_text,
     column_names,
     extension,
     items_seen,
     open_text,
+    positional_names,
     records_observation,
     reject_namespace,
+    row_is_data,
     unnamed,
 )
 
@@ -57,9 +60,13 @@ def _read_rows(reader, root: Observation, notes: list[str], evidence=None) -> li
     wide = False
     for row in reader:
         if names is None:
-            if any(cell.strip() for cell in row):
+            if not any(cell.strip() for cell in row):
+                continue
+            if not row_is_data(row):
                 names = column_names(row)
-            continue
+                continue
+            names = positional_names(row)
+            notes.append(FIRST_ROW_IS_DATA)
         if not row:
             continue
         wide = wide or len(row) > len(names)

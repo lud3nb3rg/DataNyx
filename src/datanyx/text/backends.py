@@ -89,8 +89,14 @@ _OLLAMA_KINDS = {
 }
 
 
+# Every kind a backend can report, for the commands that filter by kind.
+BACKEND_KINDS = frozenset(_PRESIDIO_KINDS.values()) | frozenset(_GLINER_LABELS.values()) | frozenset(_OLLAMA_KINDS.values()) | {MISC}
+
+
 class PresidioDetector:
     """Presidio's recognisers, run on a spaCy model for the language."""
+
+    uses_model = True
 
     def __init__(self, language: str = "en", model: str | None = None, threshold: float = 0.4) -> None:
         try:
@@ -125,6 +131,8 @@ class PresidioDetector:
 class GlinerDetector:
     """A GLiNER model asked for each kind of personal data."""
 
+    uses_model = True
+
     def __init__(self, model: str = DEFAULT_GLINER_MODEL, threshold: float = 0.5, window: int = 1200) -> None:
         try:
             from gliner import GLiNER
@@ -147,6 +155,8 @@ class GlinerDetector:
 
 class OllamaDetector:
     """A language model on this computer, asked to quote what is sensitive in each passage."""
+
+    uses_model = True
 
     def __init__(self, model: str = DEFAULT_OLLAMA_MODEL, url: str = DEFAULT_OLLAMA_URL, timeout: float = 180.0) -> None:
         host = urllib.parse.urlparse(url).hostname or ""
@@ -184,8 +194,10 @@ class OllamaDetector:
         }
         body = json.dumps({"model": self._model, "prompt": prompt, "stream": False, "format": schema, "options": {"temperature": 0}})
         request = urllib.request.Request(self._url, body.encode("utf-8"), {"Content-Type": "application/json"})
+        # No proxy: with HTTP_PROXY set, the text would otherwise go to the proxy, off this computer.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            with opener.open(request, timeout=self._timeout) as response:
                 answer = json.loads(response.read().decode("utf-8"))
             items = json.loads(answer["response"])["items"]
             return [item for item in items if isinstance(item, dict) and isinstance(item.get("text"), str)]

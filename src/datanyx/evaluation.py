@@ -32,12 +32,11 @@ from pathlib import Path
 from typing import Any
 
 from .sources.base import SourceError
-from .text.anonymizer import Anonymizer
+from .text.anonymizer import PLACEHOLDER, Anonymizer
 
 _GENERIC = frozenset(
     ["dr", "dr.", "ms", "ms.", "mrs", "mrs.", "mr", "mr.", "st", "st.", "prof", "prof.", "and", "the", "of", "de", "la", "le", "les", "du", "des", "van", "von", "der", "den", "di", "da", "dos", "del", "el", "al", "bin", "sons", "bank", "hospital", "clinic", "inc", "inc.", "ltd", "ltd.", "llc", "corp", "corp.", "co", "co.", "&"]
 )
-_PLACEHOLDER = re.compile(r"<([A-Z_]+)_\d+>")
 
 
 @dataclass
@@ -78,9 +77,10 @@ class EvalReport:
         return total
 
     def below(self, minimum: float) -> list[str]:
-        """The kinds (or "overall") whose recall is under `minimum`."""
-        failing = [kind for kind, result in sorted(self.kinds.items()) if result.recall < minimum]
-        return (["overall"] if self.overall.recall < minimum else []) + failing
+        """The kinds (or "overall") whose recall is under `minimum`. Nothing measured is no pass."""
+        failing = [kind for kind, result in sorted(self.kinds.items()) if result.total and result.recall < minimum]
+        overall = self.overall
+        return (["overall"] if not overall.total or overall.recall < minimum else []) + failing
 
 
 # --- loading ---------------------------------------------------------------------------------------------
@@ -162,7 +162,7 @@ def evaluate(cases: list[Case], make_anonymizer: Callable[[], Anonymizer], kinds
                 if outcome != "hidden":
                     report.misses.append((case.name, kind, string, outcome))
         for placeholder, value in anonymizer.mapping.items():
-            match = _PLACEHOLDER.fullmatch(placeholder)
+            match = PLACEHOLDER.fullmatch(placeholder)
             low = value.casefold()
             if match and not any(low in label or label in low for label in labelled):
                 report.unlabelled[match.group(1)] += 1

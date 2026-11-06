@@ -79,20 +79,23 @@ class Detector(Protocol):
         """Return the sensitive spans in `text`."""
 
 
-def _luhn_valid(digits: str) -> bool:
+def luhn_valid(number: str) -> bool:
+    """The check digit of card numbers and others. Anything but digits is ignored."""
+    digits = [int(char) for char in number if char.isdigit()]
+    if len(digits) < 2:
+        return False
     total = 0
-    for position, char in enumerate(reversed(digits)):
-        value = int(char)
+    for position, digit in enumerate(reversed(digits)):
         if position % 2:
-            value *= 2
-            value -= 9 if value > 9 else 0
-        total += value
+            digit *= 2
+            digit -= 9 if digit > 9 else 0
+        total += digit
     return total % 10 == 0
 
 
 def _is_card(match: str) -> bool:
     digits = re.sub(r"\D", "", match)
-    return 13 <= len(digits) <= 19 and _luhn_valid(digits)
+    return 13 <= len(digits) <= 19 and luhn_valid(digits)
 
 
 def _is_iban(match: str) -> bool:
@@ -192,6 +195,8 @@ class PatternDetector:
 
 class SpacyDetector:
     """Names, organisations, places and dates, found by a spaCy NER model."""
+
+    uses_model = True
 
     def __init__(self, model: str = DEFAULT_MODEL) -> None:
         self._nlp = _load_model(model)

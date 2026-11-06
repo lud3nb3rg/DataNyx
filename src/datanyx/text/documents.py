@@ -30,7 +30,7 @@ from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
 from ..sources.base import SourceError
-from .anonymizer import Anonymizer
+from .anonymizer import PLACEHOLDER, Anonymizer
 
 TEXT_EXTENSIONS = frozenset(
     {".txt", ".md", ".rst", ".log", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".xml", ".ini", ".cfg", ".toml", ".srt"}
@@ -91,50 +91,78 @@ def _decode(data: bytes) -> str:
 # --- HTML ------------------------------------------------------------------------------------------
 
 _TAG = re.compile(r"<!--.*?-->|<![^>]*>|<[^>]*>", re.DOTALL)
+_COMMENT = re.compile(r"(<!--)(.*?)(-->)", re.DOTALL)
 _ATTRIBUTE = re.compile(
-    r"""(\s(?:title|alt|placeholder|value|content|href|aria-label|label|summary)\s*=\s*)(["'])(.*?)\2""",
+    r"""(\s(?:title|alt|placeholder|value|content|href|src|srcset|action|cite|poster|aria-[\w-]+|label|summary|data-[\w.:-]*)\s*=\s*)"""
+    r"""(?:(["'])(.*?)\2|([^\s"'=<>`]+))""",
     re.IGNORECASE | re.DOTALL,
 )
 _SKIPPED_TAG = re.compile(r"<(script|style)\b[^>]*>|</(script|style)\s*>", re.IGNORECASE)
-_SLOT = re.compile("(\\d+)")
+# In a script or stylesheet only strings and comments can hold data: the code around them stays.
+_CODE_TEXT = re.compile(
+    r""""(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`|/\*.*?\*/|(?<![:\w])//[^\n]*""",
+    re.DOTALL,
+)
+_SLOT = re.compile("\ue000(\\d+)\ue001")
+# How a slot's new text goes back: as page text or a quoted attribute (escaped), an unquoted
+# attribute (escaped, and given quotes), or raw, inside a comment or script.
+_TEXT, _QUOTED, _UNQUOTED, _RAW = "text", "quoted", "unquoted", "raw"
 
 
 def _html(text: str, anonymizer: Anonymizer) -> str:
-    """Anonymize the text and the descriptive attributes of a page, leaving the markup alone."""
-    raws: list[str] = []  # What each slot held, unescaped.
+    """Anonymize a page's text, comments, script strings and descriptive attributes. The markup stays."""
+    raws: list[str] = []  # What each slot held, as the anonymizer should read it.
     originals: list[str] = []
-    quoted: list[bool] = []
+    modes: list[str] = []
 
-    def slot(raw: str, original: str, in_attribute: bool) -> str:
-        raws.append(html.unescape(raw))
+    def slot(raw: str, original: str, mode: str) -> str:
+        raws.append(raw if mode == _RAW else html.unescape(raw))
         originals.append(original)
-        quoted.append(in_attribute)
-        return f"{len(raws) - 1}"
+        modes.append(mode)
+        return f"\ue000{len(raws) - 1}\ue001"
 
     def attribute(match: re.Match[str]) -> str:
-        prefix, quote, value = match.groups()
-        return f"{prefix}{quote}{slot(value, value, True)}{quote}"
+        prefix, quote, value, bare = match.groups()
+        if bare is not None:
+            return f"{prefix}{slot(bare, bare, _UNQUOTED)}"
+        return f"{prefix}{quote}{slot(value, value, _QUOTED)}{quote}"
+
+    def comment(match: re.Match[str]) -> str:
+        return match.group(1) + slot(match.group(2), match.group(2), _RAW) + match.group(3)
+
+    def code_text(match: re.Match[str]) -> str:
+        whole = match.group()
+        inner = whole[2:-2] if whole.startswith("/*") else whole[2:] if whole.startswith("//") else whole[1:-1]
+        at = whole.index(inner) if inner else 0
+        return whole[:at] + (slot(inner, inner, _RAW) if inner.strip() else inner) + whole[at + len(inner) :]
 
     out: list[str] = []
     position = 0
-    skipping = False
+    in_code = False
     for match in _TAG.finditer(text):
         between = text[position : match.start()]
-        if skipping or not between.strip():
+        if in_code:
+            out.append(_CODE_TEXT.sub(code_text, between))
+        elif not between.strip():
             out.append(between)
         else:
             lead = between[: len(between) - len(between.lstrip())]
             trail = between[len(between.rstrip()) :]
-            out.append(lead + slot(between.strip(), between.strip(), False) + trail)
+            out.append(lead + slot(between.strip(), between.strip(), _TEXT) + trail)
         tag = match.group()
         skipper = _SKIPPED_TAG.fullmatch(tag)
         if skipper and not tag.endswith("/>"):
-            skipping = skipper.group(1) is not None
-        out.append(_ATTRIBUTE.sub(attribute, tag))
+            in_code = skipper.group(1) is not None
+        if tag.startswith("<!--"):
+            out.append(_COMMENT.sub(comment, tag))
+        else:
+            out.append(_ATTRIBUTE.sub(attribute, tag))
         position = match.end()
     tail = text[position:]
-    if tail.strip() and not skipping:
-        out.append(tail[: len(tail) - len(tail.lstrip())] + slot(tail.strip(), tail.strip(), False))
+    if in_code:
+        out.append(_CODE_TEXT.sub(code_text, tail))
+    elif tail.strip():
+        out.append(tail[: len(tail) - len(tail.lstrip())] + slot(tail.strip(), tail.strip(), _TEXT))
         out.append(tail[len(tail.rstrip()) :])
     else:
         out.append(tail)
@@ -145,7 +173,10 @@ def _html(text: str, anonymizer: Anonymizer) -> str:
         index = int(match.group(1))
         if results[index] == raws[index]:
             return originals[index]  # Unchanged, so the original spelling (and entities) stay.
-        return html.escape(results[index], quote=quoted[index])
+        if modes[index] == _RAW:
+            return results[index]
+        escaped = html.escape(results[index], quote=modes[index] != _TEXT)
+        return f'"{escaped}"' if modes[index] == _UNQUOTED else escaped
 
     return _SLOT.sub(fill, "".join(out))
 
@@ -200,15 +231,34 @@ def _eml(data: bytes, anonymizer: Anonymizer) -> str:
 
 # --- Word --------------------------------------------------------------------------------------------
 
-_PARAGRAPH = re.compile(r"(<w:p(?:\s[^>]*)?>)(.*?)(</w:p>)", re.DOTALL)
+_PARAGRAPH_TAG = re.compile(r"<w:p(?:\s[^>]*?)?(/?)>|</w:p>")
 _RUN_TEXT = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.DOTALL)
-_FIELD_CODE = re.compile(r"(<w:instrText(?:\s[^>]*)?>)(.*?)(</w:instrText>)", re.DOTALL)
-_TEXT_PART = re.compile(r"word/(document|header\d*|footer\d*|comments|footnotes|endnotes)\.xml")
+# Text with no place in the visible paragraph: field codes, and what tracked changes deleted.
+_SEPARATE_TEXT = re.compile(r"(<w:(?:instrText|delInstrText|delText)(?:\s[^>]*)?>)(.*?)(</w:(?:instrText|delInstrText|delText)>)", re.DOTALL)
+_TEXT_PART = re.compile(r"word/(?:glossary/)?(document|header\d*|footer\d*|comments\w*|footnotes|endnotes)\.xml")
 _PERSONAL_PROPERTIES = re.compile(
-    r"(<(?:dc:creator|cp:lastModifiedBy|dc:title|dc:subject|cp:keywords|dc:description|Company|Manager)\b[^>]*>).*?(</)",
+    r"(<(?:dc:creator|cp:lastModifiedBy|dc:title|dc:subject|cp:keywords|dc:description|Company|Manager|HyperlinkBase)\b[^>]*>).*?(</)",
     re.DOTALL,
 )
-_MAILTO = re.compile(r'(Target=")(mailto:[^"]*)(")', re.IGNORECASE)
+_PEOPLE_ATTRIBUTE = re.compile(r"""(\b[wW]\d*:(?:author|initials|userId|providerId)=")([^"]*)(")""")
+_DESCRIBING_ATTRIBUTE = re.compile(r"""(\b(?:descr|title|w:tooltip|w:alias)=")([^"]*)(")""")
+_PICTURE_NAME = re.compile(r"""(<(?:wp:docPr|pic:cNvPr)\b[^>]*?\bname=")([^"]*)(")""")
+_XML_TEXT = re.compile(r">[^<]+<")
+_RELATIONSHIP = re.compile(r"<Relationship\b[^>]*>")
+_TARGET = re.compile(r'(Target=")([^"]*)(")')
+_OUTSIDE_LINK = re.compile(r'TargetMode="External"|Target="mailto:', re.IGNORECASE)
+_DATA_PART = re.compile(r"customXml/item\d*\.xml|docProps/custom\.xml")
+_UNREAD_PART = re.compile(r"word/(?:media|embeddings)/.+|docProps/thumbnail\.\w+")
+
+
+def _xml_text(content: bytes) -> str:
+    """A part's text. Word writes UTF-8, but a part can say otherwise with a byte order mark."""
+    try:
+        if content[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            return content.decode("utf-16")
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise SourceError("a part of the .docx file isn't readable text") from None
 
 
 def _docx(data: bytes, anonymizer: Anonymizer) -> Output:
@@ -220,77 +270,135 @@ def _docx(data: bytes, anonymizer: Anonymizer) -> Output:
         if sum(info.file_size for info in source.infolist()) > _MAX_UNZIPPED_BYTES:
             raise SourceError("the .docx file is too large to read safely")
         buffer = io.BytesIO()
-        images = 0
+        unread = 0
+        cleared_data = False
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
             for info in source.infolist():
-                content = source.read(info.filename)
                 name = info.filename
-                if name.startswith("word/media/"):
-                    images += 1
+                try:
+                    content = source.read(name)
+                except (zipfile.BadZipFile, EOFError, OSError, NotImplementedError, RuntimeError, ValueError):
+                    raise SourceError("the .docx file is damaged") from None
+                except Exception as error:  # zlib.error, for one.
+                    raise SourceError(f"the .docx file is damaged ({type(error).__name__})") from None
+                if _UNREAD_PART.fullmatch(name):
+                    unread += 1
                 elif _TEXT_PART.fullmatch(name):
-                    content = _docx_text_part(content.decode("utf-8"), anonymizer).encode("utf-8")
+                    content = _docx_text_part(_xml_text(content), anonymizer).encode("utf-8")
                 elif name in ("docProps/core.xml", "docProps/app.xml"):
-                    content = _PERSONAL_PROPERTIES.sub(r"\1\2", content.decode("utf-8")).encode("utf-8")
-                elif name.startswith("word/_rels/") and name.endswith(".rels"):
-                    content = _mailto_targets(content.decode("utf-8"), anonymizer).encode("utf-8")
+                    content = _PERSONAL_PROPERTIES.sub(r"\1\2", _xml_text(content)).encode("utf-8")
+                elif _DATA_PART.fullmatch(name):
+                    content = _XML_TEXT.sub("><", _xml_text(content)).encode("utf-8")
+                    cleared_data = True
+                elif name.endswith(".rels"):
+                    content = _external_targets(_xml_text(content), anonymizer).encode("utf-8")
+                elif name.endswith(".xml") and name.startswith("word/"):
+                    content = _people_attributes(_xml_text(content), anonymizer).encode("utf-8")
                 target.writestr(info, content)
-    notes = ["document properties such as author and company were cleared"]
-    if images:
-        notes.append(f"{images} embedded image(s) were not processed")
+    notes = ["document properties such as author and company were cleared, and tracked-change authors replaced"]
+    if cleared_data:
+        notes.append("custom properties and embedded data parts were cleared")
+    if unread:
+        notes.append(f"{unread} embedded image(s), object(s) or preview(s) were not processed")
     return Output(buffer.getvalue(), ".docx", notes)
 
 
+def _paragraphs(xml: str) -> list[list[tuple[int, int]]]:
+    """Each paragraph, as the stretches of the part that are its own.
+
+    A text box puts whole paragraphs inside a paragraph, so a stretch stops where an inner one starts."""
+    paragraphs: list[list[tuple[int, int]]] = []
+    stack: list[list[tuple[int, int]]] = []
+    starts: list[int] = []
+    for match in _PARAGRAPH_TAG.finditer(xml):
+        if match.group().startswith("</"):
+            if not stack:
+                continue
+            own = stack.pop()
+            own.append((starts.pop(), match.start()))
+            paragraphs.append(own)
+            if starts:
+                starts[-1] = match.end()  # The outer paragraph goes on after this one.
+        elif not match.group(1):  # Not an empty <w:p/>.
+            if starts:
+                stack[-1].append((starts[-1], match.start()))
+            stack.append([])
+            starts.append(match.end())
+    return paragraphs
+
+
 def _docx_text_part(xml: str, anonymizer: Anonymizer) -> str:
-    paragraphs = list(_PARAGRAPH.finditer(xml))
-    texts = [html.unescape("".join(_RUN_TEXT.findall(match.group(2)))) for match in paragraphs]
+    runs = [[run for start, end in own for run in _RUN_TEXT.finditer(xml, start, end)] for own in _paragraphs(xml)]
+    runs = [found for found in runs if found]
+    texts = [html.unescape("".join(run.group(1) for run in found)) for found in runs]
     wanted = [index for index, text in enumerate(texts) if text.strip()]
     results = dict(zip(wanted, anonymizer.anonymize_segments([texts[index] for index in wanted])))
 
+    changes: list[tuple[int, int, str]] = []
+    for index, new in results.items():
+        if new == texts[index]:
+            continue  # Nothing to hide here: formatting stays exactly as it was.
+        # A paragraph's whole new text goes in its first run, and the others are emptied.
+        for position, run in enumerate(runs[index]):
+            changes.append((*run.span(), f'<w:t xml:space="preserve">{xml_escape(new)}</w:t>' if position == 0 else "<w:t></w:t>"))
+    result = _apply_changes(xml, changes)
+
+    codes = list(_SEPARATE_TEXT.finditer(result))
+    cleaned = anonymizer.anonymize_segments([html.unescape(code.group(2)) for code in codes])
+    result = _apply_changes(
+        result,
+        [
+            (*code.span(), code.group(1) + xml_escape(new) + code.group(3))
+            for code, new in zip(codes, cleaned)
+            if new != html.unescape(code.group(2))
+        ],
+    )
+    return _people_attributes(_described_attributes(result, anonymizer), anonymizer)
+
+
+def _apply_changes(text: str, changes: list[tuple[int, int, str]]) -> str:
     out: list[str] = []
     position = 0
-    for index, match in enumerate(paragraphs):
-        out.append(xml[position : match.start()])
-        position = match.end()
-        if index in results and results[index] != texts[index]:
-            out.append(match.group(1) + _put_text(match.group(2), results[index]) + match.group(3))
-        else:
-            out.append(match.group())  # Nothing to hide here: formatting stays exactly as it was.
-    out.append(xml[position:])
-    result = "".join(out)
-
-    codes = list(_FIELD_CODE.finditer(result))
-    cleaned = anonymizer.anonymize_segments([html.unescape(code.group(2)) for code in codes])
-    rebuilt: list[str] = []
-    position = 0
-    for code, new in zip(codes, cleaned):
-        rebuilt.append(result[position : code.start()])
-        position = code.end()
-        same = new == html.unescape(code.group(2))
-        rebuilt.append(code.group() if same else code.group(1) + xml_escape(new) + code.group(3))
-    rebuilt.append(result[position:])
-    return "".join(rebuilt)
+    for start, end, new in sorted(changes):
+        out.append(text[position:start])
+        out.append(new)
+        position = end
+    out.append(text[position:])
+    return "".join(out)
 
 
-def _put_text(inner: str, text: str) -> str:
-    """Put a paragraph's whole new text in its first run, and empty the others."""
-    first = True
+def _people_attributes(xml: str, anonymizer: Anonymizer) -> str:
+    """Who made a tracked change or comment, wherever Word records it."""
 
     def replace(match: re.Match[str]) -> str:
-        nonlocal first
-        if first:
-            first = False
-            return f'<w:t xml:space="preserve">{xml_escape(text)}</w:t>'
-        return "<w:t></w:t>"
+        value = html.unescape(match.group(2)).strip()
+        return match.group(1) + (xml_escape(anonymizer.placeholder_for("PERSON", value)) if value else "") + match.group(3)
 
-    return _RUN_TEXT.sub(replace, inner)
+    return _PEOPLE_ATTRIBUTE.sub(replace, xml)
 
 
-def _mailto_targets(xml: str, anonymizer: Anonymizer) -> str:
+def _described_attributes(xml: str, anonymizer: Anonymizer) -> str:
+    """Alt text, titles and picture names are text someone wrote."""
+
     def replace(match: re.Match[str]) -> str:
+        value = html.unescape(match.group(2))
+        return match.group(1) + xml_escape(anonymizer.anonymize(value), {'"': "&quot;"}) + match.group(3)
+
+    return _PICTURE_NAME.sub(replace, _DESCRIBING_ATTRIBUTE.sub(replace, xml))
+
+
+def _external_targets(xml: str, anonymizer: Anonymizer) -> str:
+    """Where links go, which can name a person. Parts inside the document stay, or it wouldn't open."""
+
+    def target(match: re.Match[str]) -> str:
         address = html.unescape(match.group(2))
-        return match.group(1) + xml_escape(anonymizer.anonymize(address)) + match.group(3)
+        return match.group(1) + xml_escape(anonymizer.anonymize(address), {'"': "&quot;"}) + match.group(3)
 
-    return _MAILTO.sub(replace, xml)
+    def relationship(match: re.Match[str]) -> str:
+        whole = match.group()
+        return _TARGET.sub(target, whole) if _OUTSIDE_LINK.search(whole) else whole
+
+    return _RELATIONSHIP.sub(relationship, xml)
 
 
 # --- PDF ---------------------------------------------------------------------------------------------
@@ -426,7 +534,6 @@ def _is_person_object(parent: dict[str, Any] | None) -> bool:
 
 # --- Restoring ---------------------------------------------------------------------------------------
 
-_PLACEHOLDER = re.compile(r"<[A-Z_]+_\d+>")
 _ESCAPED_PLACEHOLDER = re.compile(r"&lt;[A-Z_]+_\d+&gt;")
 
 
@@ -436,8 +543,10 @@ def restore_bytes(data: bytes, suffix: str, mapping: dict[str, str]) -> bytes:
         return _restore_docx(data, mapping)
     text = data.decode("utf-8-sig")
     if suffix in (".html", ".htm"):
-        return _restore_escaped(text, mapping, quote=True).encode("utf-8")
-    return _PLACEHOLDER.sub(lambda m: mapping.get(m.group(), m.group()), text).encode("utf-8")
+        # Comments and scripts hold placeholders as they are; everywhere else they are escaped.
+        raw = PLACEHOLDER.sub(lambda m: mapping.get(m.group(), m.group()), text)
+        return _restore_escaped(raw, mapping, quote=True).encode("utf-8")
+    return PLACEHOLDER.sub(lambda m: mapping.get(m.group(), m.group()), text).encode("utf-8")
 
 
 def _restore_escaped(text: str, mapping: dict[str, str], quote: bool) -> str:
@@ -458,7 +567,7 @@ def _restore_docx(data: bytes, mapping: dict[str, str]) -> bytes:
     with source, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
         for info in source.infolist():
             content = source.read(info.filename)
-            if info.filename.startswith("word/") and info.filename.endswith(".xml"):
+            if info.filename.endswith((".xml", ".rels")):
                 content = _restore_escaped(content.decode("utf-8"), mapping, quote=False).encode("utf-8")
             target.writestr(info, content)
     return buffer.getvalue()

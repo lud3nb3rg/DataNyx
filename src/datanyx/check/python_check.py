@@ -45,6 +45,11 @@ _COLUMN_ARGUMENTS: dict[str, tuple[int | None, tuple[str, ...]]] = {
     "explode": (0, ("column",)),
 }
 _NUMERIC_ONLY = frozenset({"mean", "median", "std", "var"})
+# What `df.name` can mean other than a column. Listed so that a check needs no pandas installed, and
+# doesn't pay for importing it. Includes names older versions of pandas have.
+_DATAFRAME_ATTRIBUTES = frozenset(
+    ["T", "abs", "add", "add_prefix", "add_suffix", "agg", "aggregate", "align", "all", "any", "append", "apply", "applymap", "asfreq", "asof", "assign", "astype", "at", "at_time", "attrs", "axes", "backfill", "between_time", "bfill", "bool", "boxplot", "clip", "columns", "combine", "combine_first", "compare", "convert_dtypes", "copy", "corr", "corrwith", "count", "cov", "cummax", "cummin", "cumprod", "cumsum", "describe", "diff", "div", "divide", "dot", "drop", "drop_duplicates", "droplevel", "dropna", "dtypes", "duplicated", "empty", "eq", "equals", "eval", "ewm", "expanding", "explode", "ffill", "fillna", "filter", "first", "first_valid_index", "flags", "floordiv", "from_arrow", "from_dict", "from_records", "ge", "get", "groupby", "gt", "head", "hist", "iat", "idxmax", "idxmin", "iloc", "index", "infer_objects", "info", "insert", "interpolate", "isetitem", "isin", "isna", "isnull", "items", "iteritems", "iterrows", "itertuples", "join", "keys", "kurt", "kurtosis", "last", "last_valid_index", "le", "loc", "lookup", "lt", "mad", "map", "mask", "max", "mean", "median", "melt", "memory_usage", "merge", "min", "mod", "mode", "mul", "multiply", "ndim", "ne", "nlargest", "notna", "notnull", "nsmallest", "nunique", "pad", "pct_change", "pipe", "pivot", "pivot_table", "plot", "pop", "pow", "prod", "product", "quantile", "query", "radd", "rank", "rdiv", "reindex", "reindex_like", "rename", "rename_axis", "reorder_levels", "replace", "resample", "reset_index", "rfloordiv", "rmod", "rmul", "rolling", "round", "rpow", "rsub", "rtruediv", "sample", "select", "select_dtypes", "sem", "set_axis", "set_flags", "set_index", "shape", "shift", "size", "skew", "slice_shift", "sort_index", "sort_values", "sparse", "squeeze", "stack", "std", "style", "sub", "subtract", "sum", "swapaxes", "swaplevel", "tail", "take", "to_clipboard", "to_csv", "to_dict", "to_excel", "to_feather", "to_gbq", "to_hdf", "to_html", "to_iceberg", "to_json", "to_latex", "to_markdown", "to_numpy", "to_orc", "to_parquet", "to_period", "to_pickle", "to_records", "to_sql", "to_stata", "to_string", "to_timestamp", "to_xarray", "to_xml", "transform", "transpose", "truediv", "truncate", "tshift", "tz_convert", "tz_localize", "unstack", "update", "value_counts", "values", "var", "where", "xs"]
+)
 
 
 @dataclass
@@ -79,21 +84,12 @@ def check_python(code: str, tables: Sequence[Table], dialect: str | None = None)
     return sorted(state.diagnostics, key=lambda item: (item.line, item.column or 0))
 
 
-def _dataframe_attributes() -> frozenset[str] | None:
-    try:
-        import pandas
-    except ImportError:
-        return None
-    return frozenset(dir(pandas.DataFrame))
-
-
 class _Visitor(ast.NodeVisitor):
     def __init__(self, state: _State) -> None:
         self.state = state
         self.frames: dict[str, _Frame] = {}
         self.pandas_names: set[str] = set()
         self.reader_names: set[str] = set()
-        self.attributes = _dataframe_attributes()
 
     # --- reporting -------------------------------------------------------------
 
@@ -239,10 +235,9 @@ class _Visitor(ast.NodeVisitor):
             frame = self.frames.get(node.value.id)
             if (
                 frame
-                and self.attributes is not None
                 and not node.attr.startswith("_")
                 and node.attr not in frame.columns
-                and node.attr not in self.attributes
+                and node.attr not in _DATAFRAME_ATTRIBUTES
             ):
                 self.unknown_column(frame, node.attr, node)
         self.series_accessor(node)
@@ -324,8 +319,13 @@ class _Visitor(ast.NodeVisitor):
             for keyword in node.keywords:
                 if keyword.arg in keywords:
                     self.check_columns(frame, _names(keyword.value))
-        elif method in ("merge", "join"):
+        elif method == "merge":
             self.merge(node, frame)
+        elif method == "join":
+            # `on` is a column here and the other frame's index there, so the other frame has no say.
+            for keyword in node.keywords:
+                if keyword.arg == "on":
+                    self.check_columns(frame, _names(keyword.value))
         elif method in ("rename", "astype", "agg", "aggregate"):
             for keyword in node.keywords:
                 if method == "rename" and keyword.arg == "columns" and isinstance(keyword.value, ast.Dict):

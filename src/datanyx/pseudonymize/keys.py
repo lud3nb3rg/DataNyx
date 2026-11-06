@@ -12,7 +12,7 @@ import os
 import secrets
 from pathlib import Path
 
-from ..fileperms import restrict_to_owner
+from ..fileperms import restrict_to_owner_or_remove
 from ..sources.base import SourceError
 
 MIN_BYTES = 16
@@ -37,5 +37,5 @@ def load_key(path: str | None) -> bytes:
     except OSError as error:
         raise SourceError(f"cannot create the key file: {error.strerror}") from None
     if os.name == "nt":
-        restrict_to_owner(path)
+        restrict_to_owner_or_remove(path, "the key file")
     return key

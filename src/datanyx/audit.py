@@ -12,7 +12,6 @@ Keep the file where the agent can't change it. `datanyx audit FILE` summarises i
 from __future__ import annotations
 
 import json
-import re
 import time
 import uuid
 from collections import Counter
@@ -21,10 +20,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .fileperms import restrict_to_owner
+from .credentials import hide_url_credentials
+from .fileperms import restrict_to_owner_or_remove
 from .sources.base import SourceError
 
-_CREDENTIALS = re.compile(r"(?<=://)[^/\s:@]+:[^@\s]+(?=@)")
 _MAX_TEXT = 300
 # How each tool's arguments are recorded. Anything not listed is reduced to its size.
 _KEEP = "keep"
@@ -36,7 +35,7 @@ _RULES: dict[str, dict[str, str]] = {
     "check_code": {"code": _LENGTH, **{k: _KEEP for k in ("target", "language", "dialect", "table", "database_schema")}},
     "scan_folder": {"target": _KEEP, "kinds": _KEEP},
     "schema_diff": {"old": _KEEP, "new": _KEEP},
-    "anonymize_file": {"target": _KEEP, "hide": _COUNT},
+    "anonymize_file": {"target": _KEEP},
 }
 
 
@@ -57,7 +56,7 @@ class AuditLog:
             with open(self.path, "a", encoding="utf-8"):
                 pass
             if created:
-                restrict_to_owner(str(self.path))
+                restrict_to_owner_or_remove(str(self.path), "the audit log")
         except OSError:
             raise SourceError("cannot write the audit log") from None
 
@@ -103,7 +102,7 @@ def summarize(tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
 
 def _clean(value: Any) -> Any:
     if isinstance(value, str):
-        return _CREDENTIALS.sub("<CREDENTIALS>", value)[:_MAX_TEXT]
+        return hide_url_credentials(value)[:_MAX_TEXT]
     if isinstance(value, (list, tuple)):
         return [_clean(item) for item in value][:50]
     return value
@@ -127,7 +126,7 @@ def read_log(path: str | Path, since: str | None = None) -> tuple[list[dict[str,
         try:
             entry = json.loads(line)
             when = _parse_time(entry["time"])
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, SourceError):  # SourceError: a time that can't be read.
             unreadable += 1
             continue
         if cutoff is None or when >= cutoff:

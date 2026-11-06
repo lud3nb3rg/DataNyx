@@ -18,7 +18,7 @@ from ..schema import (
     Unknown,
 )
 from .base import Source, SourceError
-from .catalog import build_object
+from .catalog import build_object, child_path
 from .files import extension, missing_extra, reject_namespace, require_path, unnamed
 
 
@@ -58,7 +58,7 @@ def arrow_table_node(arrow_schema, policy: KeyPolicy, notes: list[str], pa) -> N
 
 def _struct(fields, path: str, policy: KeyPolicy, notes: list[str], pa) -> Object:
     entries = [
-        (f.name, _field_node(f, f"{path}.{f.name}", policy, notes, pa), _native(f.type, pa)) for f in fields
+        (f.name, _field_node(f, child_path(path, f.name, policy), policy, notes, pa), _native(f.type, pa)) for f in fields
     ]
     return build_object(entries, path, policy, notes)
 

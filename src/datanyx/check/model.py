@@ -18,7 +18,6 @@ from ..schema import (
     Array,
     Boolean,
     DataSchema,
-    Entity,
     Integer,
     Node,
     Null,
@@ -174,6 +173,3 @@ def suggest(name: str, candidates: Iterable[str], case_sensitive: bool = False) 
         return None
     return "did you mean " + " or ".join(repr(match) for match in close) + "?"
 
-
-def describe(entity: Entity) -> str:
-    return entity.name or "data"

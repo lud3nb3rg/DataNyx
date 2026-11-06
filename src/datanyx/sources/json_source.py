@@ -33,6 +33,8 @@ class JsonSource(Source):
         streamer = _streamer() if _should_stream(target) else None
         if streamer is not None:
             streamed = _observe_stream(streamer, target)
+            if policy.evidence is not None:
+                _feed_evidence(streamer, target, policy.evidence.table(None))
             node, notes = infer(streamed, policy)
             return unnamed(self.kind, node, notes, scale_for(policy, items_seen(streamed)))
         observation = Observation()
@@ -121,6 +123,22 @@ def _observe_stream(ijson, path: str) -> Observation:
         # ijson's messages can quote the text around the problem.
         raise SourceError("invalid JSON") from None
     return root
+
+
+def _feed_evidence(ijson, path: str, table) -> None:
+    """Key evidence is gathered per record, so the records of a top-level list are read one at a time."""
+    try:
+        with open(path, "rb") as stream:
+            if stream.read(3) != _BOM:
+                stream.seek(0)
+            for record in ijson.items(stream, "item", use_float=True):
+                table.add(record)
+    except OSError as error:
+        raise SourceError(f"cannot read input: {error.strerror}") from None
+    except UnicodeDecodeError:
+        raise SourceError("input is not valid UTF-8") from None
+    except ijson.JSONError:
+        raise SourceError("invalid JSON") from None
 
 
 def _apply(event: str, value: object, root: Observation, stack: list[list]) -> None:

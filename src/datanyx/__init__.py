@@ -32,12 +32,15 @@ def extract(
     policy = policy or KeyPolicy()
     if policy.infer_keys and policy.evidence is None:
         policy = replace(policy, evidence=Evidence())
-    if os.path.isdir(target):
-        if namespace is not None:
-            raise SourceError("a schema can only be selected for SQL databases")
-        schema = describe_folder(target, source, policy, recursive)
-    else:
-        schema = resolve_source(target, source).extract(target, policy, namespace)
+    try:
+        if os.path.isdir(target):
+            if namespace is not None:
+                raise SourceError("a schema can only be selected for SQL databases")
+            schema = describe_folder(target, source, policy, recursive)
+        else:
+            schema = resolve_source(target, source).extract(target, policy, namespace)
+    except RecursionError:
+        raise SourceError("input is too deeply nested") from None
     if policy.infer_keys and policy.evidence is not None:
         schema = apply_evidence(schema, policy.evidence)
         if not any(e.foreign_keys or _has_unique(e) for e in schema.entities):

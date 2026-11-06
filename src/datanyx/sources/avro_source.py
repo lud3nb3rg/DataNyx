@@ -22,7 +22,7 @@ from ..schema import (
     Unknown,
 )
 from .base import Source, SourceError
-from .catalog import build_object
+from .catalog import build_object, child_path
 from .files import extension, missing_extra, reject_namespace, require_path, unnamed
 
 _MAX_DEPTH = 40
@@ -108,7 +108,7 @@ def _node(schema, path: str, policy: KeyPolicy, notes: list[str], named: dict[st
         entries = []
         for position, avro_field in enumerate(schema.get("fields", []), start=1):
             name = str(avro_field.get("name", f"field_{position}"))
-            node = _node(avro_field.get("type"), f"{path}.{name}", policy, notes, named, depth + 1)
+            node = _node(avro_field.get("type"), child_path(path, name, policy), policy, notes, named, depth + 1)
             entries.append((name, node, _native(avro_field.get("type"))))
         built = build_object(entries, path, policy, notes)
         named[full] = built

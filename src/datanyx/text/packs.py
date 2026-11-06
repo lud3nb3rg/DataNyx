@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator
 
 from ..sources.base import SourceError
 from .custom import RegexDetector
-from .detectors import Detector, Span
+from .detectors import Detector, Span, luhn_valid
 
 
 class PackDetector(RegexDetector):
@@ -50,19 +50,6 @@ class PackDetector(RegexDetector):
 
 def _digits(value: str) -> str:
     return re.sub(r"\D", "", value)
-
-
-def luhn_valid(number: str) -> bool:
-    digits = [int(char) for char in number if char.isdigit()]
-    if len(digits) < 2:
-        return False
-    total = 0
-    for position, digit in enumerate(reversed(digits)):
-        if position % 2:
-            digit *= 2
-            digit -= 9 if digit > 9 else 0
-        total += digit
-    return total % 10 == 0
 
 
 def aba_valid(value: str) -> bool:

@@ -5,6 +5,7 @@ import io
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -130,23 +131,25 @@ PAGE = (
 
 def test_html_keeps_the_markup_and_replaces_text_and_descriptive_attributes():
     out = anonymize_bytes(PAGE.encode(), ".html", make_anonymizer()).data.decode()
-    assert "&lt;PERSON_1&gt;" in out and 'title="&lt;PERSON_1&gt;"' in out and 'alt="Photo of &lt;PERSON_2&gt;"' in out
+    assert "&lt;PERSON_" in out and 'title="&lt;PERSON_' in out and 'alt="Photo of &lt;PERSON_' in out
     assert 'href="mailto:&lt;EMAIL_1&gt;"' in out
     assert TOMASZ not in out and "tk@acme-corp.io" not in out
     assert '<p class="x">' in out and '<img src="p.png"' in out and "<br/>" in out and "<!DOCTYPE html>" in out
 
 
-def test_html_leaves_unchanged_text_exactly_and_skips_scripts_styles_and_comments():
+def test_html_leaves_unchanged_text_and_code_exactly_and_hides_what_is_in_scripts_and_comments():
     out = anonymize_bytes(PAGE.encode(), ".html", make_anonymizer()).data.decode()
     assert "Nothing here &amp; &eacute;." in out  # Nothing to hide: the entities are as they were.
-    assert ".a { color: red }" in out and 'var e = "js@acme-corp.io";' in out
-    assert f"keep {JESSICA} in comment" in out
+    assert ".a { color: red }" in out and 'var e = "<EMAIL_' in out  # The code stays, the value goes.
+    assert "js@acme-corp.io" not in out and JESSICA not in out and "in comment" in out
 
 
 def test_html_output_keeps_every_tag_balanced():
     out = anonymize_bytes(PAGE.encode(), ".html", make_anonymizer()).data.decode()
     assert out.count("<p") == PAGE.count("<p") and out.count("</p>") == PAGE.count("</p>")
-    assert out.count("<") == PAGE.count("<")  # Placeholders are escaped, so no raw tag was added.
+    # Placeholders are escaped in the page's text, so no raw tag was added there.
+    without_code = re.sub(r"<!--.*?-->|<script.*?</script>", "", out, flags=re.DOTALL)
+    assert without_code.count("<") == re.sub(r"<!--.*?-->|<script.*?</script>", "", PAGE, flags=re.DOTALL).count("<")
 
 
 # --- Email -----------------------------------------------------------------------------------------------------------
@@ -247,7 +250,7 @@ def test_docx_clears_properties_hides_mailto_links_and_notes_images():
     assert "Jane Doe" not in core and "Contract" not in core and "<dc:creator></dc:creator>" in core
     assert "Acme Corp" not in docx_part(result.data, "docProps/app.xml") and "<Pages>1</Pages>" in docx_part(result.data, "docProps/app.xml")
     rels = docx_part(result.data, "word/_rels/document.xml.rels")
-    assert "jane@acme-corp.io" not in rels and "https://example.com/page" in rels
+    assert "jane@acme-corp.io" not in rels and "https://example.com/page" not in rels and 'TargetMode="External"' in rels
     assert any("1 embedded image" in note for note in result.notes)
     with zipfile.ZipFile(io.BytesIO(result.data)) as archive:
         assert archive.read("word/media/image1.png") == b"\x89PNG not really"

@@ -60,6 +60,14 @@ def describe_directory(
             notes.append(f"could not describe {name}: {error}")
             failed += 1
             continue
+        except RecursionError:
+            notes.append(f"could not describe {name}: input is too deeply nested")
+            failed += 1
+            continue
+        except Exception as error:  # One bad file shouldn't cost the folder. Only its type: the text can quote data.
+            notes.append(f"could not describe {name} ({type(error).__name__})")
+            failed += 1
+            continue
         notes.extend(f"{name}: {note}" for note in schema.notes)
         entities.extend(_rename(entity, name) for entity in schema.entities)
 

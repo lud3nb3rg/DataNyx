@@ -70,10 +70,12 @@ def plan_protect(
     stored = [stored_form(project, target) for target in targets]
     settings_path = _settings_path(project, local)
     other_path = _settings_path(project, not local)
+    # This run replaces the last one, so the rules for paths it no longer names go too.
+    known = [*targets, *_previous_paths(project)]
 
     changes = [
-        _edit_json(settings_path, lambda data: _add_settings(data, project, targets, command)),
-        _edit_json(other_path, _strip_settings(project, targets), only_if_exists=True),
+        _edit_json(settings_path, lambda data: _add_settings(data, project, targets, known, command)),
+        _edit_json(other_path, _strip_settings(project, known), only_if_exists=True),
         _edit_json(project / ".mcp.json", lambda data: _add_mcp(data, command, stored) if with_mcp else data),
         Change(config_path(project), _read(config_path(project)), _config_text(stored, block_broad_search)),
     ]
@@ -126,8 +128,15 @@ def self_test(project: Path, command: list[str], target: Path) -> str | None:
 # --- settings.json -------------------------------------------------------------------
 
 
-def _add_settings(data: dict, project: Path, targets: list[Path], command: list[str]) -> dict:
-    data = _without_ours(data, project, targets)
+def _previous_paths(project: Path) -> list[Path]:
+    try:
+        return list(load_config(project).paths)
+    except SourceError:
+        return []  # None yet, or unreadable: this run writes a new one either way.
+
+
+def _add_settings(data: dict, project: Path, targets: list[Path], known: list[Path], command: list[str]) -> dict:
+    data = _without_ours(data, project, known)
     deny = data.setdefault("permissions", {}).setdefault("deny", [])
     deny.extend(rule for rule in _rules(project, targets) if rule not in deny)
     entry = {
@@ -151,7 +160,7 @@ def _strip_settings(project: Path, targets: list[Path]):
 
 
 def _without_ours(data: dict, project: Path, targets: list[Path]) -> dict:
-    ours = set(_rules(project, targets))
+    ours = _every_rule_form(project, targets)
     permissions = data.get("permissions")
     if isinstance(permissions, dict) and isinstance(permissions.get("deny"), list):
         permissions["deny"] = [rule for rule in permissions["deny"] if rule not in ours]
@@ -174,12 +183,28 @@ def _is_ours(entry: Any) -> bool:
     return isinstance(inner, list) and any(isinstance(hook, dict) and hook.get("statusMessage") == HOOK_LABEL for hook in inner)
 
 
+def _in_project(project: Path, target: Path) -> str | None:
+    """How deny rules name a target, or None if it is outside the project: those rely on the hook alone."""
+    shown = stored_form(project, target)
+    return None if Path(shown).is_absolute() or (len(shown) > 1 and shown[1] == ":") else shown
+
+
+def _every_rule_form(project: Path, targets: list[Path]) -> set[str]:
+    """The rules a target can have had: a path that was missing then may be a folder now."""
+    rules = {"Read(datanyx.local.toml)"}
+    for target in targets:
+        shown = _in_project(project, target)
+        if shown is not None:
+            rules.update(f"{tool}({pattern})" for tool in _RULE_TOOLS for pattern in (shown, f"{shown}/**"))
+    return rules
+
+
 def _rules(project: Path, targets: list[Path]) -> list[str]:
-    """Deny rules for the targets that are inside the project. Others rely on the hook alone."""
+    """Deny rules for the targets that are inside the project."""
     rules: list[str] = []
     for target in targets:
-        shown = stored_form(project, target)
-        if Path(shown).is_absolute() or (len(shown) > 1 and shown[1] == ":"):
+        shown = _in_project(project, target)
+        if shown is None:
             continue
         if target.is_dir():
             patterns = [f"{shown}/**"]

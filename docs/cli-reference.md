@@ -124,7 +124,7 @@ datanyx scan PATH [options]
 | `--include-examples` | also count example.com emails and loopback or documentation IPs |
 | `--show-paths` | show real file names, even ones that look like data (run it yourself) |
 | `--format` `FORMAT` | output format (default: text). Choices: `text`, `json`. |
-| `--fail-on-findings` | exit with 1 if anything is found, for CI or a pre-commit hook |
+| `--fail-on-findings` | exit with 1 if anything is found, or a file that could hold data couldn't be read, for CI or a pre-commit hook |
 
 ## `datanyx protect`
 

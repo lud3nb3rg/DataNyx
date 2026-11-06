@@ -14,6 +14,7 @@ from ..sources.base import SourceError
 from .model import NUMERIC, TEMPORAL, TEXT, Column, Diagnostic, Table, suggest
 
 _DATE_LIKE = re.compile(r"\d{4}-\d{2}(-\d{2})?")
+_TIME_LIKE = re.compile(r"\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?\s*([AaPp][Mm]|[Zz]|[+-]\d{2}(:?\d{2})?)?")
 _NUMBER_LIKE = re.compile(r"[+-]?\d+(\.\d+)?")
 
 
@@ -280,7 +281,8 @@ class _Checker:
                 if kind in NUMERIC:
                     self.add("warning", f"LIKE on {kind} column {node.this.sql()}", node, "LIKE is for text; cast the column first")
             elif isinstance(node, (exp.Sum, exp.Avg)):
-                target = node.this.this if isinstance(node.this, exp.Distinct) and node.this.expressions == [] else node.this
+                # SUM(DISTINCT x) holds x in the DISTINCT's own list.
+                target = node.this.expressions[0] if isinstance(node.this, exp.Distinct) and len(node.this.expressions) == 1 else node.this
                 kind = self.kind_of(target)
                 if kind in TEXT | TEMPORAL | {"boolean"}:
                     name = "SUM" if isinstance(node, exp.Sum) else "AVG"
@@ -312,7 +314,11 @@ class _Checker:
         elif kind in TEXT and literal_kind == "number-literal":
             self.add("warning", f"comparing text column {column.sql()} with the number {value}", node, "quote it, or cast the column")
         elif kind in TEMPORAL and literal_kind == "number-literal":
-            self.add("warning", f"comparing {kind} column {column.sql()} with the number {value}", node, "use a date such as '2024-01-31'")
+            example = "a time such as '12:30:00'" if kind == "time" else "a date such as '2024-01-31'"
+            self.add("warning", f"comparing {kind} column {column.sql()} with the number {value}", node, f"use {example}")
+        elif kind == "time":
+            if not _TIME_LIKE.fullmatch(value.strip()):
+                self.add("warning", f"comparing time column {column.sql()} with {value!r}, which isn't a time", node)
         elif kind in TEMPORAL and not _DATE_LIKE.match(value):
             self.add("warning", f"comparing {kind} column {column.sql()} with {value!r}, which isn't a date", node)
 

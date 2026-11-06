@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import IO
 
+from ..formats import detect_format
 from ..inference import Observation
 from ..schema import Array, DataSchema, Entity, Node
 from .base import SourceError
@@ -56,6 +58,11 @@ def read_bytes(target: str) -> bytes:
         raise SourceError(f"cannot read input: {error.strerror}") from None
 
 
+def sqlite_read_only_uri(path: str | Path) -> str:
+    """A URI that opens a SQLite file read-only, whatever its name holds: `#`, `?` and `%` are escaped."""
+    return f"{Path(path).resolve().as_uri()}?mode=ro"
+
+
 def missing_extra(what: str, extra: str) -> SourceError:
     return SourceError(f"reading {what} needs an extra package; install datanyx[{extra}]")
 
@@ -93,7 +100,10 @@ def coerce_text(text: str) -> object:
     if not stripped:
         return None
     if _INTEGER.fullmatch(stripped):
-        return int(stripped)
+        try:
+            return int(stripped)
+        except ValueError:  # Past Python's limit of digits, so it's no ordinary number.
+            return text
     if _FLOAT.fullmatch(stripped):
         return float(stripped)
     lowered = stripped.lower()
@@ -102,7 +112,24 @@ def coerce_text(text: str) -> object:
     return text
 
 
-def column_names(header: list[object]) -> list[str]:
+# Formats no column is called: a row holding one is a record, not a header.
+_VALUE_FORMATS = frozenset({"email", "uri", "ipv4", "ipv6", "uuid"})
+_PHONE_CELL = re.compile(r"\+\d[\d\s().-]{6,}")
+FIRST_ROW_IS_DATA = "the first row looks like data rather than column names, so the columns are named by position"
+
+
+def row_is_data(row: list[str]) -> bool:
+    """Whether a file has no header: its first row holds an email, a URL or the like.
+
+    Plain names can't be told from column names here, so `Jane,Doe` still reads as a header."""
+    return any(detect_format(cell.strip()) in _VALUE_FORMATS or _PHONE_CELL.fullmatch(cell.strip()) for cell in row)
+
+
+def positional_names(row: list[str]) -> list[str]:
+    return [f"column_{position}" for position in range(1, len(row) + 1)]
+
+
+def column_names(header: Sequence[object]) -> list[str]:
     """Unique names for header cells. Empty ones get a positional name, never a value."""
     names: list[str] = []
     seen: set[str] = set()
