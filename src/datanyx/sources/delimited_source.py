@@ -18,9 +18,11 @@ from .files import (
     first_row_is_data,
     items_seen,
     open_text,
+    over_limit,
     positional_names,
     records_observation,
     reject_namespace,
+    sampled_note,
     unnamed,
 )
 
@@ -44,7 +46,9 @@ class DelimitedSource(Source):
         evidence = policy.evidence.table(None) if policy.evidence is not None else None
         with open_text(target) as stream:
             try:
-                names = _read_rows(csv.reader(stream, delimiter=policy.delimiter or self._delimiter), root, notes, evidence, policy.keep_names)
+                names, cut_short = _read_rows(
+                    csv.reader(stream, delimiter=policy.delimiter or self._delimiter), root, notes, evidence, policy.keep_names, policy
+                )
             except csv.Error:
                 raise SourceError(f"input isn't valid {self.kind.upper()}") from None
             except UnicodeDecodeError:
@@ -52,12 +56,19 @@ class DelimitedSource(Source):
         if names is None:
             return unnamed(self.kind, EMPTY_TABLE, tuple(notes))
         node, inferred = infer(root, policy)
-        return unnamed(self.kind, node, tuple(notes) + inferred, scale_for(policy, items_seen(root)))
+        if cut_short:
+            notes.append(sampled_note(policy))
+            if evidence is not None:
+                evidence.partial = True
+        return unnamed(self.kind, node, tuple(notes) + inferred, None if cut_short else scale_for(policy, items_seen(root)))
 
 
-def _read_rows(reader, root: Observation, notes: list[str], evidence=None, keep_names=frozenset()) -> list[str] | None:
+def _read_rows(
+    reader, root: Observation, notes: list[str], evidence=None, keep_names=frozenset(), policy=None
+) -> tuple[list[str] | None, bool]:
     names: list[str] | None = None
     wide = False
+    cut_short = False
     for row in reader:
         if names is None:
             if not any(cell.strip() for cell in row):
@@ -69,6 +80,9 @@ def _read_rows(reader, root: Observation, notes: list[str], evidence=None, keep_
             notes.append(HEADERLESS_NOTE)
         if not row:
             continue
+        if policy is not None and over_limit(policy, root):
+            cut_short = True
+            break
         wide = wide or len(row) > len(names)
         # Short rows leave their last columns out, which makes those columns optional.
         record = {name: coerce_text(cell) for name, cell in zip(names, row)}
@@ -77,4 +91,4 @@ def _read_rows(reader, root: Observation, notes: list[str], evidence=None, keep_
             evidence.add(record)
     if wide:
         notes.append("some rows had more cells than the header; the extra cells were ignored")
-    return names
+    return names, cut_short

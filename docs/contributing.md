@@ -69,6 +69,7 @@ uv run datanyx doctor                # shows what's installed
 
 ```sh
 uv run pytest                        # needs no services; model tests skip without the models
+uv run pytest -n auto                # in parallel, in about half the time (each worker loads the models)
 uv run ruff check src tests
 uv run mypy
 uv run pytest --cov                  # coverage report

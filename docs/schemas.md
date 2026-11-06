@@ -198,6 +198,22 @@ unique.
 `view`, and in JSON Schema `x-view`. A view's definition is never read, and it has no keys of its own. They are off by
 default so existing output doesn't change; set `views = true` under `[schema]` to turn them on for a project.
 
+## Huge files
+
+CSV, TSV, JSON Lines and Excel files are read one row at a time, so memory stays small however big the file is.
+Time still grows with it. `--max-rows N` reads only the first N rows (of each sheet, for Excel), and a large
+JSON array is cut the same way when it is streamed (`.[streaming]`):
+
+```sh
+datanyx schema events.csv --max-rows 100000
+```
+
+A file that was cut short says so in a note, and then **gets no size hint and no key guesses**, because neither
+can be known from a part. Fields that are rare, or that only appear later, may be missing, and a field that looks
+required in the first rows may not be. A file with exactly N rows, or fewer, is read whole and nothing is
+different. Set `max_rows` under `[schema]` in `datanyx.toml` to make it the project's default. YAML and XML
+are read whole, and so is a JSON file below the streaming size.
+
 ## Big databases
 
 A database with thousands of tables would flood an agent. These options keep the answer a useful size:

@@ -81,6 +81,8 @@ class KeyPolicy:
     include, exclude: glob patterns on table (or file) names; only matching names are described, minus
         the excluded ones. They apply to names that may be shown, so they can't be used to find hidden ones.
     max_tables: describe at most this many tables, and say how many were left out.
+    max_rows: read at most this many rows of a CSV, TSV, JSON Lines or Excel file (or records of a large JSON array)
+        and describe those. A file cut short says so, and gets no size hint or key guesses.
     """
 
     map_paths: frozenset[str] = frozenset()
@@ -96,6 +98,7 @@ class KeyPolicy:
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
     max_tables: int | None = None
+    max_rows: int | None = None
     #: Collects key evidence while a source reads (`datanyx.keys.Evidence`); made by `extract`.
     evidence: Any = field(default=None, compare=False, repr=False)
 

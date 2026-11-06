@@ -17,11 +17,13 @@ from .files import (
     first_row_is_data,
     items_seen,
     missing_extra,
+    over_limit,
     path_or_stream,
     positional_names,
     records_observation,
     reject_namespace,
     require_path,
+    sampled_note,
 )
 
 
@@ -67,6 +69,7 @@ def _describe(workbook, policy: KeyPolicy, kind: str) -> DataSchema:
         root = records_observation()
         evidence = policy.evidence.table(name) if policy.evidence is not None else None
         names: list[str] | None = None
+        cut_short = False
         for row in sheet.iter_rows(values_only=True):
             if all(cell is None or cell == "" for cell in row):
                 continue
@@ -77,6 +80,9 @@ def _describe(workbook, policy: KeyPolicy, kind: str) -> DataSchema:
                 names = positional_names(len(row))
                 if HEADERLESS_NOTE not in notes:
                     notes.append(HEADERLESS_NOTE)
+            if over_limit(policy, root):
+                cut_short = True
+                break
             record = {n: (None if v == "" else v) for n, v in zip(names, row)}
             root.observe_item(record)
             if evidence is not None:
@@ -86,7 +92,11 @@ def _describe(workbook, policy: KeyPolicy, kind: str) -> DataSchema:
             continue
         node, inferred = infer(root, policy, f"$.{name}")
         notes.extend(inferred)
-        entities.append(Entity(name, node, scale=scale_for(policy, items_seen(root))))
+        if cut_short:
+            notes.append(f"{name}: {sampled_note(policy)}")
+            if evidence is not None:
+                evidence.partial = True
+        entities.append(Entity(name, node, scale=None if cut_short else scale_for(policy, items_seen(root))))
     if renamed:
         notes.append("renamed data-like sheet names to sheet_N (key shape)")
     return DataSchema(kind, tuple(entities), tuple(notes))

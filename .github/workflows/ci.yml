@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --all-extras --locked
-      - run: uv run pytest -m "not server" --cov --cov-report=term
+      - run: uv run pytest -m "not server" -n auto --cov --cov-report=term
 
   # The text tests need the large NER models, so they run once rather than in every cell.
   text:
@@ -40,8 +40,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --all-extras --group models --locked
-      - run: uv run pytest tests/test_text.py tests/test_text_model.py
-      - run: uv run pytest -m needs_model
+      # Each worker loads the models, so two rather than one per core.
+      - run: uv run pytest -n 2 tests/test_text.py tests/test_text_model.py
+      - run: uv run pytest -n 2 -m needs_model
 
   # The package builds, its metadata is valid, and the container image builds and runs.
   package:

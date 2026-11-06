@@ -28,6 +28,7 @@ datanyx schema input [options]
 | `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
 | `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
 | `--views` | also describe database views (names and columns only) |
+| `--max-rows` `N` | read at most N rows of a CSV, TSV, JSON Lines or Excel file, so a huge file is described quickly; sizes and key guesses are then left out |
 | `--include` `PATTERN` | describe only tables (or files) whose names match this glob, such as 'sales_*' (repeatable) |
 | `--exclude` `PATTERN` | leave out tables (or files) whose names match this glob (repeatable) |
 | `--max-tables` `N` | describe at most N tables and say how many were left out; use --format summary to list them all |
@@ -54,6 +55,7 @@ datanyx synth input [options]
 | `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
 | `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
 | `--views` | also describe database views (names and columns only) |
+| `--max-rows` `N` | read at most N rows of a CSV, TSV, JSON Lines or Excel file, so a huge file is described quickly; sizes and key guesses are then left out |
 | `--include` `PATTERN` | describe only tables (or files) whose names match this glob, such as 'sales_*' (repeatable) |
 | `--exclude` `PATTERN` | leave out tables (or files) whose names match this glob (repeatable) |
 | `--max-tables` `N` | describe at most N tables and say how many were left out; use --format summary to list them all |
@@ -374,6 +376,8 @@ datanyx mcp [options]
 | `--scale-hints` | give agents each table's size as an order of magnitude |
 | `--infer-keys` | give agents yes/no guesses about unique columns and joins |
 | `--views` | let agents see database views (names and columns only) |
+| `--max-rows` `N` | read at most N rows of a data file, so one huge file can't hold the server up (sizes and key guesses are then left out) |
+| `--debug-log` `FILE` | append where each unexpected failure happened (file, line and function, never a message or value) to this private file |
 | `--max-tables` `N` | most tables describe_data returns at once, so a huge database can't flood the agent (default: 200) |
 | `--http` `HOST:PORT` | serve over HTTP at /mcp instead of stdio, so a team can share one server; needs a token (--token-env) |
 | `--token-env` `NAME` | environment variable holding the bearer token HTTP clients must send (default: DATANYX_MCP_TOKEN) |

@@ -78,6 +78,8 @@ class _Column:
 class TableEvidence:
     def __init__(self) -> None:
         self.rows = 0
+        #: Set when only the first rows were read. What holds for them may not hold for the rest, so nothing is claimed.
+        self.partial = False
         self.columns: dict[str, _Column | None] = {}  # None: not a key-looking name.
 
     def add(self, record: Any) -> None:
@@ -96,7 +98,8 @@ class TableEvidence:
     def is_unique(self, name: str) -> bool:
         column = self.columns.get(name)
         return (
-            column is not None
+            not self.partial
+            and column is not None
             and column.usable()
             and not column.duplicate
             and self.rows >= MIN_ROWS
@@ -105,7 +108,7 @@ class TableEvidence:
 
     def can_reference(self, name: str) -> _Column | None:
         column = self.columns.get(name)
-        if column is None or not column.usable() or column.non_null < MIN_ROWS or len(column.values) < 2:
+        if self.partial or column is None or not column.usable() or column.non_null < MIN_ROWS or len(column.values) < 2:
             return None
         return column
 

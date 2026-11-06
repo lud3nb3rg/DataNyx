@@ -143,5 +143,23 @@ Each record has the time, a session id, the tool, the paths and settings it was 
 worked, and sizes. It never has a value or anything the agent was given back: the SQL an agent asked to
 have checked is recorded as a length, and credentials in a database URL are replaced. The file is readable by its owner only. Keep it where the agent can't change it.
 
+**When something breaks.** The agent is only told `internal failure (ValueError)`, because an exception's text can
+quote the data. For you, `--debug-log FILE` (or `debug_log` under `[mcp]`) records where each unexpected failure
+happened, one line per failure:
+
+```json
+{"time": "2025-02-02T16:40:51+00:00", "tool": "describe_data", "error": "ValueError", "causes": ["KeyError"],
+ "frames": [{"file": "datanyx/sources/json_source.py", "line": 70, "function": "extract"}, ...]}
+```
+
+That is the exception types, and for each frame the file, line and function name: never a message, a line of
+source, an argument or a variable, which are the places a value could be. The file is readable by its owner only, is
+never sent to the agent, and a refusal the agent was told about (a path outside the roots, say) isn't a bug and
+isn't logged. Keep it where the agent can't read it.
+
+**Huge files.** `--max-rows N` limits how many rows of a data file are read, so one very large CSV can't keep
+the server busy for minutes. Files that were cut short say so and give no size hint or key guesses; see
+[Huge files](schemas.md#huge-files). The agent can't change it.
+
 The server doesn't stop the agent from opening the files itself. Block that in its
 permissions, as above.

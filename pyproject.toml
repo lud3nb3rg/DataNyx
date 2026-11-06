@@ -68,6 +68,7 @@ presidio = [
 dev = [
     "pytest>=8",
     "pytest-cov>=5",
+    "pytest-xdist>=3.5",
     "hypothesis>=6",
     "ruff>=0.6",
     "mypy>=1.10",
@@ -130,6 +131,8 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+# CI measures about 90% without the NER models. The floor catches a new module that ships with no tests.
+fail_under = 88
 
 [[tool.mypy.overrides]]
 module = "datanyx.mcp_server"

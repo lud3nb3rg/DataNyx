@@ -38,6 +38,8 @@ def _run_mcp(args: argparse.Namespace) -> int:
         infer_keys=bool(args.infer_keys or config.infer_keys),
         views=bool(args.views or config.views),
         max_tables=args.max_tables,
+        max_rows=args.max_rows or config.max_rows,
+        debug_log=args.debug_log or (str(config.debug_log) if config.debug_log else None),
         allow_env=[*config.mcp_allow_env, *args.allow_env],
         scan_settings={
             "excludes": list(config.scan_exclude),
@@ -80,6 +82,14 @@ def add_mcp(commands: argparse._SubParsersAction) -> None:
     serve.add_argument("--scale-hints", action="store_true", help="give agents each table's size as an order of magnitude")
     serve.add_argument("--infer-keys", action="store_true", help="give agents yes/no guesses about unique columns and joins")
     serve.add_argument("--views", action="store_true", help="let agents see database views (names and columns only)")
+    serve.add_argument(
+        "--max-rows", type=int, metavar="N",
+        help="read at most N rows of a data file, so one huge file can't hold the server up (sizes and key guesses are then left out)",
+    )
+    serve.add_argument(
+        "--debug-log", metavar="FILE",
+        help="append where each unexpected failure happened (file, line and function, never a message or value) to this private file",
+    )
     serve.add_argument(
         "--max-tables", type=int, default=200, metavar="N",
         help="most tables describe_data returns at once, so a huge database can't flood the agent (default: %(default)s)",

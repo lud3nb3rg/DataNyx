@@ -16,6 +16,7 @@ map_paths = ["$.users"]                  # hide every key under these paths
 keep_names = ["Order Details"]           # show names the rules hid
 scale_hints = true                       # row counts as an order of magnitude
 infer_keys = true                        # yes/no guesses about unique columns and joins
+max_rows = 100000                        # read only this many rows of a data file
 
 [anonymize]
 model = "en_core_web_lg"                 # or models = ["en_core_web_lg", "fr_core_news_md"]
@@ -37,6 +38,7 @@ max_size = 5
 [mcp]
 roots = ["data"]
 audit_log = "datanyx-audit.jsonl"
+debug_log = "datanyx-debug.jsonl"       # where unexpected failures happened, for you
 allow_env = ["DATABASE_URL"]             # environment variables the agent may use as env:NAME
 ```
 
@@ -55,7 +57,7 @@ allow_env = ["DATABASE_URL"]             # environment variables the agent may u
 - **Mistakes are errors.** An unknown section or setting is reported with a suggestion
   (`unknown setting 'hid' in [anonymize]; did you mean 'hide'?`), because a misspelled `hide` would
   otherwise protect nothing. A value is never repeated in an error message.
-- **Paths** in the file (`detectors`, `names_from`, `roots`, `audit_log`) are relative to the file.
+- **Paths** in the file (`detectors`, `names_from`, `roots`, `audit_log`, `debug_log`) are relative to the file.
 - **Terms to hide stay private.** `datanyx.local.toml` is merged on top of `datanyx.toml`: lists are
   joined and single values in the local file win. Put the client and company names you are protecting
   there, and keep it out of git. `datanyx config` counts them and shows them only with `--reveal`.

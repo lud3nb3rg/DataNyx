@@ -754,7 +754,7 @@ def test_a_scan_with_many_findings_is_fast(tmp_path):
     started = time.monotonic()
     report = scan(str(tmp_path), kinds=["EMAIL"], max_bytes=10_000_000)
     assert report.findings[0].counts["EMAIL"] == 150_000 and report.findings[0].lines["EMAIL"][:2] == [1, 2]
-    assert time.monotonic() - started < 30
+    assert time.monotonic() - started < 120  # Quadratic behaviour would take far longer; this allows for a loaded machine.
 
 
 def test_a_yaml_alias_bomb_is_refused(tmp_path):

@@ -277,6 +277,23 @@ def unnamed(kind: str, node: Node, notes: tuple[str, ...], scale: str | None = N
     return DataSchema(kind, (Entity(None, node, scale=scale),), notes)
 
 
+def records_read(observation: Observation) -> int:
+    """How many records have been fed in so far."""
+    return observation.items.seen if observation.items is not None else 0
+
+
+def over_limit(policy, observation: Observation) -> bool:
+    """Whether `policy.max_rows` records are already in, so one more means the file is being cut short."""
+    return policy.max_rows is not None and records_read(observation) >= policy.max_rows
+
+
+def sampled_note(policy) -> str:
+    return (
+        f"read only the first {policy.max_rows:,} rows; sizes and key guesses are left out, and fields "
+        "that are rare or set only later may be missing"
+    )
+
+
 def items_seen(observation: Observation) -> int | None:
     """How many records a source read, when what it read is a list of them."""
     if observation.arrays and observation.items is not None:

@@ -31,6 +31,7 @@ from . import extract, render
 from .audit import AuditLog
 from .check import LANGUAGES, format_diagnostics, load_tables
 from .check import check_code as run_check
+from .debuglog import DebugLog
 from .diff import diff_schemas, render_diff, snapshot
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
@@ -142,8 +143,11 @@ def _tool_error() -> type[Exception]:
     return ToolError
 
 
-def _guard(function: Callable[..., str]) -> Callable[..., str]:
-    """Let only fixed messages out: an exception's own text can quote the data."""
+def _guard(function: Callable[..., str], on_failure: Callable[[str, BaseException], None] | None = None) -> Callable[..., str]:
+    """Let only fixed messages out: an exception's own text can quote the data.
+
+    `on_failure` hears of every unexpected failure, for the owner's debug log; it never reaches the agent.
+    """
 
     refusal = _tool_error()
 
@@ -153,12 +157,22 @@ def _guard(function: Callable[..., str]) -> Callable[..., str]:
             return function(*args, **kwargs)
         except SourceError as error:
             raise refusal(str(error)) from None
-        except RecursionError:
+        except RecursionError as error:
+            _report(on_failure, function, error)
             raise refusal("input is too deeply nested") from None
         except Exception as error:
+            _report(on_failure, function, error)
             raise refusal(f"internal failure ({type(error).__name__})") from None
 
     return wrapper
+
+
+def _report(on_failure: Callable[[str, BaseException], None] | None, function: Callable[..., str], error: BaseException) -> None:
+    if on_failure is not None:
+        try:
+            on_failure(function.__name__, error)
+        except Exception:
+            pass  # A log that can't be written must not change what the agent is told.
 
 
 def create_server(
@@ -175,6 +189,8 @@ def create_server(
     scan_settings: Mapping[str, Any] | None = None,
     views: bool = False,
     max_tables: int | None = 200,
+    max_rows: int | None = None,
+    debug_log: str | Path | None = None,
 ):
     """Build the server.
 
@@ -184,7 +200,9 @@ def create_server(
     and key guesses to schemas; the agent can't switch them on or off. `allow_env` names the
     environment variables the agent may use as `env:NAME`. `scan_settings` are options for `scan`
     (`excludes`, `max_bytes`, `include_examples`). `views` lets agents see database views. `max_tables` caps
-    how many tables `describe_data` returns at once (the summary format is not capped).
+    how many tables `describe_data` returns at once (the summary format is not capped). `max_rows` limits how many
+    rows of a data file are read, so one huge file can't hold the server up. `debug_log` is a private file that
+    gets where each unexpected failure happened (file, line and function, never the message or any value).
     """
     try:
         from mcp.server.mcpserver import MCPServer as Server  # type: ignore[import-not-found]  # mcp 2.x
@@ -202,6 +220,7 @@ def create_server(
     backend_kinds = BACKEND_KINDS if any(getattr(item, "uses_model", False) for item in custom_detectors) else frozenset()
     server = Server("datanyx", instructions=INSTRUCTIONS)
     audit = AuditLog(audit_log)
+    debug = DebugLog(debug_log)
     hide_terms = list(hide)
 
     def key_policy(map_paths: Sequence[str] | None = None, **selection: Any) -> KeyPolicy:
@@ -210,11 +229,11 @@ def create_server(
         A selection of tables is only for describe_data: code checked against a trimmed schema would report
         tables that exist as unknown.
         """
-        return KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys, views=views, **selection)
+        return KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys, views=views, max_rows=max_rows, **selection)
 
     def tool(function: Callable[..., str]) -> Callable[..., str]:
         """Register a tool: refusals and failures become fixed messages, and every call is recorded."""
-        guarded = _guard(function)
+        guarded = _guard(function, debug.record)
 
         @functools.wraps(function)
         def audited(*args: Any, **kwargs: Any) -> str:
@@ -459,6 +478,8 @@ def run(
     scan_settings: Mapping[str, Any] | None = None,
     views: bool = False,
     max_tables: int | None = 200,
+    max_rows: int | None = None,
+    debug_log: str | Path | None = None,
 ) -> None:
     allowed = {*ENTITY_KINDS, SECRET, *kinds_of(list(detectors))}
     unknown = set(keep_entity) - allowed
@@ -466,7 +487,7 @@ def run(
         raise SourceError(f"unknown entity kinds: {sorted(unknown)}")
     server = create_server(
         roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys, allow_env, scan_settings,
-        views=views, max_tables=max_tables,
+        views=views, max_tables=max_tables, max_rows=max_rows, debug_log=debug_log,
     )
     if http is None:
         server.run("stdio")

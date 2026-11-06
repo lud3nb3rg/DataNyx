@@ -19,8 +19,10 @@ from .files import (
     is_remote,
     items_seen,
     open_text,
+    over_limit,
     records_observation,
     reject_namespace,
+    sampled_note,
     unnamed,
 )
 
@@ -42,6 +44,10 @@ class JsonSource(Source):
     def extract(self, target: str, policy: KeyPolicy, namespace: str | None = None) -> DataSchema:
         reject_namespace(namespace)
         streamer = _streamer() if _should_stream(target) else None
+        if streamer is not None and policy.max_rows is not None:
+            sampled = _sample_array(streamer, target, policy)
+            if sampled is not None:
+                return sampled
         if streamer is not None:
             streamed = _observe_stream(streamer, target)
             if policy.evidence is not None:
@@ -77,11 +83,15 @@ class JsonLinesSource(Source):
         # larger than memory still work, since values are discarded as they pass.
         root = records_observation()
         evidence = policy.evidence.table(None) if policy.evidence is not None else None
+        cut_short = False
         with open_text(target) as stream:
             line_number = 0
             try:
                 for line_number, line in enumerate(stream, start=1):  # noqa: B007
                     if line.strip():
+                        if over_limit(policy, root):
+                            cut_short = True
+                            break
                         record = json.loads(line)
                         root.observe_item(record)
                         if evidence is not None:
@@ -92,7 +102,43 @@ class JsonLinesSource(Source):
             except UnicodeDecodeError:
                 raise SourceError("input is not valid UTF-8") from None
         node, notes = infer(root, policy)
-        return unnamed(self.kind, node, notes, scale_for(policy, items_seen(root)))
+        if cut_short:
+            notes = (*notes, sampled_note(policy))
+            if evidence is not None:
+                evidence.partial = True
+        return unnamed(self.kind, node, notes, None if cut_short else scale_for(policy, items_seen(root)))
+
+
+def _sample_array(ijson, target: str, policy: KeyPolicy) -> DataSchema | None:
+    """The first `max_rows` records of a top-level array, or None when the document isn't one."""
+    root = records_observation()
+    evidence = policy.evidence.table(None) if policy.evidence is not None else None
+    cut_short = False
+    try:
+        with binary_stream(target) as raw:
+            stream = _without_bom(raw)
+            head = stream.read(256)
+            if not head.lstrip().startswith(b"["):
+                return None
+            for record in ijson.items(_Replay(head, stream), "item", use_float=True):
+                if over_limit(policy, root):
+                    cut_short = True
+                    break
+                root.observe_item(record)
+                if evidence is not None:
+                    evidence.add(record)
+    except OSError as error:
+        raise SourceError(f"cannot read input: {error.strerror}") from None
+    except UnicodeDecodeError:
+        raise SourceError("input is not valid UTF-8") from None
+    except ijson.JSONError:
+        raise SourceError("invalid JSON") from None
+    node, notes = infer(root, policy)
+    if cut_short:
+        notes = (*notes, sampled_note(policy))
+        if evidence is not None:
+            evidence.partial = True
+    return unnamed("json", node, notes, None if cut_short else scale_for(policy, items_seen(root)))
 
 
 def _should_stream(target: str) -> bool:

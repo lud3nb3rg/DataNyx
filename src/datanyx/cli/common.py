@@ -64,6 +64,10 @@ def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--views", action="store_true", help="also describe database views (names and columns only)")
     parser.add_argument(
+        "--max-rows", type=int, metavar="N",
+        help="read at most N rows of a CSV, TSV, JSON Lines or Excel file, so a huge file is described quickly; sizes and key guesses are then left out",
+    )
+    parser.add_argument(
         "--include", action="append", default=[], metavar="PATTERN",
         help="describe only tables (or files) whose names match this glob, such as 'sales_*' (repeatable)",
     )
@@ -179,6 +183,7 @@ def _policy(args: argparse.Namespace) -> KeyPolicy:
         include=tuple(getattr(args, "include", None) or ()),
         exclude=tuple(getattr(args, "exclude", None) or ()),
         max_tables=getattr(args, "max_tables", None),
+        max_rows=getattr(args, "max_rows", None) or config.max_rows,
     )
 
 

@@ -36,14 +36,14 @@ ENVIRONMENT_VARIABLE = "DATANYX_CONFIG"
 
 _LIST, _PATHS, _PATH, _STR, _BOOL, _NUMBER = "list of text", "list of paths", "path", "text", "true or false", "number"
 SPEC: dict[str, dict[str, str]] = {
-    "schema": {"map_paths": _LIST, "keep_names": _LIST, "scale_hints": _BOOL, "infer_keys": _BOOL, "views": _BOOL},
+    "schema": {"map_paths": _LIST, "keep_names": _LIST, "scale_hints": _BOOL, "infer_keys": _BOOL, "views": _BOOL, "max_rows": _NUMBER},
     "anonymize": {
         "model": _STR, "models": _LIST, "hide": _LIST, "keep": _LIST, "keep_entities": _LIST,
         "detectors": _PATHS, "packs": _LIST, "backends": _LIST,
     },
     "scrub": {"allow": _LIST, "names_from": _PATHS, "keep_numbers": _BOOL, "ner": _BOOL},
     "scan": {"exclude": _LIST, "kinds": _LIST, "max_size": _NUMBER, "include_examples": _BOOL, "ner": _BOOL},
-    "mcp": {"roots": _PATHS, "allow_urls": _BOOL, "allow_env": _LIST, "audit_log": _PATH},
+    "mcp": {"roots": _PATHS, "allow_urls": _BOOL, "allow_env": _LIST, "audit_log": _PATH, "debug_log": _PATH},
 }
 DETECTOR_ARRAYS = ("pattern", "dictionary")
 
@@ -58,6 +58,7 @@ class Config:
     scale_hints: bool | None = None
     infer_keys: bool | None = None
     views: bool | None = None
+    max_rows: int | None = None
     model: str | None = None
     models: tuple[str, ...] = ()
     packs: tuple[str, ...] = ()
@@ -80,6 +81,7 @@ class Config:
     mcp_allow_urls: bool | None = None
     mcp_allow_env: tuple[str, ...] = ()
     audit_log: Path | None = None
+    debug_log: Path | None = None
 
     @property
     def found(self) -> bool:
@@ -216,6 +218,7 @@ def _build(files: list[Path], data: dict[str, Any]) -> Config:
         return tuple(Path(item) for item in get(section, key, []))
 
     audit = get("mcp", "audit_log")
+    debug = get("mcp", "debug_log")
     return Config(
         files=tuple(files),
         map_paths=tuple(get("schema", "map_paths", [])),
@@ -223,6 +226,7 @@ def _build(files: list[Path], data: dict[str, Any]) -> Config:
         scale_hints=get("schema", "scale_hints"),
         infer_keys=get("schema", "infer_keys"),
         views=get("schema", "views"),
+        max_rows=get("schema", "max_rows"),
         model=get("anonymize", "model"),
         models=tuple(get("anonymize", "models", [])),
         packs=tuple(get("anonymize", "packs", [])),
@@ -245,6 +249,7 @@ def _build(files: list[Path], data: dict[str, Any]) -> Config:
         mcp_allow_urls=get("mcp", "allow_urls"),
         mcp_allow_env=tuple(get("mcp", "allow_env", [])),
         audit_log=Path(audit) if audit else None,
+        debug_log=Path(debug) if debug else None,
     )
 
 
@@ -267,7 +272,7 @@ def describe(config: Config, reveal: bool = False) -> str:
         lines.append(f"  {label}: {text}")
 
     sections = (
-        ("schema", (("map_paths", config.map_paths), ("keep_names", config.keep_names), ("scale_hints", config.scale_hints), ("infer_keys", config.infer_keys), ("views", config.views))),
+        ("schema", (("map_paths", config.map_paths), ("keep_names", config.keep_names), ("scale_hints", config.scale_hints), ("infer_keys", config.infer_keys), ("views", config.views), ("max_rows", config.max_rows))),
         (
             "anonymize",
             (("model", config.model), ("models", config.models), ("packs", config.packs), ("backends", config.backends), ("hide", config.hide), ("keep", config.keep), ("keep_entities", config.keep_entities),
@@ -283,7 +288,7 @@ def describe(config: Config, reveal: bool = False) -> str:
             (("exclude", config.scan_exclude), ("kinds", config.scan_kinds), ("max_size", config.scan_max_size),
              ("include_examples", config.scan_include_examples), ("ner", config.scan_ner)),
         ),
-        ("mcp", (("roots", config.mcp_roots), ("allow_urls", config.mcp_allow_urls), ("allow_env", config.mcp_allow_env), ("audit_log", config.audit_log))),
+        ("mcp", (("roots", config.mcp_roots), ("allow_urls", config.mcp_allow_urls), ("allow_env", config.mcp_allow_env), ("audit_log", config.audit_log), ("debug_log", config.debug_log))),
     )
     secret_keys = {"hide", "keep"}
     for name, items in sections:
@@ -315,6 +320,10 @@ STARTER = """# DataNyx project settings. Commands read this file from the projec
 # Also describe database views (names and columns; a view's definition is never read).
 # views = true
 
+# Read at most this many rows of a CSV, TSV, JSON Lines or Excel file, so a huge file is described in seconds.
+# Sizes and key guesses are then left out for the files that were cut short.
+# max_rows = 100000
+
 [anonymize]
 # model = "en_core_web_lg"
 # Several models at once, to cover several languages: models = ["en_core_web_lg", "fr_core_news_md"]
@@ -339,6 +348,8 @@ STARTER = """# DataNyx project settings. Commands read this file from the projec
 # roots = ["data"]
 # Write a record of every tool call (never values) to this file.
 # audit_log = "datanyx-audit.jsonl"
+# Write where each unexpected failure happened (file, line, function; never a message or a value) to this file.
+# debug_log = "datanyx-debug.jsonl"
 
 # Custom detectors can also be written here:
 # [[pattern]]

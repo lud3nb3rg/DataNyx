@@ -41,6 +41,17 @@ _RULES: dict[str, dict[str, str]] = {
 }
 
 
+def prepare_private_log(path: Path, what: str) -> None:
+    """Create a log file that only its owner can read, before anything is written to it."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.close(os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600))  # Owner only from the start.
+    except OSError:
+        raise SourceError(f"cannot write the {what}") from None
+    if not restrict_to_owner(str(path)):
+        raise SourceError(f"cannot make the {what} private")
+
+
 class AuditLog:
     """Appends records to a file. With no path it does nothing."""
 
@@ -52,13 +63,7 @@ class AuditLog:
 
     def _prepare(self) -> None:
         assert self.path is not None
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            os.close(os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600))  # Owner only from the start.
-        except OSError:
-            raise SourceError("cannot write the audit log") from None
-        if not restrict_to_owner(str(self.path)):
-            raise SourceError("cannot make the audit log private")
+        prepare_private_log(self.path, "audit log")
 
     def record(
         self, tool: str, arguments: Mapping[str, Any], outcome: str, message: str | None, started: float, output_chars: int | None

@@ -4,6 +4,9 @@
 
 **Added**
 
+- `--max-rows N` (and `max_rows` under `[schema]`) reads only the first N rows of a CSV, TSV, JSON Lines or Excel file, or of a streamed JSON array. A file cut short says so and gets no size hint or key guesses. `datanyx mcp --max-rows` sets it for the server.
+- `datanyx mcp --debug-log FILE` records where each unexpected failure happened (exception types, file, line and function; never a message or value) in a private file for the owner.
+- The test suite runs in parallel with `pytest -n auto`, and CI enforces a coverage floor of 88%.
 - Compressed files: `.gz`, `.bz2`, `.xz` and `.zst` (new extra `zstd`) after any text format, such as `orders.csv.gz`.
 - New sources: Arrow and Feather v2, Delta Lake and Iceberg table folders, Protocol Buffers (`.proto`), SQL files with `CREATE TABLE` (new extra `ddl`) and OpenAPI/Swagger documents. BigQuery and Snowflake work through their SQLAlchemy dialects (new extras `bigquery` and `snowflake`; not tested against a live service).
 - `--scale-hints` for SQL Server and Oracle tables, and for Arrow, Delta Lake and Iceberg.
