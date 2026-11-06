@@ -249,7 +249,7 @@ def test_cli_produces_nothing_when_the_model_is_missing(tmp_path, capsys, monkey
 @pytest.fixture
 def fake_model(monkeypatch):
     ner = FakeNer(PERSON=["Jane Doe"])
-    monkeypatch.setattr("datanyx.cli.SpacyDetector", lambda model: ner)
+    monkeypatch.setattr("datanyx.cli.common.SpacyDetector", lambda model: ner)
 
 
 def test_cli_writes_to_stdout(tmp_path, capsys, fake_model):
@@ -299,7 +299,7 @@ def test_cli_failures_report_only_the_error_type(tmp_path, capsys, monkeypatch):
         def find(self, _text):
             raise ValueError("CANARY quoted in an exception")
 
-    monkeypatch.setattr("datanyx.cli.SpacyDetector", lambda model: Exploding())
+    monkeypatch.setattr("datanyx.cli.common.SpacyDetector", lambda model: Exploding())
     path = tmp_path / "a.txt"
     path.write_text("text", encoding="utf-8")
     assert main(["anonymize", str(path)]) == 1

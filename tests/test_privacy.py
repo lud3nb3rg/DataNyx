@@ -192,7 +192,7 @@ def test_unexpected_failure_reports_only_the_error_type(tmp_path, capsys, monkey
     def explode(*_args, **_kwargs):
         raise ValueError(f"{CANARY} leaked into an exception message")
 
-    monkeypatch.setattr("datanyx.cli.extract", explode)
+    monkeypatch.setattr("datanyx.cli.schema.extract", explode)
     code, output = run_cli(["schema", write(tmp_path, {"a": 1})], capsys)
     assert code == 1
     assert "ValueError" in output

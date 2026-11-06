@@ -5,7 +5,8 @@ import argparse
 import pytest
 
 from datanyx import extract
-from datanyx.cli import _delimiter_arg, main
+from datanyx.cli import main
+from datanyx.cli.common import _delimiter_arg
 from datanyx.privacy import KeyPolicy
 
 

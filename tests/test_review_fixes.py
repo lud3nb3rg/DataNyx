@@ -611,7 +611,7 @@ class FakeBackend:
 
 def test_what_a_backend_reports_isnt_filtered_away(tmp_path, monkeypatch, capsys):
     (tmp_path / "a.txt").write_text("id 123456789 on 2024-01-02", encoding="utf-8")
-    monkeypatch.setattr("datanyx.cli._backend_detectors", lambda args: [FakeBackend()])
+    monkeypatch.setattr("datanyx.cli.scan._backend_detectors", lambda args: [FakeBackend()])
     assert main(["--no-config", "scan", str(tmp_path), "--format", "json"]) == 0
     totals = json.loads(capsys.readouterr().out)["totals"]
     assert totals["SSN"] == 1 and "DATE" not in totals
@@ -627,7 +627,7 @@ def test_a_backend_kind_is_reported_but_the_patterns_stay_quiet(tmp_path):
 
 def test_a_backend_kind_can_be_asked_for(tmp_path, monkeypatch, capsys):
     (tmp_path / "a.txt").write_text("id 123456789", encoding="utf-8")
-    monkeypatch.setattr("datanyx.cli._backend_detectors", lambda args: [FakeBackend()])
+    monkeypatch.setattr("datanyx.cli.scan._backend_detectors", lambda args: [FakeBackend()])
     assert main(["--no-config", "scan", str(tmp_path), "--kinds", "SSN", "--format", "json"]) == 0
     assert json.loads(capsys.readouterr().out)["totals"]["SSN"] == 1
 

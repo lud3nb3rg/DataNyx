@@ -72,7 +72,7 @@ def _principals(path):
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows permissions")
 @pytest.mark.parametrize("folder_inherits", [True, False])
 def test_mapping_file_is_restricted_on_windows(tmp_path, folder_inherits):
-    from datanyx.cli import _write_mapping
+    from datanyx.cli.common import _write_mapping
 
     folder = tmp_path / "private"
     folder.mkdir()

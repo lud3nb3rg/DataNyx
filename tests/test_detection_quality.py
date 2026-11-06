@@ -8,7 +8,8 @@ import types
 
 import pytest
 
-from datanyx.cli import _models, build_parser, main
+from datanyx.cli import build_parser, main
+from datanyx.cli.common import _models
 from datanyx.config import describe, load_config
 from datanyx.evaluation import evaluate, load_cases, render_report
 from datanyx.sources import SourceError

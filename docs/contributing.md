@@ -25,7 +25,7 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `diff.py` | Compares two schemas and sorts the changes by whether they could break old code |
 | `audit.py` | The MCP audit log and its summary: tools, paths and outcomes, never values |
 | `scan.py` | Finds personal data and secrets in a folder, by file, kind and line, without values |
-| `protect/` | `datanyx protect` and the guard hook: Claude Code permissions, a hook that refuses direct access, MCP config |
+| `protect/` | `datanyx protect` and the guard hook: Claude Code permissions, a hook that refuses direct access, MCP config; `guard.py` decides, `shell.py` reads a command the way a shell would, `paths.py` compares paths and `programs.py` knows what git and DataNyx do with their arguments |
 | `check/` | Checks SQL and pandas code against a schema: unknown names and type mistakes |
 | `scrub.py` | Removes data from error messages and program output, keeping the diagnosis |
 | `synth/` | Generates fake data that fits a schema, and writes it as JSON, JSON Lines, CSV or SQLite |
@@ -41,7 +41,7 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `text/custom.py` | Detectors described in a file: regular expressions and dictionaries of terms |
 | `text/secrets.py` | Finds credentials by their shape: API keys, tokens, private keys, passwords |
 | `text/anonymizer.py` | Merges spans, finds repeat mentions and assigns placeholders. `Anonymizer` keeps them across many texts |
-| `cli.py` | Command line, which reports errors without quoting data |
+| `cli/` | Command line, which reports errors without quoting data: one module per command (`schema.py`, `synth.py`, `scan.py`, ...), `parser.py` for the arguments and `common.py` for what they share |
 
 ## Adding a source
 

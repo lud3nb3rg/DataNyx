@@ -25,24 +25,37 @@ import glob
 import json
 import os
 import re
-import subprocess
 import sys
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
 from itertools import islice
 from pathlib import Path
 
 from .config import CONFIG_DIR, ProtectConfig, find_config
+from .paths import _drive_form, _inside, _key, _native
+from .programs import (
+    _datanyx_subcommand,
+    _git_knows,
+    _git_parts,
+    _git_prints_contents,
+    _is_read_only,
+    _option_values,
+    _run_program,
+    _without_option_values,
+)
+from .shell import (
+    _abbreviates,
+    _candidates,
+    _expand_braces,
+    _has_encoded_command,
+    _parse_shell,
+    _plain,
+    _prog,
+    _Segment,
+    _without_wrappers,
+)
 
 _GLOB_CHARACTERS = re.compile(r"[*?\[]")
-_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
-# Words that come before the program. They run what follows, so they aren't the program themselves.
-_WRAPPERS = frozenset({"sudo", "env", "time", "nohup", "command", "exec", "nice", "timeout", "xargs", "{", "!", "then", "do", "else", "elif", "if", "while", "until"})
-_WRAPPER_VALUES = frozenset({"-u", "-g", "-n", "-C", "-p", "-I", "-L", "-P", "-s", "-k", "--user", "--group", "--adjustment"})
-_DRIVE_PATH = re.compile(r"/(?:cygdrive/|mnt/)?([A-Za-z])(/.*)?")
 _RUN_TIME_PWD = re.compile(r"\$(?:\{PWD\}|PWD\b)", re.IGNORECASE)
-_KEY_VALUE = re.compile(r"[\w.-]+=(.+)")
-_MAX_BRACE_RESULTS = 256
 _READ_TOOLS = {"Read": "file_path", "NotebookRead": "notebook_path"}
 _WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 _SHELLS = frozenset({"Bash", "PowerShell"})
@@ -69,28 +82,14 @@ _WEAKENING = frozenset(
     }
 )
 _OUTPUT_OPTIONS = ("-o", "--output", "--audit-log")
-_READ_ONLY_PROGRAMS = frozenset(
-    {"cat", "head", "tail", "less", "more", "type", "grep", "egrep", "fgrep", "rg", "ls", "dir", "wc", "diff", "jq", "stat", "get-content", "gc", "get-childitem"}
-)
-_READ_ONLY_GIT = frozenset({"status", "diff", "log", "show", "blame", "ls-files", "ls-tree", "rev-parse", "describe", "grep", "shortlog", "cat-file"})
-_GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
 _DESTRUCTIVE_PROGRAMS = frozenset({"rm", "rmdir", "del", "erase", "rd", "ri", "mv", "move", "ren", "rename", "remove-item", "move-item", "rename-item", "rsync", "shred", "unlink", "trash"})
 _MOVERS = frozenset({"mv", "move", "ren", "rename", "move-item", "rename-item"})  # The last path is where it goes: `mv /tmp/x .` is fine.
 # Git subcommands that rewrite files in the working folder when they are given paths.
 _GIT_PATH_WRITERS = frozenset({"checkout", "restore", "reset", "rm", "mv", "clean"})
-# Git subcommands that print file contents from the whole repository unless paths narrow them.
-_GIT_CONTENT = frozenset({"diff", "show", "archive", "format-patch", "bundle", "cat-file"})
-_GIT_PATCH_OPTIONAL = frozenset({"log", "whatchanged"})  # These print contents only if asked to.
-_GIT_PATCH_FLAGS = frozenset({"-p", "-u", "--patch", "--patch-with-stat", "--patch-with-raw"})
-_GIT_SUMMARIES = frozenset({"--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--summary", "-s", "--no-patch"})
-_RUN_VALUES = frozenset({"--names-from", "--allow", "--hide", "--model", "--pack", "--backend", "--detectors", "--stdout", "--timeout", "--save-stdout", "--save-stderr"})
 _SETTINGS_NAMES = frozenset({"datanyx.toml", "datanyx.local.toml"})
-_PYTHONS = re.compile(r"(python|pypy)[\d.]*|py")
-_UV_VALUE_OPTIONS = frozenset({"--project", "--directory", "--python", "-p", "--env-file", "--with", "--with-editable", "--with-requirements", "--package", "--group", "--extra", "--index", "--from", "--spec"})
 _PACKAGE = Path(__file__).resolve().parent.parent  # The code of this very hook.
 _MAX_NESTING = 6
 _MAX_GLOB_MATCHES = 20_000
-
 DENY_TOOLS = "Read|Grep|Glob|Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|NotebookRead"
 
 
@@ -153,325 +152,6 @@ def _deny(reason: str) -> str:
     return json.dumps(
         {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}
     )
-
-
-# --- reading a shell command -------------------------------------------------------
-
-
-@dataclass
-class _Segment:
-    """One simple command: its words with the shell's quoting removed, and what it redirects."""
-
-    text: str
-    words: list[str] = field(default_factory=list)
-    reads: list[str] = field(default_factory=list)
-    writes: list[str] = field(default_factory=list)
-    inputs: list[str] = field(default_factory=list)  # Here-documents and here-strings: text, not paths.
-    inner: list[str] = field(default_factory=list)  # Code in substitutions and subshells: run from this command's folder.
-
-
-def _closing(text: str, start: int) -> int:
-    """Where the parenthesis opened just before `start` closes, or the end of the text."""
-    depth, position = 1, start
-    quote = None
-    while position < len(text):
-        char = text[position]
-        if quote:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif char == "\\":
-            position += 1
-        elif char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-            if depth == 0:
-                return position
-        position += 1
-    return len(text)
-
-
-def _parse_shell(command: str, powershell: bool = False) -> list[_Segment]:
-    """The simple commands in `command`. Each holds the code inside its `$(...)`, backticks, `<(...)` or `(...)`."""
-    segments: list[_Segment] = []
-    current = _Segment("")
-    buffer: list[str] = []
-    in_word = False
-    pending: str | None = None  # What the next word is: "read", "write", "input" or "heredoc" (its tag).
-    heredocs: list[tuple[str, _Segment]] = []  # Tags whose text starts on the next line.
-    start = position = 0
-    length = len(command)
-
-    def end_word() -> None:
-        nonlocal in_word, pending
-        if in_word:
-            word = "".join(buffer)
-            if pending == "read":
-                current.reads.append(word)
-            elif pending == "write":
-                current.writes.append(word)
-            elif pending == "input":
-                current.inputs.append(word)
-            elif pending == "heredoc":
-                heredocs.append((word, current))
-            elif pending is None:
-                current.words.append(word)
-            pending = None
-        buffer.clear()
-        in_word = False
-
-    def end_segment(at: int) -> None:
-        nonlocal current, start, pending
-        end_word()
-        pending = None
-        if current.words or current.reads or current.writes or current.inputs or current.inner:
-            current.text = command[start:at]
-            segments.append(current)
-        current = _Segment("")
-        start = at + 1
-
-    while position < length:
-        char = command[position]
-        if char == "'":
-            closing = command.find("'", position + 1)
-            if closing == -1:  # An apostrophe in plain text, not a quote.
-                buffer.append(char)
-                position += 1
-            else:
-                buffer.append(command[position + 1 : closing])
-                position = closing + 1
-            in_word = True
-        elif char == '"':
-            position = _double_quoted(command, position, buffer, current.inner, powershell)
-            in_word = True
-        elif char == "\\":
-            if command[position + 1 : position + 2] in ("\n", "\r"):
-                position += 2  # A line continuation.
-            else:
-                buffer.append(command[position : position + 2])  # Kept: on Windows it separates a path.
-                position += 2
-                in_word = True
-        elif char == "`" and powershell:  # There it is the escape character.
-            buffer.append(command[position + 1 : position + 2])
-            position += 2
-            in_word = True
-        elif char == "`":
-            closing = command.find("`", position + 1)
-            if closing == -1:
-                buffer.append(char)
-                position += 1
-            else:
-                current.inner.append(command[position + 1 : closing])
-                buffer.append(command[position : closing + 1])
-                position = closing + 1
-            in_word = True
-        elif command.startswith("$(", position):
-            closing = _closing(command, position + 2)
-            current.inner.append(command[position + 2 : closing])
-            buffer.append(command[position : closing + 1])
-            position = closing + 1
-            in_word = True
-        elif command.startswith(("<(", ">("), position):
-            end_word()
-            closing = _closing(command, position + 2)
-            current.inner.append(command[position + 2 : closing])
-            position = closing + 1
-        elif char == "(" and not in_word:  # A subshell: its `cd` doesn't outlast it.
-            closing = _closing(command, position + 1)
-            current.inner.append(command[position + 1 : closing])
-            position = closing + 1
-        elif char == "#" and not in_word:  # A comment, which nothing runs.
-            newline = command.find("\n", position)
-            position = length if newline == -1 else newline
-        elif char in " \t":
-            end_word()
-            position += 1
-        elif command.startswith("&>", position):
-            end_word()
-            pending = "write"
-            position += 3 if command.startswith("&>>", position) else 2
-        elif char in "\r\n;|&()":
-            end_segment(position)
-            position += 1
-            if char == "\n" and heredocs:
-                position = _read_heredocs(command, position, heredocs)
-                start = position
-        elif char in "<>":
-            if (in_word and "".join(buffer).isdigit()) or (powershell and char == ">" and "".join(buffer) == "*"):  # The descriptor in 2>file or 0<file.
-                buffer.clear()
-                in_word = False
-            end_word()
-            stop = position
-            while stop < length and command[stop] in "<>":
-                stop += 1
-            operator = command[position:stop]
-            if command[stop : stop + 1] == "&":  # 2>&1, or a descriptor with no file.
-                stop += 1
-                while stop < length and (command[stop].isdigit() or command[stop] == "-"):
-                    stop += 1
-                position = stop
-                continue
-            if command[stop : stop + 1] == "|":
-                stop += 1
-            if operator == "<<<":
-                pending = "input"
-            elif operator.startswith("<<"):
-                pending = "heredoc"
-                if command[stop : stop + 1] == "-":
-                    stop += 1
-            else:
-                pending = "read" if operator == "<" else "write"
-            position = stop
-        else:
-            buffer.append(char)
-            in_word = True
-            position += 1
-    end_segment(length)
-    return segments
-
-
-def _read_heredocs(command: str, position: int, heredocs: list[tuple[str, _Segment]]) -> int:
-    """Give each waiting here-document its text, which isn't commands. Returns the position after them."""
-    for tag, segment in heredocs:
-        closing = re.compile(rf"^\t*{re.escape(tag)}\r?$", re.MULTILINE).search(command, position)
-        segment.inputs.append(command[position : closing.start()] if closing else command[position:])
-        position = closing.end() + 1 if closing else len(command)
-    heredocs.clear()
-    return position
-
-
-def _double_quoted(command: str, start: int, buffer: list[str], inner: list[str], powershell: bool = False) -> int:
-    """Read a double-quoted stretch into `buffer`. Returns the position after it."""
-    closing = _closing_quote(command, start + 1)
-    if closing == -1:  # Not really a quote.
-        buffer.append('"')
-        return start + 1
-    position = start + 1
-    while position < closing:
-        char = command[position]
-        if char == "\\" and command[position + 1 : position + 2] in ('"', "\\", "$", "`"):
-            buffer.append(command[position + 1])
-            position += 2
-        elif command.startswith("$(", position):
-            end = _closing(command, position + 2)
-            inner.append(command[position + 2 : end])
-            buffer.append(command[position : end + 1])
-            position = end + 1
-        elif char == "`" and powershell:
-            buffer.append(command[position + 1 : position + 2])
-            position += 2
-        elif char == "`":
-            end = command.find("`", position + 1)
-            end = closing if end == -1 else end
-            inner.append(command[position + 1 : end])
-            buffer.append(command[position : end + 1])
-            position = end + 1
-        else:
-            buffer.append(char)
-            position += 1
-    return closing + 1
-
-
-def _closing_quote(command: str, position: int) -> int:
-    while position < len(command):
-        char = command[position]
-        if char == "\\":
-            position += 2
-            continue
-        if char == '"':
-            return position
-        if command.startswith("$(", position):
-            position = _closing(command, position + 2) + 1
-            continue
-        position += 1
-    return -1
-
-
-def _without_wrappers(words: list[str]) -> list[str]:
-    tokens = list(words)
-    while tokens:
-        if _ASSIGNMENT.match(tokens[0]):
-            tokens.pop(0)
-        elif _prog(tokens[0]) in _WRAPPERS:
-            tokens.pop(0)
-            while tokens and tokens[0].startswith("-"):  # `sudo -u me rm`: the program is still to come.
-                option = tokens.pop(0)
-                if option in _WRAPPER_VALUES and tokens:
-                    tokens.pop(0)
-        else:
-            break
-    return tokens
-
-
-# --- paths ---------------------------------------------------------------------
-
-
-def _key(path: Path | str) -> str:
-    return os.path.normcase(os.path.realpath(str(path)))
-
-
-def _inside(path: Path | str, folder: Path | str) -> bool:
-    inner, outer = _key(path), _key(folder)
-    return inner == outer or inner.startswith(outer.rstrip(os.sep) + os.sep)
-
-
-def _native(text: str) -> str:
-    """Git Bash and WSL write C:\\Users as /c/Users or /mnt/c/Users. On Windows, that is what they mean."""
-    if os.name == "nt":
-        match = _DRIVE_PATH.fullmatch(text.replace("\\", "/"))
-        if match:
-            return f"{match[1]}:{match[2] or '/'}"
-    return text
-
-
-def _drive_form(path: Path) -> str:
-    """A Windows path as Git Bash writes it, in lower case. Empty if it has no drive."""
-    posix = path.as_posix()
-    return f"/{posix[0]}{posix[2:]}".lower() if len(posix) > 1 and posix[1] == ":" else ""
-
-
-def _expand_braces(word: str) -> list[str]:
-    """`data/{a,b}.csv` as a shell would expand it. Words without a list are returned as they are."""
-    results: list[str] = []
-    pending = [word]
-    while pending:
-        current = pending.pop()
-        found = _brace_list(current)
-        if found is None:
-            results.append(current)
-            continue
-        opening, closing, options = found
-        pending.extend(current[:opening] + option + current[closing + 1 :] for option in reversed(options))
-        if len(results) + len(pending) > _MAX_BRACE_RESULTS:  # Past this, keep what's left unexpanded.
-            results.extend(pending)
-            break
-    return results
-
-
-def _brace_list(word: str) -> tuple[int, int, list[str]] | None:
-    """The first `{a,b}` in the word: where it starts and ends, and its options."""
-    for opening, character in enumerate(word):
-        if character != "{" or (opening and word[opening - 1] == "$"):
-            continue
-        depth, begin = 0, opening + 1
-        options: list[str] = []
-        for position in range(opening, len(word)):
-            current = word[position]
-            if current == "{":
-                depth += 1
-            elif current == "}":
-                depth -= 1
-                if depth == 0:
-                    if options:
-                        options.append(word[begin:position])
-                        return opening, position, options
-                    break
-            elif current == "," and depth == 1:
-                options.append(word[begin:position])
-                begin = position + 1
-    return None
 
 
 class _Guard:
@@ -844,178 +524,3 @@ class _Guard:
             if covered is not None:
                 return self.broad(covered)
         return None
-
-
-def _prog(token: str) -> str:
-    name = os.path.basename(token.replace("\\", "/")).lower()
-    return name[:-4] if name.endswith((".exe", ".cmd", ".bat")) else name
-
-
-def _plain(token: str) -> str:
-    """A token without shell escapes, unless they are what separates a Windows path."""
-    return token if os.name == "nt" else token.replace("\\", "")
-
-
-def _candidates(token: str) -> list[str]:
-    """The paths a token may mean: itself, its brace expansions, without shell escapes, and an option's value
-    (--opt=x, -fx, if=x, @x)."""
-    found: list[str] = []
-    if token.startswith("-"):
-        if "=" in token:
-            found.append(token.split("=", 1)[1])
-        elif not token.startswith("--") and len(token) > 2 and ("/" in token or "\\" in token or "." in token):
-            found.append(token[2:])  # grep -fdata/x.csv
-    else:
-        found.append(token)
-        assignment = _KEY_VALUE.fullmatch(token)
-        if assignment:
-            found.append(assignment[1])  # dd if=data/x.csv
-    candidates: list[str] = []
-    for value in found:
-        for expanded in _expand_braces(value):
-            candidates.append(expanded)
-            if expanded.startswith("@"):
-                candidates.append(expanded[1:])  # curl -d @data/x.csv
-            if "\\" in expanded:
-                candidates.append(expanded.replace("\\", ""))  # da\\ta/x.csv is data/x.csv to a POSIX shell.
-    return [candidate for candidate in candidates if candidate]
-
-
-def _abbreviates(option: str, name: str) -> bool:
-    """Whether a command-line word is this option, or a shortened form of a long one."""
-    given = option.split("=")[0]
-    return given == name or (len(given) > 2 and given.startswith("--") and name.startswith(given))
-
-
-def _has_encoded_command(tokens: list[str]) -> bool:
-    return any(len(word) > 2 and "-encodedcommand".startswith(word.lower()) for word in tokens[1:])
-
-
-def _run_program(rest: list[str]) -> list[str]:
-    """The command `datanyx run` will start, with or without the `--` before it."""
-    if "--" in rest:
-        return rest[rest.index("--") + 1 :]
-    index = 0
-    while index < len(rest) and rest[index].startswith("-"):
-        index += 2 if rest[index] in _RUN_VALUES else 1
-    return rest[index:]
-
-
-def _is_read_only(tokens: list[str]) -> bool:
-    program = _prog(tokens[0])
-    if program == "git":
-        return _git_subcommand(tokens) in _READ_ONLY_GIT
-    return program in _READ_ONLY_PROGRAMS
-
-
-def _git_subcommand(tokens: list[str]) -> str | None:
-    position = 1
-    while position < len(tokens) and tokens[position].startswith("-"):
-        position += 2 if tokens[position] in _GIT_VALUE_OPTIONS else 1
-    return tokens[position] if position < len(tokens) else None
-
-
-def _git_parts(arguments: list[str], current: Path) -> tuple[str, list[str], Path]:
-    """(subcommand, what follows it, the folder it runs in), past git's own options such as -C."""
-    index = 0
-    while index < len(arguments) and arguments[index].startswith("-"):
-        option = arguments[index]
-        if option == "-C" and index + 1 < len(arguments):
-            current = current / arguments[index + 1]
-            index += 2
-        else:
-            index += 2 if option in _GIT_VALUE_OPTIONS else 1
-    if index >= len(arguments):
-        return "", [], current
-    return arguments[index].lower(), arguments[index + 1 :], current
-
-
-def _git_prints_contents(sub: str, rest: list[str]) -> bool:
-    if set(rest) & _GIT_SUMMARIES:
-        return False
-    if sub in _GIT_PATCH_OPTIONAL:
-        return bool(set(rest) & _GIT_PATCH_FLAGS)
-    return sub in _GIT_CONTENT
-
-
-def _git_knows(root: Path, path: Path) -> bool:
-    """Whether git tracks `path`, or did. A repository too slow to answer counts as yes, to be safe."""
-    for arguments in (["ls-files", "--", str(path)], ["log", "-1", "--all", "--format=%h", "--", str(path)]):
-        try:
-            result = subprocess.run(["git", "-C", str(root), *arguments], capture_output=True, timeout=5, check=False)
-        except subprocess.TimeoutExpired:
-            return True
-        except OSError:
-            return False
-        if result.returncode == 0 and result.stdout.strip():
-            return True
-    return False
-
-
-def _option_values(options: list[str], names: Iterable[str]) -> Iterable[str]:
-    """The values given to these options, as `--name value`, `--name=value` or `-ovalue`."""
-    names = tuple(names)
-    for position, option in enumerate(options):
-        if option in names:
-            if position + 1 < len(options):
-                yield options[position + 1]
-        elif "=" in option and option.split("=", 1)[0] in names:
-            yield option.split("=", 1)[1]
-        elif "-o" in names and option.startswith("-o") and not option.startswith("--") and len(option) > 2:
-            yield option[2:]
-
-
-def _without_option_values(options: list[str], names: tuple[str, ...]) -> list[str]:
-    kept: list[str] = []
-    skip = False
-    for option in options:
-        if skip:
-            skip = False
-        elif option in names:
-            skip = True
-        elif option.split("=", 1)[0] not in names:
-            kept.append(option)
-    return kept
-
-
-def _datanyx_subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
-    """(subcommand, the arguments after it) if this command runs datanyx, and nothing else.
-
-    The word has to be the thing being run: `ls -m datanyx data` and `python -c "..." datanyx`
-    merely mention it, and get none of the allowances datanyx does.
-    """
-    if not tokens:
-        return None
-    program = _prog(tokens[0])
-    if program == "datanyx":
-        return _split_command(tokens[1:])
-    if _PYTHONS.fullmatch(program):
-        position = 1
-        while position < len(tokens) and tokens[position].startswith("-") and tokens[position] not in ("-m", "-c"):
-            position += 2 if tokens[position] in ("-X", "-W") else 1
-        if tokens[position : position + 2] == ["-m", "datanyx"]:
-            return _split_command(tokens[position + 2 :])
-        return None
-    if program == "uvx":
-        position = 1
-        while position < len(tokens) and tokens[position].startswith("-"):
-            position += 2 if tokens[position] in _UV_VALUE_OPTIONS else 1
-        return _datanyx_subcommand(tokens[position:]) if tokens[position : position + 1] == ["datanyx"] else None
-    if program in ("uv", "pipx") and tokens[1:2] == ["run"]:
-        position = 2
-        while position < len(tokens) and tokens[position].startswith("-"):
-            position += 2 if tokens[position] in _UV_VALUE_OPTIONS else 1
-        return _datanyx_subcommand(tokens[position:])
-    return None
-
-
-def _split_command(rest: list[str]) -> tuple[str, list[str]]:
-    """(command, every other argument) for `datanyx [--config FILE] [--no-config] COMMAND ...`.
-
-    The options before the command are returned with the rest, so they are checked too."""
-    index = 0
-    while index < len(rest) and rest[index].startswith("--"):
-        index += 2 if rest[index] == "--config" else 1
-    if index >= len(rest):
-        return "", rest
-    return rest[index], [*rest[:index], *rest[index + 1 :]]
