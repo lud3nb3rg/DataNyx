@@ -23,7 +23,7 @@ datanyx schema input [options]
 | `input` | file or folder to describe, "-" for stdin, a database URL, the URL of a file (s3://, gs://, az:// or https://), or env:NAME to read a URL from an environment variable (keeps passwords off the command line) |
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
-| `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--source` `SOURCE` | input type (default: detect). Choices: `arrow`, `avro`, `csv`, `ddl`, `delta`, `duckdb`, `excel`, `fhir`, `hl7`, `iceberg`, `json`, `jsonl`, `mongodb`, `openapi`, `orc`, `parquet`, `proto`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
 | `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
@@ -49,7 +49,7 @@ datanyx synth input [options]
 | `input` | file or folder to describe, "-" for stdin, a database URL, the URL of a file (s3://, gs://, az:// or https://), or env:NAME to read a URL from an environment variable (keeps passwords off the command line) |
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
-| `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--source` `SOURCE` | input type (default: detect). Choices: `arrow`, `avro`, `csv`, `ddl`, `delta`, `duckdb`, `excel`, `fhir`, `hl7`, `iceberg`, `json`, `jsonl`, `mongodb`, `openapi`, `orc`, `parquet`, `proto`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
 | `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
@@ -188,7 +188,7 @@ datanyx check code [options]
 | `--strict` | exit with 1 for warnings too |
 | `-r`, `--recursive` | when an input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to use (default: the database's default) |
-| `--source` `SOURCE` | input type for --against (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--source` `SOURCE` | input type for --against (default: detect). Choices: `arrow`, `avro`, `csv`, `ddl`, `delta`, `duckdb`, `excel`, `fhir`, `hl7`, `iceberg`, `json`, `jsonl`, `mongodb`, `openapi`, `orc`, `parquet`, `proto`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--views` | also know the database's views (names and columns only) |
 | `--map-path` `PATH` | hide all keys or columns at a path (repeatable) |
@@ -309,7 +309,7 @@ datanyx diff old new [options]
 | `--format` `FORMAT` | output format (default: text). Choices: `text`, `json`. |
 | `-r`, `--recursive` | when an input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to use (default: the database's default) |
-| `--source` `SOURCE` | input type for live inputs (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--source` `SOURCE` | input type for live inputs (default: detect). Choices: `arrow`, `avro`, `csv`, `ddl`, `delta`, `duckdb`, `excel`, `fhir`, `hl7`, `iceberg`, `json`, `jsonl`, `mongodb`, `openapi`, `orc`, `parquet`, `proto`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--delimiter` `CHAR` | the separator of CSV and TSV input, such as ';' or 'tab' (default: comma for CSV, tab for TSV) |
 | `--views` | also compare the database's views (names and columns only) |
 | `--map-path` `PATH` | hide all keys or columns at a path (repeatable) |

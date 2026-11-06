@@ -129,7 +129,91 @@ def _fhir(folder):
     return path
 
 
-BUILDERS = [_csv, _tsv, _json, _jsonl, _yaml, _xml, _xlsx, _parquet, _sqlite, _duckdb, _hl7, _fhir]
+def _arrow(folder):
+    pa = pytest.importorskip("pyarrow")
+    feather = pytest.importorskip("pyarrow.feather")
+    table = pa.table({"id": list(range(ROWS)), ODD_NAME: [CANARY] * ROWS}).replace_schema_metadata({"owner": CANARY})
+    path = folder / "cols.feather"
+    feather.write_feather(table, str(path))
+    return path
+
+
+def _delta(folder):
+    log = folder / "delta_table" / "_delta_log"
+    log.mkdir(parents=True)
+    schema = {"type": "struct", "fields": [
+        {"name": "id", "type": "long", "nullable": False, "metadata": {"comment": CANARY}},
+        {"name": ODD_NAME, "type": "string", "nullable": True, "metadata": {}},
+    ]}
+    lines = [
+        {"metaData": {"id": "t", "name": CANARY, "schemaString": json.dumps(schema), "partitionColumns": [], "configuration": {"c": CANARY}}},
+        {"add": {"path": f"{CANARY}/p.parquet", "partitionValues": {"x": CANARY}, "stats": json.dumps({"numRecords": 5})}},
+    ]
+    (log / f"{0:020d}.json").write_text("\n".join(json.dumps(line) for line in lines), encoding="utf-8")
+    return folder / "delta_table"
+
+
+def _iceberg(folder):
+    meta = folder / "iceberg_table" / "metadata"
+    meta.mkdir(parents=True)
+    document = {"format-version": 2, "location": f"s3://{CANARY}/t", "properties": {"owner": CANARY}, "current-schema-id": 0,
+                "schemas": [{"schema-id": 0, "fields": [{"id": 1, "name": "id", "required": True, "type": "long", "doc": CANARY},
+                                                          {"id": 2, "name": ODD_NAME, "required": False, "type": "string"}]}],
+                "current-snapshot-id": 1, "snapshots": [{"snapshot-id": 1, "summary": {"total-records": "9", "x": CANARY}}]}
+    (meta / "v1.metadata.json").write_text(json.dumps(document), encoding="utf-8")
+    return folder / "iceberg_table"
+
+
+def _proto(folder):
+    path = folder / "msg.proto"
+    path.write_text(
+        "\n".join(
+            [
+                f"// {CANARY}",
+                'syntax = "proto3";',
+                f"enum E {{ {CANARY.upper()} = 0; }}",
+                f'message M {{ string a = 1 [default = "{CANARY}"]; E e = 2; /* {CANARY} */ }}',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _ddl(folder):
+    pytest.importorskip("sqlglot")
+    path = folder / "schema.sql"
+    path.write_text(
+        "\n".join(
+            [
+                f"-- {CANARY}",
+                f"CREATE TABLE t (id INT PRIMARY KEY, \"{ODD_NAME}\" TEXT DEFAULT '{CANARY}', k ENUM('{CANARY}'), CHECK (id <> 0));",
+                f"INSERT INTO t VALUES (1, '{CANARY}');",
+                "COPY t (id) FROM stdin;",
+                CANARY,
+                "\\.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _openapi(folder):
+    path = folder / "api.json"
+    path.write_text(json.dumps({
+        "openapi": "3.0.0", "info": {"title": CANARY},
+        "components": {"schemas": {"S": {"type": "object", "properties": {
+            "a": {"type": "string", "example": CANARY, "default": CANARY, "enum": [CANARY], "description": CANARY},
+            ODD_NAME: {"type": "string"},
+        }}}},
+    }), encoding="utf-8")
+    return path
+
+
+BUILDERS = [_csv, _tsv, _json, _jsonl, _yaml, _xml, _xlsx, _parquet, _sqlite, _duckdb, _hl7, _fhir, _arrow, _delta, _iceberg, _proto, _ddl, _openapi]
 
 
 @pytest.fixture(scope="module")

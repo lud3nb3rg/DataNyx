@@ -74,6 +74,10 @@ _OPTIONAL = (
     ("MySQL / MariaDB", "pymysql", "datanyx[mysql]"),
     ("SQL Server", "pymssql", "datanyx[mssql]"),
     ("Oracle", "oracledb", "datanyx[oracle]"),
+    ("BigQuery", "sqlalchemy_bigquery", "datanyx[bigquery]"),
+    ("Snowflake", "snowflake.sqlalchemy", "datanyx[snowflake]"),
+    ("SQL files (CREATE TABLE)", "sqlglot", "datanyx[ddl]"),
+    ("Zstandard files", "zstandard", "datanyx[zstd]"),
     ("Text anonymization", "spacy", "datanyx[text]"),
 )
 

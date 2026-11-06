@@ -73,6 +73,7 @@ _CONNECT_TIMEOUT_ARGUMENTS = {
     "pymssql": "login_timeout",
     "pyodbc": "timeout",
     "oracledb": "tcp_connect_timeout",
+    "snowflake": "login_timeout",
 }
 _SQLITE_CATALOG_TABLES = ("sqlite_master", "sqlite_schema", "sqlite_temp_master", "sqlite_temp_schema")
 _MAX_NATIVE_TYPE_LENGTH = 64
@@ -237,17 +238,24 @@ def _describe(engine: Engine, policy: KeyPolicy, namespace: str | None, kind: st
         if estimates is None:
             notes.append(f"row-count hints aren't available for {engine.dialect.name}")
         else:
-            entities = tuple(replace(e, scale=scale_for(policy, estimates.get(e.name or ""))) for e in entities)
+            entities = tuple(replace(e, scale=scale_for(policy, _estimate(estimates, e.name or ""))) for e in entities)
     return DataSchema(kind, entities, tuple(notes))
+
+
+def _estimate(estimates: dict[str, int], name: str) -> int | None:
+    """Oracle stores names in capitals, and SQLAlchemy reports a name that is all lower case for them."""
+    count = estimates.get(name)
+    return count if count is not None else estimates.get(name.upper())
 
 
 def _row_estimates(engine: Engine, namespace: str | None) -> dict[str, int] | None:
     """Each table's row count as the server's own catalog estimates it. No table is read.
 
-    PostgreSQL and MySQL/MariaDB keep these statistics; a table never analysed has none.
+    PostgreSQL, MySQL/MariaDB and Oracle keep these statistics, and a table never analysed has none. SQL Server
+    counts the rows of each table's partitions as it goes, so it always has a number.
     """
     dialect = engine.dialect.name
-    if dialect not in ("postgresql", "mysql", "mariadb"):
+    if dialect not in ("postgresql", "mysql", "mariadb", "mssql", "oracle"):
         return None
     with engine.connect() as connection:
         if dialect == "postgresql":
@@ -258,6 +266,24 @@ def _row_estimates(engine: Engine, namespace: str | None) -> dict[str, int] | No
                     "where n.nspname = :schema and c.relkind in ('r', 'p') and c.reltuples >= 0"
                 ),
                 {"schema": schema},
+            )
+        elif dialect == "mssql":
+            rows = connection.execute(
+                sa.text(
+                    "select t.name, sum(p.rows) from sys.tables t "
+                    "join sys.schemas s on s.schema_id = t.schema_id "
+                    "join sys.partitions p on p.object_id = t.object_id and p.index_id in (0, 1) "
+                    "where s.name = coalesce(:schema, schema_name()) group by t.name"
+                ),
+                {"schema": namespace},
+            )
+        elif dialect == "oracle":
+            rows = connection.execute(
+                sa.text(
+                    "select table_name, num_rows from all_tables "
+                    "where owner = coalesce(upper(:schema), sys_context('USERENV', 'CURRENT_SCHEMA')) and num_rows is not null"
+                ),
+                {"schema": namespace},
             )
         else:
             rows = connection.execute(

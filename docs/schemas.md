@@ -158,9 +158,10 @@ orders.csv: array<{
 **`--scale-hints`** gives each table's size as an order of magnitude, so an agent can choose between loading
 a table and streaming it. It is never a number: everything under a thousand rows is "fewer than 1,000 rows",
 and above that only the power of ten is given. CSV, TSV, JSON, JSON Lines, YAML and Excel report it from
-the rows they read. Parquet and ORC take it from the file footer, DuckDB from its catalog estimate, MongoDB
-from the collection's metadata, and PostgreSQL, MySQL and MariaDB from the server's own statistics (a table
-the server has never analysed has none). Other sources say that no hint is available.
+the rows they read. Parquet, ORC and Arrow files take it from the file footer or metadata, Delta Lake from
+the log's file statistics, Iceberg from the current snapshot's summary, DuckDB from its catalog estimate, MongoDB
+from the collection's metadata, and PostgreSQL, MySQL, MariaDB, SQL Server and Oracle from the server's own
+statistics (a table that PostgreSQL, MySQL, MariaDB or Oracle has never analysed has none). Other sources say that no hint is available.
 
 **`--infer-keys`** marks key-looking columns that are unique, and guesses joins between tables (two CSVs
 in a folder, the sheets of a workbook, a JSON array and a JSON Lines file). It reads CSV, TSV, JSON Lines,

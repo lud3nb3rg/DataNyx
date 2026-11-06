@@ -1,8 +1,9 @@
 # Features
 
-- **Over twenty kinds of input.** CSV, TSV, JSON, JSON Lines, YAML, XML, Excel, Parquet, ORC, Avro,
-  SAS, Stata, SPSS, SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, MongoDB, FHIR,
-  HL7 v2, and whole folders of files.
+- **Over thirty kinds of input.** CSV, TSV, JSON, JSON Lines, YAML, XML, Excel, Parquet, ORC, Avro, Arrow,
+  SAS, Stata, SPSS, SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, BigQuery, Snowflake,
+  MongoDB, Delta Lake, Iceberg, FHIR, HL7 v2, Protocol Buffers, SQL files, OpenAPI, whole folders of files,
+  compressed files (`.gz`, `.bz2`, `.xz`, `.zst`) and files at a URL.
 - **Values can't leak by construction.** The schema model has no field that could hold one.
   A fuzz test plants a canary in every value and fails if it reaches any output.
 - **Keys are treated as possible data too.** Emails, UUIDs, dates and per-record keys used

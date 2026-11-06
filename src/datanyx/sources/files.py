@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import bz2
+import gzip
+import io
+import lzma
 import os
 import re
 import sys
+import zlib
 from collections.abc import Collection, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -42,10 +47,33 @@ def remote_url(target: str) -> str | None:
     return value if is_remote(value) else None
 
 
-def extension(target: str) -> str:
+#: Compression a text format can be read through. `data.csv.gz` is read as `data.csv`.
+_COMPRESSION = {".gz": "gzip", ".bz2": "bzip2", ".xz": "xz", ".zst": "zstd"}
+
+
+def _path_of(target: str) -> str:
     # A URL can end in a query string (a signed link), which isn't part of the file name.
-    path = urlsplit(target).path if is_remote(target) else target
-    return os.path.splitext(path)[1].lower()
+    return urlsplit(target).path if is_remote(target) else target
+
+
+def compression_of(target: str) -> str | None:
+    """`gzip`, `bzip2`, `xz` or `zstd` when the name ends like a compressed file, else None."""
+    return _COMPRESSION.get(os.path.splitext(_path_of(target))[1].lower())
+
+
+def plain_name(target: str) -> str:
+    """The lower-case name with no URL query and no compression ending: `a.fhir.json` for `A.fhir.json.gz?sig=x`."""
+    path = _path_of(target).lower()
+    root, ending = os.path.splitext(path)
+    return root if ending in _COMPRESSION else path
+
+
+def extension(target: str) -> str:
+    """The file type, looking through compression: `.csv` for `data.csv.gz`."""
+    root, ending = os.path.splitext(_path_of(target))
+    if ending.lower() in _COMPRESSION:
+        ending = os.path.splitext(root)[1]
+    return ending.lower()
 
 
 def reject_namespace(namespace: str | None) -> None:
@@ -54,9 +82,11 @@ def reject_namespace(namespace: str | None) -> None:
 
 
 def require_path(target: str, what: str) -> None:
-    """For binary formats, which can't be streamed from stdin."""
+    """For binary formats, which can't be streamed from stdin or read compressed."""
     if target == STDIN:
         raise SourceError(f"{what} can't be read from stdin; pass a file path")
+    if compression_of(target):
+        raise SourceError(f"{what} can't be read compressed; decompress the file first")
 
 
 def require_local(target: str, what: str) -> None:
@@ -102,13 +132,73 @@ def _open_remote(url: str, mode: str, **options: Any) -> Iterator[Any]:
 
 
 @contextmanager
-def binary_stream(target: str) -> Iterator[IO[bytes]]:
-    """A binary file object for a path or a URL. A path that can't be opened raises OSError, as `open` does."""
+def _raw_binary(target: str) -> Iterator[IO[bytes]]:
     if is_remote(target):
         with _open_remote(target, "rb") as stream:
             yield stream
         return
     with open(target, "rb") as stream:
+        yield stream
+
+
+def _decompress(raw: IO[bytes], kind: str) -> IO[bytes]:
+    if kind == "gzip":
+        return gzip.GzipFile(fileobj=raw)  # type: ignore[return-value]
+    if kind == "bzip2":
+        return bz2.BZ2File(raw)
+    if kind == "xz":
+        return lzma.LZMAFile(raw)
+    try:
+        import zstandard
+    except ImportError:
+        raise missing_extra("Zstandard files", "zstd") from None
+    return zstandard.ZstdDecompressor().stream_reader(raw, read_across_frames=True)
+
+
+def _decompression_errors() -> tuple[type[BaseException], ...]:
+    errors: tuple[type[BaseException], ...] = (EOFError, lzma.LZMAError, zlib.error, OSError)
+    try:
+        import zstandard
+
+        return (*errors, zstandard.ZstdError)
+    except ImportError:
+        return errors
+
+
+@contextmanager
+def _decoded(target: str, kind: str, translate_open: bool = False) -> Iterator[IO[bytes]]:
+    """The bytes of a compressed file, decompressed as they are read. Damaged data becomes one fixed message.
+
+    A file that can't be opened raises OSError, as `open` does, unless `translate_open` is set.
+    """
+    try:
+        raw_context = _raw_binary(target)
+        raw = raw_context.__enter__()
+    except OSError as error:
+        if not translate_open:
+            raise
+        raise SourceError(f"cannot read input: {error.strerror}") from None
+    try:
+        stream = _decompress(raw, kind)
+        try:
+            yield stream
+        except _decompression_errors() as error:
+            raise SourceError(f"input isn't readable {kind} data ({type(error).__name__})") from None
+        finally:
+            stream.close()
+    finally:
+        raw_context.__exit__(None, None, None)
+
+
+@contextmanager
+def binary_stream(target: str) -> Iterator[IO[bytes]]:
+    """A binary file object for a path or a URL, decompressed if the name says so. A path that can't be opened raises OSError."""
+    kind = compression_of(target)
+    if kind is None:
+        with _raw_binary(target) as stream:
+            yield stream
+        return
+    with _decoded(target, kind) as stream:
         yield stream
 
 
@@ -124,6 +214,15 @@ def path_or_stream(target: str) -> Iterator[Any]:
 
 @contextmanager
 def open_text(target: str) -> Iterator[IO[str]]:
+    kind = compression_of(target) if target != STDIN else None
+    if kind is not None:
+        with _decoded(target, kind, translate_open=True) as decoded:
+            text = io.TextIOWrapper(decoded, encoding="utf-8-sig")
+            try:
+                yield text
+            finally:
+                text.detach()  # The decompressor is closed by its own context.
+        return
     if is_remote(target):
         with _open_remote(target, "rt", encoding="utf-8-sig") as stream:
             yield stream
@@ -142,6 +241,10 @@ def open_text(target: str) -> Iterator[IO[str]]:
 
 
 def read_bytes(target: str) -> bytes:
+    kind = compression_of(target) if target != STDIN else None
+    if kind is not None:
+        with _decoded(target, kind, translate_open=True) as decoded:
+            return decoded.read()
     if is_remote(target):
         with _open_remote(target, "rb") as stream:
             return stream.read()

@@ -11,7 +11,7 @@ from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .schema import DataSchema
 from .selection import apply_selection
-from .sources import Source, SourceError, describe_folder, resolve_source
+from .sources import Source, SourceError, describe_folder, resolve_source, table_folder_source
 from .sources.files import remote_url
 from .text import DEFAULT_MODEL
 
@@ -39,7 +39,11 @@ def extract(
         if os.path.isdir(target):
             if namespace is not None:
                 raise SourceError("a schema can only be selected for SQL databases")
-            schema = describe_folder(target, source, policy, recursive)
+            table_source = table_folder_source(target, source)
+            if table_source is not None:
+                schema = table_source.extract(target, policy, namespace)
+            else:
+                schema = describe_folder(target, source, policy, recursive)
         else:
             schema = resolve_source(target, source).extract(target, policy, namespace)
     except RecursionError:

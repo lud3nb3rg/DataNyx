@@ -14,6 +14,7 @@ from .base import Source, SourceError
 from .files import (
     STDIN,
     binary_stream,
+    compression_of,
     extension,
     is_remote,
     items_seen,
@@ -97,8 +98,8 @@ class JsonLinesSource(Source):
 def _should_stream(target: str) -> bool:
     if target == STDIN:
         return False  # Its size isn't known, and piped documents are rarely huge.
-    if is_remote(target):
-        return True  # Streaming never holds the document, and a URL's size isn't known without asking.
+    if is_remote(target) or compression_of(target):
+        return True  # Streaming never holds the document, and its size isn't known without reading it.
     try:
         return os.path.getsize(target) > STREAM_THRESHOLD_BYTES
     except OSError:
@@ -117,14 +118,35 @@ def _streamer():
 _BOM = codecs.BOM_UTF8  # Added by some Windows tools; ijson's parser rejects it.
 
 
+class _Replay:
+    """A stream with some bytes that were read ahead put back in front. Decompressors can't always seek back."""
+
+    def __init__(self, head: bytes, stream) -> None:
+        self._head = head
+        self._stream = stream
+
+    def read(self, size: int = -1) -> bytes:
+        if not self._head:
+            return self._stream.read(size)
+        if size is None or size < 0:
+            data, self._head = self._head + self._stream.read(), b""
+            return data
+        data, self._head = self._head[:size], self._head[size:]
+        return data + self._stream.read(size - len(data)) if len(data) < size else data
+
+
+def _without_bom(stream):
+    head = stream.read(3)
+    return stream if head == _BOM else _Replay(head, stream)
+
+
 def _observe_stream(ijson, path: str) -> Observation:
     """Observe a document from parser events, without ever building it in memory."""
     root = Observation()
     stack: list[list] = []  # [observation of the container, is an object, current key]
     try:
         with binary_stream(path) as stream:
-            if stream.read(3) != _BOM:
-                stream.seek(0)
+            stream = _without_bom(stream)
             for event, value in ijson.basic_parse(stream, use_float=True):
                 _apply(event, value, root, stack)
     except OSError as error:
@@ -141,8 +163,7 @@ def _feed_evidence(ijson, path: str, table) -> None:
     """Key evidence is gathered per record, so the records of a top-level list are read one at a time."""
     try:
         with binary_stream(path) as stream:
-            if stream.read(3) != _BOM:
-                stream.seek(0)
+            stream = _without_bom(stream)
             for record in ijson.items(stream, "item", use_float=True):
                 table.add(record)
     except OSError as error:

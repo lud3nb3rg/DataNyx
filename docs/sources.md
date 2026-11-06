@@ -11,6 +11,12 @@
 | Parquet | `.parquet`, `.pq` | `.[parquet]` |
 | ORC | `.orc` | `.[orc]` |
 | Avro | `.avro` | `.[avro]` |
+| Arrow, Feather | `.arrow`, `.feather`, `.ipc` | `.[parquet]` |
+| Delta Lake | a folder with a `_delta_log` inside | built in |
+| Iceberg | a table folder with a `metadata` folder inside | built in |
+| Protocol Buffers | `.proto` | built in |
+| SQL files | `.sql` (`CREATE TABLE`, `ALTER TABLE`) | `.[ddl]` |
+| OpenAPI, Swagger | `.json`, `.yaml`, `.yml` that start with `openapi:` or `swagger:` | built in (YAML needs `.[yaml]`) |
 | SAS | `.sas7bdat`, `.xpt` | `.[stats]` |
 | Stata | `.dta` | `.[stats]` |
 | SPSS | `.sav`, `.zsav`, `.por` | `.[stats]` |
@@ -23,6 +29,9 @@
 | MariaDB | `mariadb://` | `.[mysql]` |
 | SQL Server | `mssql://` | `.[mssql]` |
 | Oracle | `oracle://` | `.[oracle]` |
+| BigQuery | `bigquery://project/dataset` | `.[bigquery]` |
+| Snowflake | `snowflake://` | `.[snowflake]` |
+| A compressed file | `.gz`, `.bz2`, `.xz`, `.zst` after a text format, such as `orders.csv.gz` | `.zst` needs `.[zstd]` |
 | A file at a URL | `https://`, `s3://`, `gs://`, `az://` (also `abfs://`) and a file type above | `.[remote]`, `.[s3]`, `.[gcs]` or `.[azure]` |
 | A folder | Every readable file in it, with `-r` for subfolders | as for the files in it |
 | Text and documents (`anonymize`) | Text, HTML, `.eml`, `.docx`, `.pdf`, WhatsApp and Slack exports, a folder of them, or `-` for stdin | `.[text]`, plus a [model](anonymization.md#text-anonymization); PDF needs `.[pdf]` |
@@ -54,6 +63,46 @@ path can be read from a URL, except DuckDB, SAS, Stata and SPSS, whose readers n
 
 ## Notes on the newer sources
 
+**Compressed files** (`.csv.gz`, `.jsonl.bz2`, `.json.xz`, `.xml.zst`, ...) are described exactly as the plain
+file would be: the name is read through the compression, the data is decompressed as it is read, and a damaged
+file gives a fixed message rather than the library's text. This covers the text formats (CSV, TSV, JSON, JSON Lines,
+YAML, XML, FHIR and HL7). Parquet, ORC, Excel and the others are containers with their own compression and
+can't be read compressed. It works for files at a URL too. A compressed JSON file is streamed when `.[streaming]` is installed,
+since its size once unpacked isn't known.
+
+**Arrow and Feather** files (Feather version 2, which is the Arrow file format) are described from the schema
+message at the start of the file. Their row count, for `--scale-hints`, comes from the batch metadata. The older
+Feather version 1 isn't supported.
+
+**Delta Lake and Iceberg** tables are folders. Point at the table's folder and it is described as one table, from
+the transaction log (`_delta_log`) or the table's current metadata file (`metadata/`), and never from a data file.
+Table properties, column comments and the paths and partition values of data files are not read into the schema.
+For `--scale-hints`, Delta counts the records in the log's file statistics (only when the log has no checkpoint),
+and Iceberg uses the record count in the current snapshot's summary. An Iceberg table's identifier fields become
+unique keys. A Delta log that has been checkpointed may need `.[parquet]` to read its schema. These tables are
+read from a folder on your computer, not a URL.
+
+**Protocol Buffers** (`.proto`) gives one entity per top-level message. Nested messages and message-typed fields
+are expanded in place, a message that contains itself ends in `unknown`, maps and `repeated` fields are
+typed, and well-known types such as `Timestamp` get their format. Comments, option values (`[default = "..."]`)
+and enum value names are never shown, and an enum is just a string. A type defined in a file that isn't there
+is `unknown`.
+
+**SQL files** (`.sql`) give the tables defined by `CREATE TABLE` and by `ALTER TABLE ... ADD CONSTRAINT`: columns,
+types, `NOT NULL`, primary keys, unique keys and foreign keys. `INSERT` statements, `COPY ... FROM stdin` blocks
+and views are skipped without being read, and defaults, `CHECK` expressions, comments and enum labels are not
+used. The dialect (PostgreSQL, MySQL, SQL Server, SQLite, Oracle, ...) is found by trying them in turn. Indexes
+(`CREATE INDEX`) aren't read. A `.sql` file of queries has no tables and gives an empty schema with a note.
+
+**OpenAPI and Swagger** documents give one entity per schema under `components.schemas` (or `definitions`), with
+`$ref`, `allOf`, `oneOf` and `nullable` followed. Examples, defaults, descriptions and enum labels are never used.
+A JSON or YAML file is taken for an API description only if it begins with an `openapi:` or `swagger:` key.
+
+**BigQuery and Snowflake** are read like any other SQL database, through their SQLAlchemy dialects
+(`bigquery://my-project/my_dataset`, `snowflake://user@account/database/schema`, with the password from
+`env:NAME`). These two are wired up but are not tested against a live warehouse the way PostgreSQL, MySQL, MariaDB,
+SQL Server and Oracle are, so check the output the first time you use one.
+
 **Formats that carry their own schema** (Parquet, ORC, Avro, SAS, Stata and SPSS) are described from the
 file's header or footer alone. No row is decoded. Avro enum symbols, and the value labels and variable
 labels of the statistics formats, are values or free text, so they are never shown: an enum is just a
@@ -84,5 +133,5 @@ building one needs a C library; use Python 3.11 or newer there.
 
 Extras are installed as `pip install -e ".[yaml]"`, and `.[all]` installs every reader and
 driver. Large JSON files stream with `.[streaming]`, SAS, Stata and SPSS need `.[stats]`, SQL checking needs `.[check]`, PDF needs `.[pdf]`, the Presidio backend needs `.[presidio]`, and the MCP server needs `.[mcp]`.
-Other SQLAlchemy URLs, such as `snowflake://`, should work if you install their dialect, but
-only the databases above are tested.
+Other SQLAlchemy URLs should work if you install their dialect, but only the databases listed above
+as tested are.

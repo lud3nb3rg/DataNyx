@@ -18,7 +18,7 @@ from ..inference import Observation, infer
 from ..privacy import KeyPolicy
 from ..schema import DataSchema, Entity
 from .base import Source, SourceError
-from .files import extension, open_text, records_observation, reject_namespace
+from .files import extension, open_text, plain_name, records_observation, reject_namespace
 
 _RESOURCE_TYPE = re.compile(r"[A-Z][A-Za-z]{2,40}")
 _MAX_TYPES = 200
@@ -33,7 +33,7 @@ class FhirSource(Source):
     kind = "fhir"
 
     def matches(self, target: str) -> bool:
-        lowered = target.lower()
+        lowered = plain_name(target)
         return lowered.endswith((".fhir.json", ".fhir.ndjson", ".fhir.jsonl", ".fhir"))
 
     def extract(self, target: str, policy: KeyPolicy, namespace: str | None = None) -> DataSchema:

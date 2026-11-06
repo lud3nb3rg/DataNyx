@@ -4,6 +4,9 @@
 
 **Added**
 
+- Compressed files: `.gz`, `.bz2`, `.xz` and `.zst` (new extra `zstd`) after any text format, such as `orders.csv.gz`.
+- New sources: Arrow and Feather v2, Delta Lake and Iceberg table folders, Protocol Buffers (`.proto`), SQL files with `CREATE TABLE` (new extra `ddl`) and OpenAPI/Swagger documents. BigQuery and Snowflake work through their SQLAlchemy dialects (new extras `bigquery` and `snowflake`; not tested against a live service).
+- `--scale-hints` for SQL Server and Oracle tables, and for Arrow, Delta Lake and Iceberg.
 - Files at a URL: every file type that can be read from a path (except DuckDB, SAS, Stata and SPSS) can be read from `https://`, `s3://`, `gs://` or `az://`, or from `env:NAME` holding the URL. Parquet and ORC fetch only the footer. New extras `remote`, `s3`, `gcs` and `azure`.
 - SQL databases now show columns the database declares unique (constraints and unique indexes) as facts, not guesses, and sets of columns unique together as `unique (a, b)`.
 - `--views` describes database views (names and columns only). `--include`, `--exclude` and `--max-tables` choose which tables to describe, and `--format summary` lists one line per table. The MCP server caps `describe_data` at 200 tables (`datanyx mcp --max-tables`), and the agent can narrow it with `tables`, `exclude` and `limit`.
