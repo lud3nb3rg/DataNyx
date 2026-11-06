@@ -48,17 +48,25 @@ def _table(entity: Entity) -> str:
     lines = [_column(column, field) for column, field in node.fields.items()]
     if entity.primary_key:
         lines.append(f"PRIMARY KEY ({', '.join(map(_quote, entity.primary_key))})")
+    guesses = []
     for key in entity.foreign_keys:
-        lines.append(
-            f"FOREIGN KEY ({', '.join(map(_quote, key.columns))}) REFERENCES "
-            f"{_quote(key.referenced_entity)} ({', '.join(map(_quote, key.referenced_columns))})"
-        )
+        target = f"{_quote(key.referenced_entity)} ({', '.join(map(_quote, key.referenced_columns))})"
+        if key.inferred:  # A guess, so a comment rather than a constraint the database would enforce.
+            guesses.append(f"-- inferred join (not enforced): ({', '.join(map(_quote, key.columns))}) -> {target}")
+        else:
+            lines.append(f"FOREIGN KEY ({', '.join(map(_quote, key.columns))}) REFERENCES {target}")
+    unique = [column for column, field in node.fields.items() if field.unique]
+    if unique:
+        guesses.append(f"-- inferred unique (not enforced): {', '.join(map(_quote, unique))}")
+    if entity.scale:
+        guesses.append(f"-- about {entity.scale}")
     if not lines:
         lines.append('"value" JSON')  # A table needs a column; this stands for the unnamed keys.
     body = ",\n".join("  " + line for line in lines)
     comment = ""
     if node.extra is not None:
         comment = f"\n-- DataNyx hid some column names here; their values are {_describe(node.extra)}."
+    comment += "".join("\n" + guess for guess in guesses)
     return f"CREATE TABLE {name} (\n{body}\n);{comment}"
 
 

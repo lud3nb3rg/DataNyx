@@ -56,6 +56,8 @@ class Field:
     node: Node
     required: bool = True
     native_type: str | None = None
+    #: Set only by `--infer-keys`: the values seen were all different. A guess, not a constraint.
+    unique: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,8 @@ class ForeignKey:
     columns: tuple[str, ...]
     referenced_entity: str
     referenced_columns: tuple[str, ...]
+    #: True when guessed from the values (`--infer-keys`) rather than declared by the source.
+    inferred: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,8 @@ class Entity:
     #: True when `node` describes one row of many, as for a database table, rather than
     #: a whole document or a list of records.
     is_table: bool = False
+    #: Set only by `--scale-hints`: the row count as an order of magnitude, such as "10^3 to 10^4 rows".
+    scale: str | None = None
 
 
 @dataclass(frozen=True)

@@ -71,6 +71,14 @@ def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--schema", help="database schema to describe (default: the database's default)")
     parser.add_argument("--source", choices=source_kinds(), help="input type (default: detect)")
     parser.add_argument(
+        "--scale-hints", action="store_true",
+        help="also give each table's size as an order of magnitude (\"10^3 to 10^4 rows\"), never a number",
+    )
+    parser.add_argument(
+        "--infer-keys", action="store_true",
+        help="also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel)",
+    )
+    parser.add_argument(
         "--map-path",
         action="append",
         default=[],
@@ -500,6 +508,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-entity", action="append", default=[], metavar="KIND",
         help="leave this kind of entity visible in anonymized text (repeatable)",
     )
+    serve.add_argument("--scale-hints", action="store_true", help="give agents each table's size as an order of magnitude")
+    serve.add_argument("--infer-keys", action="store_true", help="give agents yes/no guesses about unique columns and joins")
     serve.add_argument(
         "--http", metavar="HOST:PORT",
         help="serve over HTTP at /mcp instead of stdio, so a team can share one server; needs a token (--token-env)",
@@ -538,6 +548,8 @@ def _policy(args: argparse.Namespace) -> KeyPolicy:
     return KeyPolicy(
         map_paths=frozenset([*config.map_paths, *getattr(args, "map_path", [])]),
         keep_names=frozenset([*config.keep_names, *getattr(args, "keep_name", [])]),
+        scale_hints=bool(getattr(args, "scale_hints", False) or config.scale_hints),
+        infer_keys=bool(getattr(args, "infer_keys", False) or config.infer_keys),
     )
 
 
@@ -932,6 +944,8 @@ def _run_mcp(args: argparse.Namespace) -> int:
         audit_log=audit,
         http=http,
         token=token,
+        scale_hints=bool(args.scale_hints or config.scale_hints),
+        infer_keys=bool(args.infer_keys or config.infer_keys),
     )
     return 0
 

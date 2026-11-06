@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable
+from dataclasses import replace
 
+from .keys import Evidence, apply_evidence
 from .privacy import KeyPolicy
 from .renderers import RENDERERS
 from .schema import DataSchema
@@ -27,11 +29,27 @@ def extract(
     For a folder, every readable file in it is described (and in its subfolders,
     when `recursive` is set); `source` then limits which files are read.
     """
+    policy = policy or KeyPolicy()
+    if policy.infer_keys and policy.evidence is None:
+        policy = replace(policy, evidence=Evidence())
     if os.path.isdir(target):
         if namespace is not None:
             raise SourceError("a schema can only be selected for SQL databases")
-        return describe_folder(target, source, policy or KeyPolicy(), recursive)
-    return resolve_source(target, source).extract(target, policy or KeyPolicy(), namespace)
+        schema = describe_folder(target, source, policy, recursive)
+    else:
+        schema = resolve_source(target, source).extract(target, policy, namespace)
+    if policy.infer_keys and policy.evidence is not None:
+        schema = apply_evidence(schema, policy.evidence)
+        if not any(e.foreign_keys or _has_unique(e) for e in schema.entities):
+            schema = replace(schema, notes=(*schema.notes, "no unique columns or joins were inferred; this kind of source may not support it, or no key-looking column qualified"))
+    if policy.scale_hints and not any(entity.scale for entity in schema.entities):
+        schema = replace(schema, notes=(*schema.notes, "no row-count hints: this kind of source can't give one without reading it"))
+    return schema
+
+
+def _has_unique(entity) -> bool:
+    node = getattr(entity.node, "items", entity.node)
+    return any(field.unique for field in getattr(node, "fields", {}).values())
 
 
 def render(schema: DataSchema, output_format: str = "json-schema") -> str:

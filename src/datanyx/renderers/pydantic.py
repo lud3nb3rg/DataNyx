@@ -58,7 +58,14 @@ class _Builder:
         if isinstance(node, Object) and (node.extra is None or node.fields):
             self._class(node, name, entity)
             return []
-        return [f"{name} = {self._type(node, name)}"]
+        alias = f"{name} = {self._type(node, name)}"
+        notes = [f"# primary key: {', '.join(entity.primary_key)}"] if entity.primary_key else []
+        for key in entity.foreign_keys:
+            label = "inferred join" if key.inferred else "foreign key"
+            notes.append(f"# {label}: {', '.join(key.columns)} -> {key.referenced_entity} ({', '.join(key.referenced_columns)})")
+        if entity.scale:
+            notes.append(f"# scale: {entity.scale}")
+        return ["\n".join([*notes, alias])]
 
     def _type(self, node: Node, hint: str) -> str:
         if isinstance(node, Unknown):
@@ -101,7 +108,8 @@ class _Builder:
                 default = f" = Field({''.join(arguments)})"
             else:
                 default = "" if field.required else " = None"
-            lines.append(f"    {attribute}: {annotation}{default}")
+            tag = "  # unique (inferred)" if field.unique else ""
+            lines.append(f"    {attribute}: {annotation}{default}{tag}")
 
         settings = []
         if node.extra is not None:
@@ -113,10 +121,13 @@ class _Builder:
             docs.append(f"    # primary key: {', '.join(entity.primary_key)}")
         if entity is not None:
             for key in entity.foreign_keys:
+                label = "inferred join" if key.inferred else "foreign key"
                 docs.append(
-                    f"    # foreign key: {', '.join(key.columns)} -> "
+                    f"    # {label}: {', '.join(key.columns)} -> "
                     f"{key.referenced_entity} ({', '.join(key.referenced_columns)})"
                 )
+            if entity.scale:
+                docs.append(f"    # scale: {entity.scale}")
         if settings:
             lines.insert(0, f"    model_config = ConfigDict({', '.join(settings)})")
         body = docs + lines or ["    pass"]

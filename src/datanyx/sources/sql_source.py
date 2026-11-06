@@ -17,7 +17,7 @@ import re
 import sqlite3
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ from sqlalchemy.types import TypeEngine
 
 from ..formats import detect_format
 from ..privacy import KeyPolicy
+from ..scale import scale_for
 from ..schema import (
     Array,
     Boolean,
@@ -210,7 +211,45 @@ def _describe(engine: Engine, policy: KeyPolicy, namespace: str | None, kind: st
         _build_entity(table, _read_foreign_keys(inspector, table, tables, namespace), engine, enforced, policy, notes)
         for table in tables.values()
     )
+    if policy.scale_hints:
+        try:
+            estimates = _row_estimates(engine, namespace)
+        except Exception:
+            estimates = None
+        if estimates is None:
+            notes.append(f"row-count hints aren't available for {engine.dialect.name}")
+        else:
+            entities = tuple(replace(e, scale=scale_for(policy, estimates.get(e.name or ""))) for e in entities)
     return DataSchema(kind, entities, tuple(notes))
+
+
+def _row_estimates(engine: Engine, namespace: str | None) -> dict[str, int] | None:
+    """Each table's row count as the server's own catalog estimates it. No table is read.
+
+    PostgreSQL and MySQL/MariaDB keep these statistics; a table never analysed has none.
+    """
+    dialect = engine.dialect.name
+    if dialect not in ("postgresql", "mysql", "mariadb"):
+        return None
+    with engine.connect() as connection:
+        if dialect == "postgresql":
+            schema = namespace or connection.execute(sa.text("select current_schema()")).scalar()
+            rows = connection.execute(
+                sa.text(
+                    "select c.relname, c.reltuples::bigint from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+                    "where n.nspname = :schema and c.relkind in ('r', 'p') and c.reltuples >= 0"
+                ),
+                {"schema": schema},
+            )
+        else:
+            rows = connection.execute(
+                sa.text(
+                    "select table_name, table_rows from information_schema.tables "
+                    "where table_schema = coalesce(:schema, database()) and table_type = 'BASE TABLE'"
+                ),
+                {"schema": namespace},
+            )
+        return {str(name): int(count) for name, count in rows if count is not None}
 
 
 def _read_table(inspector: Inspector, name: str, namespace: str | None, policy: KeyPolicy) -> _Table:

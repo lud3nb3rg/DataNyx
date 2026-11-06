@@ -128,3 +128,54 @@ The name must match exactly, including case, and is shown everywhere it appears.
 `--map-path` still wins if both apply. Only use it for names you've checked. An agent
 that can run the tool could also use it to test guesses, such as whether
 `alice@example.com` is a key.
+
+## Size and key hints
+
+A schema from a file says nothing about how big the data is or how its tables relate. Two options add that,
+and both are **off by default** because each says a little about the data:
+
+```sh
+datanyx schema ./exports --scale-hints --infer-keys --format text
+```
+
+```
+customers.csv: array<{
+  id: integer  -- unique (inferred)
+  email: string<email>
+}>
+  scale: 10^4 to 10^5 rows
+
+orders.csv: array<{
+  order_id: integer  -- unique (inferred)
+  customer_id: integer
+}>
+  foreign key (customer_id) -> customers.csv (id)  -- inferred from the values
+  scale: 10^5 to 10^6 rows
+```
+
+**`--scale-hints`** gives each table's size as an order of magnitude, so an agent can choose between loading
+a table and streaming it. It is never a number: everything under a thousand rows is "fewer than 1,000 rows",
+and above that only the power of ten is given. CSV, TSV, JSON, JSON Lines, YAML and Excel report it from
+the rows they read. Parquet and ORC take it from the file footer, DuckDB from its catalog estimate, MongoDB
+from the collection's metadata, and PostgreSQL, MySQL and MariaDB from the server's own statistics (a table
+the server has never analysed has none). Other sources say that no hint is available.
+
+**`--infer-keys`** marks key-looking columns that are unique, and guesses joins between tables (two CSVs
+in a folder, the sheets of a workbook, a JSON array and a JSON Lines file). It reads CSV, TSV, JSON Lines,
+JSON arrays and Excel; databases already declare their keys. What comes out is a yes or no, marked as a
+guess, never a count or a value. To keep it from saying more than it should:
+
+- only columns *named* like keys (`id`, `user_id`, `uuid`, `code`, ...) are examined;
+- a table needs at least 20 rows, and the column no nulls and no repeats, to be called unique;
+- a join needs the names to match (`orders.customer_id` with `customers.id`, or the same specific name in both
+  tables) and every value to be contained, because small integer ids sit inside each other all the time;
+- two tables that each hold the other's key under the same name are a tie, so neither is called the parent.
+
+The hashes of the values are held in memory while the file is read and thrown away; a column with more than
+200,000 distinct values is given up on. The inferred joins appear in `x-foreign-keys` with `"inferred": true`,
+and as comments rather than constraints in the SQL output, so nothing pretends the database enforces them.
+`datanyx synth` uses them, so fake rows keep the joins and the unique columns.
+
+Set both once for a project with `scale_hints = true` and `infer_keys = true` under `[schema]` in
+`datanyx.toml`. For the MCP server they are options of whoever starts it (`datanyx mcp --scale-hints
+--infer-keys`), and an agent can't turn them on or off.

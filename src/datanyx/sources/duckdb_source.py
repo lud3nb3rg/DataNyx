@@ -9,9 +9,11 @@ plain string, and nested STRUCT, MAP and UNION types are summarised rather than 
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from ..formats import detect_format
 from ..privacy import KeyPolicy
+from ..scale import scale_for
 from ..schema import (
     Array,
     Boolean,
@@ -103,6 +105,15 @@ def _describe(connection, policy: KeyPolicy, schema: str, kind: str) -> DataSche
         elif ctype == "FOREIGN KEY" and referenced:
             foreign_rows.append((table, list(names), referenced, list(referenced_names)))
 
+    sizes: dict[str, int] = {}
+    if policy.scale_hints:  # The catalog's own row estimate: no table is read.
+        sizes = {
+            table: int(size)
+            for table, size in connection.execute(
+                "select table_name, estimated_size from duckdb_tables() where schema_name = ?", [schema]
+            ).fetchall()
+            if size is not None
+        }
     visible: dict[str, frozenset[str]] = {}
     for table in visible_tables:
         hide_all = f"$.{table}" in policy.map_paths
@@ -120,7 +131,8 @@ def _describe(connection, policy: KeyPolicy, schema: str, kind: str) -> DataSche
             and all(n in visible[table] for n in names)
             and all(n in visible[referenced] for n in referenced_names)
         )
-        entities.append(_entity(table, columns[table], visible[table], set(key), shown_key, keys, policy, notes))
+        entity = _entity(table, columns[table], visible[table], set(key), shown_key, keys, policy, notes)
+        entities.append(replace(entity, scale=scale_for(policy, sizes.get(table))))
     return DataSchema(kind, tuple(entities), tuple(notes))
 
 

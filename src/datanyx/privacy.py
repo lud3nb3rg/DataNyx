@@ -9,7 +9,8 @@ agent some precision while a leaked key can't be taken back.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from .formats import detect_format
 
@@ -56,6 +57,8 @@ class KeyPolicy:
         are treated as a map.
     map_threshold_scalars: the same, for values of a single scalar type. Higher
         because a flat record with many string fields is common and legitimate.
+    scale_hints: also record each table's row count as an order of magnitude.
+    infer_keys: also flag key-looking columns that are unique, and joins between tables.
     """
 
     map_paths: frozenset[str] = frozenset()
@@ -64,6 +67,10 @@ class KeyPolicy:
     min_instances_for_support: int = 5
     map_threshold_objects: int = 8
     map_threshold_scalars: int = 32
+    scale_hints: bool = False
+    infer_keys: bool = False
+    #: Collects key evidence while a source reads (`datanyx.keys.Evidence`); made by `extract`.
+    evidence: Any = field(default=None, compare=False, repr=False)
 
     def shows_name(self, name: str) -> bool:
         """Whether a catalog name, such as a table or column, may be shown."""

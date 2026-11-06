@@ -140,6 +140,10 @@ class _Generator:
             else:
                 columns[name] = [self.value(node, name) for _ in range(count)]
 
+        for name, field in item.fields.items():
+            if field.unique and name not in columns:  # Found unique by `--infer-keys`: other tables may point at it.
+                columns[name] = self._unique(field.node, name, count)
+
         for key in entity.foreign_keys:
             target = done.get(key.referenced_entity)
             if target is None or not target.rows or not all(c in item.fields for c in key.columns):

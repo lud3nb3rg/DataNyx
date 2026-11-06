@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..privacy import KeyPolicy
+from ..scale import scale_for
 from ..schema import (
     Array,
     Boolean,
@@ -38,14 +39,16 @@ class ParquetSource(Source):
         try:
             # schema_arrow comes from the footer. Its metadata (which pandas fills
             # with column names and index details) is never looked at.
-            arrow_schema = pq.ParquetFile(target).schema_arrow
+            parquet_file = pq.ParquetFile(target)
+            arrow_schema = parquet_file.schema_arrow
+            rows = parquet_file.metadata.num_rows  # Also from the footer.
         except FileNotFoundError:
             raise SourceError("cannot read input: no such file") from None
         except Exception as error:
             raise SourceError(f"input isn't a readable Parquet file ({type(error).__name__})") from None
 
         notes: list[str] = []
-        return unnamed(self.kind, arrow_table_node(arrow_schema, policy, notes, pa), tuple(notes))
+        return unnamed(self.kind, arrow_table_node(arrow_schema, policy, notes, pa), tuple(notes), scale_for(policy, rows))
 
 
 def arrow_table_node(arrow_schema, policy: KeyPolicy, notes: list[str], pa) -> Node:

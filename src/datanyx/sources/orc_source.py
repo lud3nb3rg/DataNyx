@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..privacy import KeyPolicy
+from ..scale import scale_for
 from ..schema import DataSchema
 from .base import Source, SourceError
 from .files import extension, missing_extra, reject_namespace, require_path, unnamed
@@ -24,10 +25,12 @@ class OrcSource(Source):
         except ImportError:
             raise missing_extra("ORC", "orc") from None
         try:
-            arrow_schema = orc.ORCFile(target).schema  # From the file footer; no row is decoded.
+            orc_file = orc.ORCFile(target)
+            arrow_schema = orc_file.schema  # From the file footer; no row is decoded.
+            rows = orc_file.nrows
         except FileNotFoundError:
             raise SourceError("cannot read input: no such file") from None
         except Exception as error:
             raise SourceError(f"input isn't a readable ORC file ({type(error).__name__})") from None
         notes: list[str] = []
-        return unnamed(self.kind, arrow_table_node(arrow_schema, policy, notes, pa), tuple(notes))
+        return unnamed(self.kind, arrow_table_node(arrow_schema, policy, notes, pa), tuple(notes), scale_for(policy, rows))

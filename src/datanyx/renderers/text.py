@@ -30,17 +30,21 @@ def _entity(entity: Entity) -> str:
     if entity.primary_key:
         lines.append(f"{_INDENT}primary key ({', '.join(entity.primary_key)})")
     for key in entity.foreign_keys:
+        guess = "  -- inferred from the values" if key.inferred else ""
         lines.append(
             f"{_INDENT}foreign key ({', '.join(key.columns)})"
-            f" -> {key.referenced_entity} ({', '.join(key.referenced_columns)})"
+            f" -> {key.referenced_entity} ({', '.join(key.referenced_columns)}){guess}"
         )
+    if entity.scale:
+        lines.append(f"{_INDENT}scale: {entity.scale}")
     return "\n".join(lines)
 
 
 def _field(name: str, field: Field, depth: int) -> str:
     marker = "" if field.required else "?"
     line = f"{name}{marker}: {_node(field.node, depth)}"
-    return f"{line}  -- {field.native_type}" if field.native_type else line
+    notes = [item for item in (field.native_type, "unique (inferred)" if field.unique else None) if item]
+    return f"{line}  -- {', '.join(notes)}" if notes else line
 
 
 def _node(node: Node, depth: int) -> str:

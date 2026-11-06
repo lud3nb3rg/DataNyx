@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from ..inference import Observation, infer
 from ..privacy import KeyPolicy
+from ..scale import scale_for
 from ..schema import DataSchema
 from .base import Source, SourceError
-from .files import extension, missing_extra, open_text, records_observation, reject_namespace, unnamed
+from .files import extension, items_seen, missing_extra, open_text, records_observation, reject_namespace, unnamed
 
 _UNSET = object()
 
@@ -49,4 +50,4 @@ class YamlSource(Source):
             except UnicodeDecodeError:
                 raise SourceError("input is not valid UTF-8") from None
         node, notes = infer(observation, policy)
-        return unnamed(self.kind, node, notes)
+        return unnamed(self.kind, node, notes, scale_for(policy, items_seen(observation)))

@@ -17,6 +17,7 @@ from decimal import Decimal
 
 from ..inference import infer
 from ..privacy import KeyPolicy
+from ..scale import scale_for
 from ..schema import DataSchema, Entity
 from .base import Source, SourceError
 from .files import EMPTY_TABLE, missing_extra, records_observation
@@ -92,20 +93,29 @@ def _describe(client, namespace: str | None, policy: KeyPolicy, kind: str) -> Da
         visible = visible[:MAX_COLLECTIONS]
     entities = []
     for name in visible:
+        scale = scale_for(policy, _estimated_count(database[name]) if policy.scale_hints else None)
         root = records_observation()
         sampled = 0
         for document in database[name].find({}, limit=SAMPLE_SIZE):
             root.observe_item(_plain(document))
             sampled += 1
         if not sampled:
-            entities.append(Entity(name, EMPTY_TABLE))
+            entities.append(Entity(name, EMPTY_TABLE, scale=scale))
             continue
         node, inferred = infer(root, policy, f"$.{name}")
         notes.extend(inferred)
-        entities.append(Entity(name, node))
+        entities.append(Entity(name, node, scale=scale))
     if entities:
         notes.append(f"inferred from a sample of up to {SAMPLE_SIZE} documents per collection; rare fields may be missing")
     return DataSchema(kind, tuple(entities), tuple(notes))
+
+
+def _estimated_count(collection) -> int | None:
+    """The collection's size from its metadata, which doesn't scan it."""
+    try:
+        return int(collection.estimated_document_count())
+    except Exception:
+        return None
 
 
 def _plain(value):

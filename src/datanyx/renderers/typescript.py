@@ -42,7 +42,10 @@ def _entity(entity: Entity, name: str) -> str:
         comments.append(f"// primary key: {', '.join(entity.primary_key)}")
     for key in entity.foreign_keys:
         columns, referenced = ", ".join(key.columns), ", ".join(key.referenced_columns)
-        comments.append(f"// foreign key: {columns} -> {key.referenced_entity} ({referenced})")
+        label = "inferred join" if key.inferred else "foreign key"
+        comments.append(f"// {label}: {columns} -> {key.referenced_entity} ({referenced})")
+    if entity.scale:
+        comments.append(f"// scale: {entity.scale}")
     node = entity.node
     head = "\n".join([*comments, ""])[:-1] if comments else ""
     prefix = head + "\n" if head else ""
@@ -80,7 +83,8 @@ def _object(node: Object, depth: int) -> str:
     for name, field in node.fields.items():
         key = name if _PLAIN_KEY.fullmatch(name) else json.dumps(name)
         marker = "" if field.required else "?"
-        comment = f" // {field.native_type}" if field.native_type else ""
+        notes = [item for item in (field.native_type, "unique (inferred)" if field.unique else None) if item]
+        comment = f" // {', '.join(notes)}" if notes else ""
         lines.append(f"{pad}{key}{marker}: {_node(field.node, depth + 1)};{comment}")
     body = "{\n" + "\n".join(lines) + "\n" + _INDENT * depth + "}"
     return f"{body} & {extra}" if extra else body

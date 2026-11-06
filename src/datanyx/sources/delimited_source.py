@@ -6,6 +6,7 @@ import csv
 
 from ..inference import Observation, infer
 from ..privacy import KeyPolicy
+from ..scale import scale_for
 from ..schema import DataSchema
 from .base import Source, SourceError
 from .files import (
@@ -13,6 +14,7 @@ from .files import (
     coerce_text,
     column_names,
     extension,
+    items_seen,
     open_text,
     records_observation,
     reject_namespace,
@@ -36,9 +38,10 @@ class DelimitedSource(Source):
         csv.field_size_limit(_MAX_FIELD_CHARS)
         root = records_observation()
         notes: list[str] = []
+        evidence = policy.evidence.table(None) if policy.evidence is not None else None
         with open_text(target) as stream:
             try:
-                names = _read_rows(csv.reader(stream, delimiter=self._delimiter), root, notes)
+                names = _read_rows(csv.reader(stream, delimiter=self._delimiter), root, notes, evidence)
             except csv.Error:
                 raise SourceError(f"input isn't valid {self.kind.upper()}") from None
             except UnicodeDecodeError:
@@ -46,10 +49,10 @@ class DelimitedSource(Source):
         if names is None:
             return unnamed(self.kind, EMPTY_TABLE, tuple(notes))
         node, inferred = infer(root, policy)
-        return unnamed(self.kind, node, tuple(notes) + inferred)
+        return unnamed(self.kind, node, tuple(notes) + inferred, scale_for(policy, items_seen(root)))
 
 
-def _read_rows(reader, root: Observation, notes: list[str]) -> list[str] | None:
+def _read_rows(reader, root: Observation, notes: list[str], evidence=None) -> list[str] | None:
     names: list[str] | None = None
     wide = False
     for row in reader:
@@ -61,7 +64,10 @@ def _read_rows(reader, root: Observation, notes: list[str]) -> list[str] | None:
             continue
         wide = wide or len(row) > len(names)
         # Short rows leave their last columns out, which makes those columns optional.
-        root.observe_item({name: coerce_text(cell) for name, cell in zip(names, row)})
+        record = {name: coerce_text(cell) for name, cell in zip(names, row)}
+        root.observe_item(record)
+        if evidence is not None:
+            evidence.add(record)
     if wide:
         notes.append("some rows had more cells than the header; the extra cells were ignored")
     return names

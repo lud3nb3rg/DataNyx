@@ -67,8 +67,15 @@ def records_observation() -> Observation:
     return root
 
 
-def unnamed(kind: str, node: Node, notes: tuple[str, ...]) -> DataSchema:
-    return DataSchema(kind, (Entity(None, node),), notes)
+def unnamed(kind: str, node: Node, notes: tuple[str, ...], scale: str | None = None) -> DataSchema:
+    return DataSchema(kind, (Entity(None, node, scale=scale),), notes)
+
+
+def items_seen(observation: Observation) -> int | None:
+    """How many records a source read, when what it read is a list of them."""
+    if observation.arrays and observation.items is not None:
+        return observation.items.seen
+    return None
 
 
 EMPTY_TABLE: Node = Array()

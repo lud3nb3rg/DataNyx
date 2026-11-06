@@ -9,6 +9,9 @@
   as object keys are hidden automatically.
 - **Databases are never queried for rows.** Schemas come from the catalog alone, and SQLite
   files are opened with an authorizer that refuses to read user tables.
+- **Optional size and key hints.** `--scale-hints` gives a table's size as an order of magnitude, and
+  `--infer-keys` flags unique columns and likely joins as yes/no guesses. Both are off by default and
+  never show a count or a value.
 - **Five output formats:** JSON Schema, a compact text form, TypeScript, Pydantic and SQL.
 - **Synthetic data.** `datanyx synth` generates fake rows from a schema, with foreign keys
   that point at real rows, so an agent can test its code and see output without any real data.

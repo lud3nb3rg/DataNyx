@@ -24,6 +24,8 @@ datanyx schema input [options]
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
 | `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
+| `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
 | `--keep-name` `NAME` | show this exact key, table or column name even if it looks like data (repeatable); --map-path still hides it |
 | `--format` `FORMAT` | output format (default: json-schema). Choices: `json-schema`, `pydantic`, `sql`, `text`, `typescript`. |
@@ -43,6 +45,8 @@ datanyx synth input [options]
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
 | `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
+| `--scale-hints` | also give each table's size as an order of magnitude ("10^3 to 10^4 rows"), never a number |
+| `--infer-keys` | also flag key-looking columns that are unique, and joins between tables, as yes/no guesses (CSV, TSV, JSON Lines, JSON and Excel) |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
 | `--keep-name` `NAME` | show this exact key, table or column name even if it looks like data (repeatable); --map-path still hides it |
 | `--rows` `ROWS` | rows per table (default: 100) |
@@ -346,6 +350,8 @@ datanyx mcp [options]
 | `--backend` `SPEC` | another detector to run as well: presidio[:LANG[:MODEL]], gliner[:MODEL] or ollama[:MODEL[@URL]] (repeatable) |
 | `--detectors` `FILE` | a file of custom detectors for your own formats and names (repeatable) |
 | `--keep-entity` `KIND` | leave this kind of entity visible in anonymized text (repeatable) |
+| `--scale-hints` | give agents each table's size as an order of magnitude |
+| `--infer-keys` | give agents yes/no guesses about unique columns and joins |
 | `--http` `HOST:PORT` | serve over HTTP at /mcp instead of stdio, so a team can share one server; needs a token (--token-env) |
 | `--token-env` `NAME` | environment variable holding the bearer token HTTP clients must send (default: DATANYX_MCP_TOKEN) |
 | `--audit-log` `FILE` | append a record of every tool call, never values, to this file |

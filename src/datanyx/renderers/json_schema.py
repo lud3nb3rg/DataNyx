@@ -51,9 +51,12 @@ def _entity(entity: Entity) -> dict:
                     "table": key.referenced_entity,
                     "columns": list(key.referenced_columns),
                 },
+                **({"inferred": True} if key.inferred else {}),
             }
             for key in entity.foreign_keys
         ]
+    if entity.scale:
+        result["x-scale"] = entity.scale
     return result
 
 
@@ -61,6 +64,8 @@ def _field(field: Field) -> dict:
     result = _node(field.node)
     if field.native_type:
         result["x-native-type"] = field.native_type
+    if field.unique:
+        result["x-unique"] = True
     return result
 
 

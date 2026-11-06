@@ -117,11 +117,15 @@ def create_server(
     hide: Sequence[str] = (),
     custom_detectors: Sequence[Detector] = (),
     audit_log: str | Path | None = None,
+    scale_hints: bool = False,
+    infer_keys: bool = False,
 ):
     """Build the server.
 
     `keep_entity`, `hide` and `custom_detectors` are the user's choices, made when starting
     it. `audit_log` is a file that gets a record of every tool call (never values).
+    `scale_hints` and `infer_keys` add size buckets and key guesses to schemas; the agent can't switch
+    them on or off.
     """
     try:
         from mcp.server.mcpserver import MCPServer as Server  # type: ignore[import-not-found]  # mcp 2.x
@@ -174,7 +178,7 @@ def create_server(
         """
         if format not in RENDERERS:
             raise SourceError(f"format must be one of {sorted(RENDERERS)}")
-        policy = KeyPolicy(map_paths=frozenset(map_paths or ()))
+        policy = KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys)
         schema = extract(
             access.check(target), policy=policy, namespace=database_schema, recursive=recursive
         )
@@ -199,7 +203,7 @@ def create_server(
         """
         if not 1 <= rows <= MAX_SAMPLE_ROWS:
             raise SourceError(f"rows must be between 1 and {MAX_SAMPLE_ROWS}")
-        policy = KeyPolicy(map_paths=frozenset(map_paths or ()))
+        policy = KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys)
         schema = extract(access.check(target), policy=policy, namespace=database_schema, recursive=recursive)
         tables = synthesize(schema, rows)
         if len(tables) == 1:
@@ -341,12 +345,14 @@ def run(
     audit_log: str | Path | None = None,
     http: tuple[str, int] | None = None,
     token: str | None = None,
+    scale_hints: bool = False,
+    infer_keys: bool = False,
 ) -> None:
     allowed = {*ENTITY_KINDS, SECRET, *kinds_of(list(detectors))}
     unknown = set(keep_entity) - allowed
     if unknown:
         raise SourceError(f"unknown entity kinds: {sorted(unknown)}")
-    server = create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log)
+    server = create_server(roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys)
     if http is None:
         server.run("stdio")
         return

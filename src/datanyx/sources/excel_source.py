@@ -6,12 +6,14 @@ import warnings
 
 from ..inference import infer
 from ..privacy import KeyPolicy
+from ..scale import scale_for
 from ..schema import DataSchema, Entity
 from .base import Source, SourceError
 from .files import (
     EMPTY_TABLE,
     column_names,
     extension,
+    items_seen,
     missing_extra,
     records_observation,
     reject_namespace,
@@ -58,6 +60,7 @@ def _describe(workbook, policy: KeyPolicy, kind: str) -> DataSchema:
         if not policy.shows_name(name):
             name, renamed = f"sheet_{position}", True  # Position, not content, so it can't leak.
         root = records_observation()
+        evidence = policy.evidence.table(name) if policy.evidence is not None else None
         names: list[str] | None = None
         for row in sheet.iter_rows(values_only=True):
             if all(cell is None or cell == "" for cell in row):
@@ -65,13 +68,16 @@ def _describe(workbook, policy: KeyPolicy, kind: str) -> DataSchema:
             if names is None:
                 names = column_names(list(row))
                 continue
-            root.observe_item({n: (None if v == "" else v) for n, v in zip(names, row)})
+            record = {n: (None if v == "" else v) for n, v in zip(names, row)}
+            root.observe_item(record)
+            if evidence is not None:
+                evidence.add(record)
         if names is None:
             entities.append(Entity(name, EMPTY_TABLE))
             continue
         node, inferred = infer(root, policy, f"$.{name}")
         notes.extend(inferred)
-        entities.append(Entity(name, node))
+        entities.append(Entity(name, node, scale=scale_for(policy, items_seen(root))))
     if renamed:
         notes.append("renamed data-like sheet names to sheet_N (key shape)")
     return DataSchema(kind, tuple(entities), tuple(notes))

@@ -8,9 +8,10 @@ import os
 
 from ..inference import Observation, infer
 from ..privacy import KeyPolicy
+from ..scale import scale_for
 from ..schema import DataSchema
 from .base import Source, SourceError
-from .files import STDIN, extension, open_text, records_observation, reject_namespace, unnamed
+from .files import STDIN, extension, items_seen, open_text, records_observation, reject_namespace, unnamed
 
 # Above this size a document is read as a stream when ijson is installed, so memory
 # use depends on the document's structure, not its length. Smaller files use the
@@ -31,18 +32,24 @@ class JsonSource(Source):
         reject_namespace(namespace)
         streamer = _streamer() if _should_stream(target) else None
         if streamer is not None:
-            node, notes = infer(_observe_stream(streamer, target), policy)
-            return unnamed(self.kind, node, notes)
+            streamed = _observe_stream(streamer, target)
+            node, notes = infer(streamed, policy)
+            return unnamed(self.kind, node, notes, scale_for(policy, items_seen(streamed)))
         observation = Observation()
         with open_text(target) as stream:
             try:
-                observation.observe(json.load(stream))
+                document = json.load(stream)
+                observation.observe(document)
+                if policy.evidence is not None and isinstance(document, list):
+                    table = policy.evidence.table(None)
+                    for record in document:
+                        table.add(record)
             except json.JSONDecodeError as error:
                 raise SourceError(_describe_decode_error(error)) from None
             except UnicodeDecodeError:
                 raise SourceError("input is not valid UTF-8") from None
         node, notes = infer(observation, policy)
-        return unnamed(self.kind, node, notes)
+        return unnamed(self.kind, node, notes, scale_for(policy, items_seen(observation)))
 
 
 class JsonLinesSource(Source):
@@ -56,19 +63,23 @@ class JsonLinesSource(Source):
         # Modelled as an array of records. Reading line by line means files
         # larger than memory still work, since values are discarded as they pass.
         root = records_observation()
+        evidence = policy.evidence.table(None) if policy.evidence is not None else None
         with open_text(target) as stream:
             line_number = 0
             try:
                 for line_number, line in enumerate(stream, start=1):  # noqa: B007
                     if line.strip():
-                        root.observe_item(json.loads(line))
+                        record = json.loads(line)
+                        root.observe_item(record)
+                        if evidence is not None:
+                            evidence.add(record)
             except json.JSONDecodeError as error:
                 detail = f"line {line_number}, column {error.colno}: {error.msg}"
                 raise SourceError(f"invalid JSON at {detail}") from None
             except UnicodeDecodeError:
                 raise SourceError("input is not valid UTF-8") from None
         node, notes = infer(root, policy)
-        return unnamed(self.kind, node, notes)
+        return unnamed(self.kind, node, notes, scale_for(policy, items_seen(root)))
 
 
 def _should_stream(target: str) -> bool:

@@ -36,7 +36,7 @@ ENVIRONMENT_VARIABLE = "DATANYX_CONFIG"
 
 _LIST, _PATHS, _PATH, _STR, _BOOL, _NUMBER = "list of text", "list of paths", "path", "text", "true or false", "number"
 SPEC: dict[str, dict[str, str]] = {
-    "schema": {"map_paths": _LIST, "keep_names": _LIST},
+    "schema": {"map_paths": _LIST, "keep_names": _LIST, "scale_hints": _BOOL, "infer_keys": _BOOL},
     "anonymize": {
         "model": _STR, "models": _LIST, "hide": _LIST, "keep": _LIST, "keep_entities": _LIST,
         "detectors": _PATHS, "packs": _LIST, "backends": _LIST,
@@ -55,6 +55,8 @@ class Config:
     files: tuple[Path, ...] = ()
     map_paths: tuple[str, ...] = ()
     keep_names: tuple[str, ...] = ()
+    scale_hints: bool | None = None
+    infer_keys: bool | None = None
     model: str | None = None
     models: tuple[str, ...] = ()
     packs: tuple[str, ...] = ()
@@ -216,6 +218,8 @@ def _build(files: list[Path], data: dict[str, Any]) -> Config:
         files=tuple(files),
         map_paths=tuple(get("schema", "map_paths", [])),
         keep_names=tuple(get("schema", "keep_names", [])),
+        scale_hints=get("schema", "scale_hints"),
+        infer_keys=get("schema", "infer_keys"),
         model=get("anonymize", "model"),
         models=tuple(get("anonymize", "models", [])),
         packs=tuple(get("anonymize", "packs", [])),
@@ -259,7 +263,7 @@ def describe(config: Config, reveal: bool = False) -> str:
         lines.append(f"  {label}: {text}")
 
     sections = (
-        ("schema", (("map_paths", config.map_paths), ("keep_names", config.keep_names))),
+        ("schema", (("map_paths", config.map_paths), ("keep_names", config.keep_names), ("scale_hints", config.scale_hints), ("infer_keys", config.infer_keys))),
         (
             "anonymize",
             (("model", config.model), ("models", config.models), ("packs", config.packs), ("backends", config.backends), ("hide", config.hide), ("keep", config.keep), ("keep_entities", config.keep_entities),
@@ -299,6 +303,10 @@ STARTER = """# DataNyx project settings. Commands read this file from the projec
 # map_paths = ["$.users", "$[].tags"]
 # Show names the rules hid because they look like data.
 # keep_names = ["Order Details", "report_2024"]
+# Size and key hints, both off by default because they say a little about the data:
+# row counts as an order of magnitude, and yes/no flags for unique and joinable key columns.
+# scale_hints = true
+# infer_keys = true
 
 [anonymize]
 # model = "en_core_web_lg"

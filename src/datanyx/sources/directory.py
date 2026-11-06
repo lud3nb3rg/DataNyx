@@ -51,6 +51,8 @@ def describe_directory(
         name = relative.replace(os.sep, "/")
         if not all(policy.shows_name(part) for part in name.split("/")):
             name, hidden_names = f"file_{position}", hidden_names + 1
+        if policy.evidence is not None:
+            policy.evidence.scope = name
         try:
             schema = source.extract(path, policy)
         except SourceError as error:
@@ -61,6 +63,8 @@ def describe_directory(
         notes.extend(f"{name}: {note}" for note in schema.notes)
         entities.extend(_rename(entity, name) for entity in schema.entities)
 
+    if policy.evidence is not None:
+        policy.evidence.scope = None
     if not entities and not failed:
         notes.append("no readable data files found")
     if unsupported:
@@ -106,7 +110,7 @@ def _rename(entity: Entity, file_name: str) -> Entity:
         return replace(entity, name=file_name)
     prefix = f"{file_name}{_SEPARATOR}"
     keys = tuple(
-        ForeignKey(key.columns, prefix + key.referenced_entity, key.referenced_columns)
+        ForeignKey(key.columns, prefix + key.referenced_entity, key.referenced_columns, key.inferred)
         for key in entity.foreign_keys
     )
     return replace(entity, name=prefix + entity.name, foreign_keys=keys)
