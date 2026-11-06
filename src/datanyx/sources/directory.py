@@ -138,7 +138,7 @@ def _shared_fields(entities: list[Entity]) -> list[str]:
 
     Only names that are already visible in the schema are used.
     """
-    fields = [(entity.name, _record_fields(entity.node)) for entity in entities]
+    fields = [(entity.name or "", _record_fields(entity.node)) for entity in entities]
     # Entities with the same shared fields are reported together, not pair by pair.
     groups: dict[tuple[str, ...], list[str]] = {}
     for (first, first_fields), (second, second_fields) in combinations(fields, 2):
