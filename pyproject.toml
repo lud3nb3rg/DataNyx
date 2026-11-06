@@ -38,7 +38,9 @@ mcp = ["mcp>=1.2"]
 avro = ["fastavro>=1.9"]
 orc = ["pyarrow>=14"]
 duckdb = ["duckdb>=1.0"]
-stats = ["pyreadstat>=1.2"]
+# pyreadstat publishes no Windows wheel for Python 3.10, and building it there needs a C library, so
+# the extra is empty on that one platform and SAS, Stata and SPSS files report that they need it.
+stats = ["pyreadstat>=1.2; sys_platform != 'win32' or python_version >= '3.11'"]
 mongodb = ["pymongo>=4.6"]
 all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp,check,pdf,presidio,avro,orc,duckdb,stats,mongodb]"]
 text = ["spacy>=3.7"]

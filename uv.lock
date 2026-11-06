@@ -1031,7 +1031,7 @@ all = [
     { name = "pymssql" },
     { name = "pymysql" },
     { name = "pypdf" },
-    { name = "pyreadstat" },
+    { name = "pyreadstat", marker = "python_full_version >= '3.11' or sys_platform != 'win32'" },
     { name = "pyyaml" },
     { name = "sqlglot" },
 ]
@@ -1085,7 +1085,7 @@ presidio = [
     { name = "presidio-analyzer", version = "2.2.366", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 stats = [
-    { name = "pyreadstat" },
+    { name = "pyreadstat", marker = "python_full_version >= '3.11' or sys_platform != 'win32'" },
 ]
 streaming = [
     { name = "ijson" },
@@ -1138,7 +1138,7 @@ requires-dist = [
     { name = "pymssql", marker = "extra == 'mssql'", specifier = ">=2.3" },
     { name = "pymysql", marker = "extra == 'mysql'", specifier = ">=1.1" },
     { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=4" },
-    { name = "pyreadstat", marker = "extra == 'stats'", specifier = ">=1.2" },
+    { name = "pyreadstat", marker = "(python_full_version >= '3.11' and extra == 'stats') or (sys_platform != 'win32' and extra == 'stats')", specifier = ">=1.2" },
     { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6" },
     { name = "spacy", marker = "extra == 'text'", specifier = ">=3.7" },
     { name = "sqlalchemy", specifier = ">=2" },

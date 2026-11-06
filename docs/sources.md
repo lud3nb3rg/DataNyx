@@ -53,6 +53,9 @@ name. Files named `.fhir.json` or `.fhir.ndjson` are recognised automatically; f
 so no values are needed to describe it. Timestamps are recognised, and empty fields are omitted, so a field
 that is empty in some segments is marked optional.
 
+The `stats` extra isn't installed on Windows with Python 3.10, because `pyreadstat` publishes no wheel for it and
+building one needs a C library; use Python 3.11 or newer there.
+
 Extras are installed as `pip install -e ".[yaml]"`, and `.[all]` installs every reader and
 driver. Large JSON files stream with `.[streaming]`, SAS, Stata and SPSS need `.[stats]`, SQL checking needs `.[check]`, PDF needs `.[pdf]`, the Presidio backend needs `.[presidio]`, and the MCP server needs `.[mcp]`.
 Other SQLAlchemy URLs, such as `snowflake://`, should work if you install their dialect, but
