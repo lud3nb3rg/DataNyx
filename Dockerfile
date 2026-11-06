@@ -19,7 +19,7 @@ FROM python:3.12-slim
 ARG MODEL=""
 RUN useradd --create-home --uid 10001 datanyx
 COPY --from=build /wheels /wheels
-RUN pip install --no-cache-dir "$(ls /wheels/*.whl)[mcp,yaml,excel,parquet,streaming,check,pdf,text]" \
+RUN pip install --no-cache-dir "$(ls /wheels/*.whl)[mcp,yaml,excel,parquet,orc,avro,duckdb,stats,mongodb,streaming,check,pdf,text]" \
     && if [ -n "$MODEL" ]; then python -m spacy download "$MODEL"; fi \
     && rm -rf /wheels
 USER datanyx

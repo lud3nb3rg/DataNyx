@@ -45,8 +45,12 @@ class ParquetSource(Source):
             raise SourceError(f"input isn't a readable Parquet file ({type(error).__name__})") from None
 
         notes: list[str] = []
-        record = _struct(list(arrow_schema), "$[]", policy, notes, pa)
-        return unnamed(self.kind, Array(record), tuple(notes))
+        return unnamed(self.kind, arrow_table_node(arrow_schema, policy, notes, pa), tuple(notes))
+
+
+def arrow_table_node(arrow_schema, policy: KeyPolicy, notes: list[str], pa) -> Node:
+    """A table of records, from an Arrow schema. Shared with the other Arrow-backed formats (ORC)."""
+    return Array(_struct(list(arrow_schema), "$[]", policy, notes, pa))
 
 
 def _struct(fields, path: str, policy: KeyPolicy, notes: list[str], pa) -> Object:

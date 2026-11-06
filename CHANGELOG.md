@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added sources: Avro (`.[avro]`), ORC (`.[orc]`), DuckDB (`.[duckdb]`), SAS, Stata and SPSS (`.[stats]`), MongoDB (`.[mongodb]`, sampled from documents), FHIR (split by resource type) and HL7 v2 (one entity per segment). Schemas come from headers, footers or catalogs wherever the format has them; enum labels and value labels are never shown.
 - Added a release workflow (PyPI trusted publishing and a `ghcr.io` image on a version tag), a `Dockerfile`, a pre-commit hook (`datanyx-scan`) and a GitHub Action (`scan` or `diff`). `datanyx scan` now takes several paths.
 - Added `datanyx mcp --http HOST:PORT`: the MCP server over HTTP with a required bearer token, read from an environment variable.
 - CI: newer `checkout` and `setup-uv` actions, `ubuntu-24.04`, a package/Docker build job, and tests that need the spaCy model now skip where it isn't installed.

@@ -96,6 +96,8 @@ class SqlSource(Source):
     kind = "sql"
 
     def matches(self, target: str) -> bool:
+        if target.startswith(("mongodb://", "mongodb+srv://")):
+            return False  # MongoDB has its own source.
         return (
             target.startswith(_ENV_PREFIX)
             or "://" in target

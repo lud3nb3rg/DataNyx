@@ -23,7 +23,7 @@ datanyx schema input [options]
 | `input` | file or folder to describe, "-" for stdin, a database URL, or env:NAME to read the URL from an environment variable (keeps passwords off the command line) |
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
-| `--source` `SOURCE` | input type (default: detect). Choices: `csv`, `excel`, `json`, `jsonl`, `parquet`, `sql`, `tsv`, `xml`, `yaml`. |
+| `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
 | `--keep-name` `NAME` | show this exact key, table or column name even if it looks like data (repeatable); --map-path still hides it |
 | `--format` `FORMAT` | output format (default: json-schema). Choices: `json-schema`, `pydantic`, `sql`, `text`, `typescript`. |
@@ -42,7 +42,7 @@ datanyx synth input [options]
 | `input` | file or folder to describe, "-" for stdin, a database URL, or env:NAME to read the URL from an environment variable (keeps passwords off the command line) |
 | `-r`, `--recursive` | when the input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to describe (default: the database's default) |
-| `--source` `SOURCE` | input type (default: detect). Choices: `csv`, `excel`, `json`, `jsonl`, `parquet`, `sql`, `tsv`, `xml`, `yaml`. |
+| `--source` `SOURCE` | input type (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
 | `--keep-name` `NAME` | show this exact key, table or column name even if it looks like data (repeatable); --map-path still hides it |
 | `--rows` `ROWS` | rows per table (default: 100) |
@@ -168,7 +168,7 @@ datanyx check code [options]
 | `--strict` | exit with 1 for warnings too |
 | `-r`, `--recursive` | when an input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to use (default: the database's default) |
-| `--source` `SOURCE` | input type for --against (default: detect). Choices: `csv`, `excel`, `json`, `jsonl`, `parquet`, `sql`, `tsv`, `xml`, `yaml`. |
+| `--source` `SOURCE` | input type for --against (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--map-path` `PATH` | hide all keys or columns at a path (repeatable) |
 | `--keep-name` `NAME` | show this name even if it looks like data (repeatable) |
 
@@ -287,7 +287,7 @@ datanyx diff old new [options]
 | `--format` `FORMAT` | output format (default: text). Choices: `text`, `json`. |
 | `-r`, `--recursive` | when an input is a folder, also read its subfolders |
 | `--schema` `SCHEMA` | database schema to use (default: the database's default) |
-| `--source` `SOURCE` | input type for live inputs (default: detect). Choices: `csv`, `excel`, `json`, `jsonl`, `parquet`, `sql`, `tsv`, `xml`, `yaml`. |
+| `--source` `SOURCE` | input type for live inputs (default: detect). Choices: `avro`, `csv`, `duckdb`, `excel`, `fhir`, `hl7`, `json`, `jsonl`, `mongodb`, `orc`, `parquet`, `sas`, `spss`, `sql`, `stata`, `tsv`, `xml`, `yaml`. |
 | `--map-path` `PATH` | hide all keys or columns at a path (repeatable) |
 | `--keep-name` `NAME` | show this name even if it looks like data (repeatable) |
 

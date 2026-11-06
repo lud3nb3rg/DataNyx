@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from ..privacy import KeyPolicy
 from ..schema import DataSchema
+from .avro_source import AvroSource
 from .base import Source, SourceError
 from .delimited_source import DelimitedSource
 from .directory import describe_directory
+from .duckdb_source import DuckDbSource
 from .excel_source import ExcelSource
+from .fhir_source import FhirSource
+from .hl7_source import Hl7Source
 from .json_source import JsonLinesSource, JsonSource
+from .mongodb_source import MongoDbSource
+from .orc_source import OrcSource
 from .parquet_source import ParquetSource
 from .sql_source import SqlSource
+from .stats_source import SasSource, SpssSource, StataSource
 from .xml_source import XmlSource
 from .yaml_source import YamlSource
 
@@ -18,6 +25,7 @@ _SOURCES: dict[str, Source] = {
     source.kind: source
     for source in (
         SqlSource(),
+        FhirSource(),  # Before JSON: `.fhir.json` is a JSON file with a more specific reader.
         JsonSource(),
         JsonLinesSource(),
         DelimitedSource("csv", ",", (".csv",)),
@@ -26,6 +34,14 @@ _SOURCES: dict[str, Source] = {
         ExcelSource(),
         YamlSource(),
         XmlSource(),
+        AvroSource(),
+        OrcSource(),
+        DuckDbSource(),
+        MongoDbSource(),
+        StataSource(),
+        SpssSource(),
+        SasSource(),
+        Hl7Source(),
     )
 }
 

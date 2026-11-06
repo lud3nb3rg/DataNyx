@@ -35,7 +35,12 @@ excel = ["openpyxl>=3.1"]
 yaml = ["pyyaml>=6"]
 streaming = ["ijson>=3.2"]
 mcp = ["mcp>=1.2"]
-all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp,check,pdf,presidio]"]
+avro = ["fastavro>=1.9"]
+orc = ["pyarrow>=14"]
+duckdb = ["duckdb>=1.0"]
+stats = ["pyreadstat>=1.2"]
+mongodb = ["pymongo>=4.6"]
+all = ["datanyx[postgres,mysql,mssql,oracle,parquet,excel,yaml,streaming,mcp,check,pdf,presidio,avro,orc,duckdb,stats,mongodb]"]
 text = ["spacy>=3.7"]
 check = [
     "sqlglot>=25",
@@ -56,6 +61,7 @@ dev = [
     "mypy>=1.10",
     "types-PyYAML",
     "pandas>=2.3.3",
+    "mongomock>=4.1",
 ]
 docs = [
     "mkdocs>=1.6",
