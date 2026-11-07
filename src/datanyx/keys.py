@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from itertools import combinations
 from typing import Any
@@ -250,13 +251,14 @@ class _Labels:
 
 
 class TableEvidence:
-    def __init__(self, keys: bool = True, profiles: bool = False, public: frozenset[str] = frozenset()) -> None:
+    def __init__(self, keys: bool = True, profiles: bool = False, resolve: Callable[[str], bool] | None = None) -> None:
         self.rows = 0
         #: Set when only the first rows were read. What holds for them may not hold for the rest, so nothing is claimed.
         self.partial = False
         self._keys = keys
         self._profiling = profiles
-        self._public = public
+        self._resolve = resolve  # Whether the owner declared this column of this table public.
+        self._is_public: dict[str, bool] = {}
         self.columns: dict[str, _Column | None] = {}  # None: not a key-looking name.
         self.pairs: dict[tuple[str, str], _Pair] = {}
         self.profiles: dict[str, _Profile] = {}
@@ -270,11 +272,15 @@ class TableEvidence:
         for name, value in record.items():
             if not isinstance(name, str):
                 continue
-            if name in self._public:
-                collector = self.labels.get(name)
-                if collector is None:
-                    collector = self.labels[name] = _Labels()
-                collector.add(value)
+            if self._resolve is not None:
+                public = self._is_public.get(name)
+                if public is None:
+                    public = self._is_public[name] = self._resolve(name)
+                if public:
+                    collector = self.labels.get(name)
+                    if collector is None:
+                        collector = self.labels[name] = _Labels()
+                    collector.add(value)
             if self._profiling:
                 profile = self.profiles.get(name)
                 if profile is None:
@@ -376,14 +382,41 @@ class Evidence:
         self.scope: str | None = None
         self.keys = keys
         self.profiles = profiles
+        #: What the owner declared public: `column`, or `table.column` to limit it to one table.
         self.public = public
+        #: The declarations that matched a column somewhere, so the ones that matched nothing can be reported.
+        self.matched: set[str] = set()
+        #: The file being described when it is a single file, so `orders.status` can name it. Used to match; never output.
+        self.file: str | None = None
         self.tables: dict[str | None, TableEvidence] = {}
 
     def table(self, name: str | None) -> TableEvidence:
         key = name if self.scope is None else (self.scope if name is None else f"{self.scope}{_SEPARATOR}{name}")
         if key not in self.tables:
-            self.tables[key] = TableEvidence(self.keys, self.profiles, self.public)
+            self.tables[key] = TableEvidence(self.keys, self.profiles, self._resolver(key) if self.public else None)
         return self.tables[key]
+
+    def _resolver(self, key: str | None) -> Callable[[str], bool]:
+        tables = _table_names(key) | _table_names(self.file)
+
+        def resolve(column: str) -> bool:
+            hits = [entry for entry in (column, *(f"{table}.{column}" for table in tables)) if entry in self.public]
+            self.matched.update(hits)
+            return bool(hits)
+
+        return resolve
+
+
+def _table_names(identity: str | None) -> set[str]:
+    """What a table can be called in `table.column`: `data/customers.csv`, `customers.csv`, `customers`, and a sheet's name."""
+    names: set[str] = set()
+    if not identity:
+        return names
+    for piece in {identity, *identity.split(_SEPARATOR)}:
+        base = piece.rsplit("/", 1)[-1]
+        names |= {piece, base, os.path.splitext(base)[0]}
+    names.discard("")
+    return names
 
 
 def apply_evidence(schema: DataSchema, evidence: Evidence) -> DataSchema:
@@ -418,14 +451,10 @@ def apply_evidence(schema: DataSchema, evidence: Evidence) -> DataSchema:
     labelled: list[dict[str, tuple[str, ...]]] = [{} for _ in entities]
     label_notes: list[str] = []
     if evidence.public:
-        found: set[str] = set()
         for i, table in enumerate(tables):
             if table is None:
                 continue
             for name in fields[i]:
-                if name not in evidence.public:
-                    continue
-                found.add(name)
                 outcome = table.label_values(name)
                 if outcome is None:
                     continue
@@ -439,7 +468,7 @@ def apply_evidence(schema: DataSchema, evidence: Evidence) -> DataSchema:
                         )
                 else:
                     label_notes.append(f"{where}: values not listed, because {reason}")
-        missing = sorted(evidence.public - found)
+        missing = sorted(evidence.public - evidence.matched)
         if missing:
             label_notes.append(f"declared public but not found as a column: {', '.join(missing)}")
     listed = sum(len(items) for items in labelled)
@@ -468,7 +497,15 @@ def apply_evidence(schema: DataSchema, evidence: Evidence) -> DataSchema:
     if profiled:
         notes.append("column hints are ranges taken from the values; they describe the data as it was read")
     if listed:
-        shown = ", ".join(sorted({name for items in labelled for name in items}))
+        shown = ", ".join(
+            sorted(
+                {
+                    f"{name} (in {entities[i].name})" if len(entities) > 1 and entities[i].name else name
+                    for i, items in enumerate(labelled)
+                    for name in items
+                }
+            )
+        )
         notes.append(
             f"the values of these columns are listed because their owner declared them public: {shown}. "
             "They are sorted and never counted, and no other value is shown"

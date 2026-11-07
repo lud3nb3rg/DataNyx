@@ -122,6 +122,58 @@ def test_a_file_read_only_in_part_lists_nothing(orders):
     assert any("only part of the file was read" in note for note in schema.notes)
 
 
+@pytest.fixture
+def two_tables(tmp_path):
+    for name in ("customers", "orders"):
+        rows = [[i, ["US", "FR", "DE"][i % 3], ["open", "closed"][i % 2]] for i in range(1, 61)]
+        write(tmp_path / f"{name}.csv", ["id", "country", "status"], rows)
+    return tmp_path
+
+
+def listed(schema):
+    return {e.name: sorted(n for n, f in getattr(e.node, "items", e.node).fields.items() if f.values) for e in schema.entities}
+
+
+def test_a_plain_name_applies_to_every_table_that_has_the_column(two_tables):
+    schema = extract(str(two_tables), policy=public("country"))
+    assert listed(schema) == {"customers.csv": ["country"], "orders.csv": ["country"]}
+
+
+def test_table_dot_column_limits_it_to_one_table(two_tables):
+    for entry in ("customers.country", "customers.csv.country"):
+        schema = extract(str(two_tables), policy=public(entry))
+        assert listed(schema) == {"customers.csv": ["country"], "orders.csv": []}, entry
+        note = next(n for n in schema.notes if "declared them public" in n)
+        assert "country (in customers.csv)" in note and "orders.csv" not in note
+
+
+def test_a_qualified_name_works_for_a_single_file_by_its_own_name(two_tables):
+    (only,) = extract(str(two_tables / "orders.csv"), policy=public("orders.status")).entities
+    assert getattr(only.node, "items", only.node).fields["status"].values == ("closed", "open")
+    wrong = extract(str(two_tables / "orders.csv"), policy=public("customers.status"))
+    (only,) = wrong.entities
+    assert not any(f.values for f in getattr(only.node, "items", only.node).fields.values())
+    assert any("not found as a column: customers.status" in n for n in wrong.notes)
+
+
+def test_a_qualified_name_can_name_a_sheet(tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+    book = openpyxl.Workbook()
+    first = book.active
+    first.title = "people"
+    second = book.create_sheet("orders")
+    for sheet in (first, second):
+        sheet.append(["id", "country"])
+        for i in range(1, 61):
+            sheet.append([i, ["US", "FR", "DE"][i % 3]])
+    path = tmp_path / "book.xlsx"
+    book.save(path)
+    schema = extract(str(path), policy=public("orders.country"))
+    assert [e.name for e in schema.entities if any(f.values for f in getattr(e.node, "items", e.node).fields.values())] == [
+        next(e.name for e in schema.entities if e.name and e.name.endswith("orders"))
+    ]
+
+
 def test_a_declared_name_that_matches_nothing_is_reported(orders):
     schema = extract(str(orders), policy=public("country", "contry"))
     assert any("not found as a column: contry" in note for note in schema.notes)

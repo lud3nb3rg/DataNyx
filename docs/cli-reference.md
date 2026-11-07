@@ -33,7 +33,7 @@ datanyx schema input [options]
 | `--exclude` `PATTERN` | leave out tables (or files) whose names match this glob (repeatable) |
 | `--max-tables` `N` | describe at most N tables and say how many were left out; use --format summary to list them all |
 | `--column-hints` | also give each column coarse ranges: how many distinct values, how often it is missing, how long its text gets (CSV, TSV, JSON Lines, JSON and Excel) |
-| `--public-column` `NAME` | list the values of this column (repeatable), for a column whose labels are safe to show, such as a country or a status; sorted, never counted, and only if there are few and they look like plain words. The one option that shows values (CSV, TSV, JSON Lines, JSON and Excel) |
+| `--public-column` `NAME` | list the values of this column (repeatable), for a column whose labels are safe to show, such as a country or a status; NAME is in every table that has it, TABLE.NAME in one table only; sorted, never counted, and only if there are few and they look like plain words. The one option that shows values (CSV, TSV, JSON Lines, JSON and Excel) |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
 | `--keep-name` `NAME` | show this exact key, table or column name even if it looks like data (repeatable); --map-path still hides it |
 | `--format` `FORMAT` | output format (default: json-schema). Choices: `json-schema`, `pydantic`, `sql`, `summary`, `text`, `typescript`. |
@@ -62,7 +62,7 @@ datanyx synth input [options]
 | `--exclude` `PATTERN` | leave out tables (or files) whose names match this glob (repeatable) |
 | `--max-tables` `N` | describe at most N tables and say how many were left out; use --format summary to list them all |
 | `--column-hints` | also give each column coarse ranges: how many distinct values, how often it is missing, how long its text gets (CSV, TSV, JSON Lines, JSON and Excel) |
-| `--public-column` `NAME` | list the values of this column (repeatable), for a column whose labels are safe to show, such as a country or a status; sorted, never counted, and only if there are few and they look like plain words. The one option that shows values (CSV, TSV, JSON Lines, JSON and Excel) |
+| `--public-column` `NAME` | list the values of this column (repeatable), for a column whose labels are safe to show, such as a country or a status; NAME is in every table that has it, TABLE.NAME in one table only; sorted, never counted, and only if there are few and they look like plain words. The one option that shows values (CSV, TSV, JSON Lines, JSON and Excel) |
 | `--map-path` `PATH` | hide all keys of the object at PATH, e.g. "$.users" or "$[].tags", or all columns of a table, e.g. "$.users" (repeatable) |
 | `--keep-name` `NAME` | show this exact key, table or column name even if it looks like data (repeatable); --map-path still hides it |
 | `--rows` `ROWS` | rows per table (default: 100) |
@@ -380,7 +380,7 @@ datanyx mcp [options]
 | `--scale-hints` | give agents each table's size as an order of magnitude |
 | `--infer-keys` | give agents yes/no guesses about unique columns and joins |
 | `--column-hints` | give agents coarse ranges for each column: distinct values, missing values, text length |
-| `--public-column` `NAME` | let agents see the values of this column, for one whose labels are safe to show, such as a country or a status (repeatable; sorted, never counted) |
+| `--public-column` `NAME` | let agents see the values of this column, for one whose labels are safe to show, such as a country or a status (repeatable; NAME or TABLE.NAME; sorted, never counted) |
 | `--views` | let agents see database views (names and columns only) |
 | `--max-rows` `N` | read at most N rows of a data file, so one huge file can't hold the server up (sizes and key guesses are then left out) |
 | `--debug-log` `FILE` | append where each unexpected failure happened (file, line and function, never a message or value) to this private file |

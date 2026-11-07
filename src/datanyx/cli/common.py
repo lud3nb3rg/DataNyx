@@ -87,6 +87,7 @@ def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
         "--public-column", action="append", default=[], metavar="NAME",
         help=(
             "list the values of this column (repeatable), for a column whose labels are safe to show, such as a country or a status; "
+            "NAME is in every table that has it, TABLE.NAME in one table only; "
             "sorted, never counted, and only if there are few and they look like plain words. The one option that shows values "
             "(CSV, TSV, JSON Lines, JSON and Excel)"
         ),

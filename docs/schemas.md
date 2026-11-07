@@ -251,11 +251,15 @@ country: string  -- values: "CA" | "Canada" | "DE" | "FR" | "France" | "US" | "U
 status: string  -- values: "cancelled" | "completed" | "refunded"
 ```
 
+`--public-column customers.country` limits it to one table: `customers`, `customers.csv`, a sheet's name, or the file you passed.
+A plain name applies to every table that has a column of that name, so qualify it when the name is common (`status`, `name`) and only
+one table's should be shown. A name that matches nothing is reported in a note.
+
 This is the one option that shows values, so it works only for the columns you name, and it has safety nets:
 
 | Rule | Why |
 |---|---|
-| Only the columns you name, by exact name (in any table that has one) | Nothing else is ever listed |
+| Only the columns you name: `country` (in every table that has one) or `customers.country` (only in that table) | Nothing else is ever listed |
 | A label must be seen at least 3 times; rarer values are left out, and a note says some were | A one-off value is the one most likely to identify someone |
 | At most 25 labels, else the column isn't listed | A real category is short; a long list is data |
 | A value must look like a plain label: up to 40 characters of letters, digits, spaces and `. , & + ( ) / ' -`, and not shaped like an email, ID, phone number, long number or token | Catches a column declared by mistake, and keeps a value from breaking a comment in the output |

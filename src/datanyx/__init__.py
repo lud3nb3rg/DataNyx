@@ -37,6 +37,9 @@ def extract(
         policy = replace(
             policy, evidence=Evidence(keys=policy.infer_keys, profiles=policy.column_hints, public=policy.public_columns)
         )
+        if policy.public_columns and not os.path.isdir(target):
+            # So `orders.status` can name a single file. Used only to match a declaration; never output (a URL's query is dropped).
+            policy.evidence.file = os.path.basename(target.split("?")[0].replace("\\", "/"))
     try:
         if os.path.isdir(target):
             if namespace is not None:

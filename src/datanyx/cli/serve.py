@@ -86,7 +86,7 @@ def add_mcp(commands: argparse._SubParsersAction) -> None:
     serve.add_argument("--column-hints", action="store_true", help="give agents coarse ranges for each column: distinct values, missing values, text length")
     serve.add_argument(
         "--public-column", action="append", default=[], metavar="NAME",
-        help="let agents see the values of this column, for one whose labels are safe to show, such as a country or a status (repeatable; sorted, never counted)",
+        help="let agents see the values of this column, for one whose labels are safe to show, such as a country or a status (repeatable; NAME or TABLE.NAME; sorted, never counted)",
     )
     serve.add_argument("--views", action="store_true", help="let agents see database views (names and columns only)")
     serve.add_argument(
