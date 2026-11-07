@@ -53,6 +53,9 @@ $ datanyx anonymize call-notes.txt
 The agent sees the shape of the table and the story in the text, and none of the values. It can also
 try its code on [fake rows](docs/synthetic-data.md) generated from the schema.
 
+Does it work? [An end-to-end demo](examples/demo/README.md) has agents write analysis code from a schema alone,
+then runs it on messy data: 13 of 15 were right, and both failures were silent wrong answers rather than crashes.
+
 ## What it guarantees, and what it doesn't
 
 - **The schema contains no values.** That is enforced by design and tested hard. Field names are still shown, so

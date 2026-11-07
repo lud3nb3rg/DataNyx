@@ -43,6 +43,9 @@ jobs:
       # Each worker loads the models, so two rather than one per core.
       - run: uv run pytest -n 2 tests/test_text.py tests/test_text_model.py
       - run: uv run pytest -n 2 -m needs_model
+      # The detection accuracy numbers (docs/anonymization.md), measured on this commit. The test above fails if
+      # they drop; the table is also shown on the run's summary page.
+      - run: uv run python tools/ner_benchmark.py >> "$GITHUB_STEP_SUMMARY"
 
   # The package builds, its metadata is valid, and the container image builds and runs.
   package:

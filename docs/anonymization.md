@@ -126,20 +126,39 @@ datanyx restore summary.txt --mapping notes.mapping.json -o summary.real.txt
 > **Treat the output as a draft to review, not a guarantee.** A schema contains no data by
 > construction, but anonymized text is your original text minus whatever got detected.
 
-These are results for `en_core_web_lg` on 72 invented names from 12 regions in 6 sentence
-templates. It's a small synthetic test, not a real-world accuracy figure:
+These are results for `en_core_web_lg` on 72 invented names, six from each of 12 regions, each placed in six sentences and
+written the six ways below. It's a small synthetic test, not a real-world accuracy figure. The corpus and the code are in
+[`tools/ner_benchmark.py`](https://github.com/lud3nb3rg/DataNyx/blob/main/tools/ner_benchmark.py), CI runs it on every
+change and fails if a number drops, and the tables are generated from it (`uv run python tools/ner_benchmark.py --write`).
 
+<!-- ner-benchmark:start -->
 | Name appears as | Hidden |
 |---|---|
-| First name only | 98.6% |
-| Full name in ALL CAPS | 97.0% |
-| Full name, capitalized normally | 95.6% |
-| Whole line in lowercase | 94.2% |
-| Whole line in ALL CAPS | 93.1% |
-| Full name in lowercase, in a normally capitalized sentence | 83.3% |
+| First name only | 99.5% |
+| Full name, capitalized normally | 98.8% |
+| Full name in ALL CAPS | 98.1% |
+| Whole line in lowercase | 94.4% |
+| Full name in lowercase, in a normally capitalized sentence | 89.8% |
+| Whole line in ALL CAPS | 88.2% |
 
-- **Unfamiliar names get missed more often.** Most misses were East Asian and Pacific
-  names, or names with accents. Don't rely on this for one population without testing it.
+| Names from | Hidden, over all six ways of writing them |
+|---|---|
+| French | 85.2% |
+| Pacific | 85.2% |
+| Nigerian | 92.6% |
+| Polish | 93.1% |
+| Indian | 95.4% |
+| Korean | 95.8% |
+| Spanish | 96.8% |
+| English | 97.2% |
+| Chinese | 98.6% |
+| Japanese | 98.6% |
+| German | 99.5% |
+| Arabic | 100.0% |
+<!-- ner-benchmark:end -->
+
+- **Unfamiliar names get missed more often.** In this corpus the misses were mostly French names with accents
+  and Pacific names. Don't rely on this for one population without testing it.
 - **Context isn't detected.** "The CEO's daughter" or a rare diagnosis in a small town can
   identify someone without containing a name, and nothing here catches that.
 - **It over-hides sometimes.** Words like `quarterly` count as dates, and capitalized words
