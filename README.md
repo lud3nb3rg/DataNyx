@@ -53,8 +53,9 @@ $ datanyx anonymize call-notes.txt
 The agent sees the shape of the table and the story in the text, and none of the values. It can also
 try its code on [fake rows](docs/synthetic-data.md) generated from the schema.
 
-Does it work? [An end-to-end demo](examples/demo/README.md) has agents write analysis code from a schema alone,
-then runs it on messy data: 13 of 15 were right, and both failures were silent wrong answers rather than crashes.
+Does it work? [An end-to-end demo](examples/demo/README.md) has agents write analysis code from a schema alone, then runs it
+on messy data. On ordinary data 14 of 15 were right first time (15 of 15 after one fix from a scrubbed error); on a deliberately
+worst-case dataset 13 of 15, and 8 of 15 if the agent isn't told the data is messy. The failures were silent wrong answers, not crashes.
 
 ## What it guarantees, and what it doesn't
 

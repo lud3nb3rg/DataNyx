@@ -1,9 +1,15 @@
 """A seeded, messy customers-and-orders dataset, and the true answers to the demo's questions.
 
-The mess is the kind real exports have and a schema can't show: dates in three formats, a country
-spelled four ways, amounts that are sometimes text ("$1,234.50") or "N/A", statuses in mixed case,
-duplicated order rows, and orders for customers that don't exist. The answers are computed from the clean
-records *before* the mess is applied, so they don't depend on any cleaning code.
+Two levels of mess (`mess=`), with the same records and the same true answers:
+
+- "worst" (the default): every kind of mess a real export has and a schema can't show, stacked on the same tables:
+  dates in three formats, a country spelled four ways, amounts that are sometimes text ("$1,234.50") or "N/A",
+  statuses and plans in mixed case, duplicated order rows, and orders for customers that don't exist.
+- "typical": the problems an ordinary export usually has. One date format, one spelling per country, one case per
+  status and plan, no duplicate rows, amounts as plain numbers with some left empty, and a few orders for customers
+  that don't exist.
+
+The answers are computed from the clean records *before* the mess is applied, so they don't depend on any cleaning code.
 """
 
 from __future__ import annotations
@@ -28,8 +34,10 @@ PLANS = ["free", "pro", "team"]
 STATUSES = ["completed", "completed", "completed", "refunded", "pending", "cancelled"]
 
 
-def generate(out: Path, seed: int = 7, customers: int = 400, orders: int = 3000) -> dict:
+def generate(out: Path, seed: int = 7, customers: int = 400, orders: int = 3000, mess: str = "worst") -> dict:
     """Write customers.csv and orders.csv into `out`; return the true answers."""
+    if mess not in ("worst", "typical"):
+        raise ValueError(f"mess must be 'worst' or 'typical', not {mess!r}")
     rng = random.Random(seed)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -79,7 +87,8 @@ def generate(out: Path, seed: int = 7, customers: int = 400, orders: int = 3000)
         "avg_by_plan": {plan: round(sum(v) / len(v), 2) for plan, v in sorted(amounts_by_plan.items())},
     }
 
-    # Now the mess.
+    # Now the mess. (The draws below are unchanged for "worst", so its files are the same as before `mess` existed.)
+    worst = mess == "worst"
     formats = ["%Y-%m-%d", "%d.%m.%Y", "%b %d, %Y"]
     with open(out / "customers.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -88,13 +97,15 @@ def generate(out: Path, seed: int = 7, customers: int = 400, orders: int = 3000)
             w.writerow(
                 [
                     p["id"], p["email"], p["full_name"],
-                    p["signup"].strftime(rng.choices(formats, weights=[6, 3, 1])[0]),
-                    rng.choice(COUNTRIES[p["country"]]),
-                    rng.choice([p["plan"], p["plan"].capitalize()]),
+                    p["signup"].strftime(rng.choices(formats, weights=[6, 3, 1])[0] if worst else formats[0]),
+                    rng.choice(COUNTRIES[p["country"]]) if worst else p["country"],
+                    rng.choice([p["plan"], p["plan"].capitalize()]) if worst else p["plan"],
                 ]
             )
 
     def money(o):
+        if not worst:
+            return f"{o['amount']:.2f}" if o["has_amount"] else ""
         if not o["has_amount"]:
             return rng.choice(["", "N/A"])
         return rng.choices([f"{o['amount']:.2f}", f"${o['amount']:,.2f}"], weights=[7, 3])[0]
@@ -102,9 +113,11 @@ def generate(out: Path, seed: int = 7, customers: int = 400, orders: int = 3000)
     rows = []
     for o in clean_orders:
         status = o["status"]
-        status = rng.choices([status, status.upper(), status.capitalize()], weights=[7, 1, 2])[0]
+        if worst:
+            status = rng.choices([status, status.upper(), status.capitalize()], weights=[7, 1, 2])[0]
         rows.append([o["order_id"], o["customer_id"], money(o), status, o["at"].isoformat(sep=" ")])
-    rows += [rng.choice(rows) for _ in range(int(orders * 0.03))]  # Exact duplicate rows.
+    if worst:
+        rows += [rng.choice(rows) for _ in range(int(orders * 0.03))]  # Exact duplicate rows.
     rng.shuffle(rows)
     with open(out / "orders.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -117,4 +130,4 @@ if __name__ == "__main__":
     import sys
 
     target = Path(sys.argv[1] if len(sys.argv) > 1 else "data")
-    print(json.dumps(generate(target), indent=2))
+    print(json.dumps(generate(target, mess=sys.argv[2] if len(sys.argv) > 2 else "worst"), indent=2))

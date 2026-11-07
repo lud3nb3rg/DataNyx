@@ -11,7 +11,7 @@ path to it, and the generator (`make_data.py`) was moved out of the repository w
 >   random strings and numbers, only the columns match. Use them to check that your script runs.
 >
 > The real data folder will contain `customers.csv` and `orders.csv` with the schema in `schema.txt`.
-> **Real exports are messy, as real exports are.**
+> **Real exports are messy, as real exports are.** *(Left out in the "doesn't say so" runs.)*
 >
 > TASK: `{TASK}` (the `ask` of one entry in `tasks.json`)
 >

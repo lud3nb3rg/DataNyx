@@ -1,7 +1,8 @@
 """Run the demo: brief an agent with a schema and fake rows only, then run what it wrote on the real data.
 
     uv run python examples/demo/run_demo.py prepare WORKDIR    # schema + fake rows into WORKDIR/briefing
-                                                               # (add --column-hints to put the hints in the schema)
+                                                               # (add --column-hints to put the hints in the schema,
+                                                               #  --mess typical for the milder dataset)
     ... an agent writes WORKDIR/trials/<task>_<n>/solution.py from the briefing alone ...
     uv run python examples/demo/run_demo.py grade WORKDIR      # run every solution on the real data, check the answers
     uv run python examples/demo/run_demo.py report WORKDIR     # the table
@@ -31,18 +32,19 @@ def _run(args: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", **kwargs)
 
 
-def prepare(work: Path, hints: bool = False) -> None:
+def prepare(work: Path, hints: bool = False, mess: str = "worst") -> None:
     briefing = work / "briefing"
     shutil.rmtree(briefing, ignore_errors=True)
     briefing.mkdir(parents=True)
     (work / "trials").mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         data = Path(tmp) / "data"
-        generate(data)
+        generate(data, mess=mess)
         schema = _run([*DATANYX, "schema", str(data), "--format", "text", *(["--column-hints"] if hints else [])])
         (briefing / "schema.txt").write_text(schema.stdout, encoding="utf-8")
         _run([*DATANYX, "synth", str(data), "--rows", "15", "--seed", "1", "--format", "csv", "-o", str(briefing / "sample")])
     shutil.copy(HERE / "tasks.json", briefing / "tasks.json")
+    (work / "config.json").write_text(json.dumps({"mess": mess}), encoding="utf-8")
     print(f"briefing written to {briefing}; the real data is gone again")
 
 
@@ -75,7 +77,8 @@ def check(task: str, answer: dict, truth: dict) -> bool:
 def grade(work: Path) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         data = Path(tmp) / "data"
-        truth = generate(data)
+        config = work / "config.json"
+        truth = generate(data, mess=json.loads(config.read_text(encoding="utf-8"))["mess"] if config.exists() else "worst")
         for trial in sorted(p for p in (work / "trials").iterdir() if (p / "solution.py").exists()):
             task = trial.name.split("_")[0]
             saved = trial / "stdout.real.txt"
@@ -135,10 +138,16 @@ def report(work: Path) -> None:
 
 if __name__ == "__main__":
     commands = {"prepare": prepare, "grade": grade, "report": report}
-    args = [a for a in sys.argv[1:] if a != "--column-hints"]
-    if len(args) != 2 or args[0] not in commands:
+    argv = sys.argv[1:]
+    mess = "worst"
+    if "--mess" in argv:
+        at = argv.index("--mess")
+        mess = argv[at + 1] if at + 1 < len(argv) else ""
+        del argv[at : at + 2]
+    args = [a for a in argv if a != "--column-hints"]
+    if len(args) != 2 or args[0] not in commands or mess not in ("worst", "typical"):
         sys.exit(__doc__)
     if args[0] == "prepare":
-        prepare(Path(args[1]), hints="--column-hints" in sys.argv)
+        prepare(Path(args[1]), hints="--column-hints" in sys.argv, mess=mess)
     else:
         commands[args[0]](Path(args[1]))

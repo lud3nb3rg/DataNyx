@@ -26,7 +26,10 @@ Five questions, each with a true answer computed from the clean records before t
 same tables, and the questions are chosen to trip over them. Most real data is cleaner than this, so treat the
 failure rate below as an upper bound for ordinary exports, not a typical figure.
 
-## Result (one run, 15 agents: 5 questions x 3 agents each, Claude Sonnet)
+## Result: first run (15 agents: 5 questions x 3 agents each, Claude Sonnet)
+
+Worst-case data, and a prompt that tells the agent the data is messy. The runs after it, which vary the data and the
+prompt, are [below](#more-runs-different-data-and-a-different-prompt).
 
 | Question | Agent 1 | Agent 2 | Agent 3 |
 |---|---|---|---|
@@ -48,7 +51,39 @@ What that says:
   answers.** A person who knows the data has to sanity-check the answer, which is the step the
   [container setup](../../docs/agents.md#hard-isolation-with-containers) leaves to you on purpose.
 
-## Second experiment: a "values differ by case or spacing" hint (tried, and removed)
+## More runs: different data and a different prompt
+
+The same five questions, three agents each, 15 runs per row. `prepare WORKDIR --mess typical` makes the milder dataset (one
+date format, one spelling per country, one case per status and plan, no duplicate rows, plain-number amounts with some left
+empty, a few orphan orders). The true answers are the same for both datasets.
+
+| Data | Prompt | Right first time | What went wrong |
+|---|---|---|---|
+| Worst case | says the data is messy | **13 of 15** | 2 silent wrong answers (countries) |
+| Worst case | **doesn't say so** | **8 of 15** | 7 silent wrong answers, 0 crashes |
+| Typical | says the data is messy | **14 of 15** (15 of 15 after one fix) | 1 crash, fixed from the scrubbed error |
+
+By question, without the warning (worst-case data): signups 3 of 3, customers-who-never-ordered 3 of 3, revenue 2 of 3, **plans 0 of 3,
+countries 0 of 3**.
+
+What the runs show:
+
+- **Telling the agent the data is messy is the biggest lever we found**: the same data went from 13 of 15 to 8 of 15 without it.
+  Without the warning, agents didn't deduplicate (one revenue total was about 2% too high), didn't fold case on `plan` (all three
+  reported six plans, `Free` and `free` apart), and only folded case on `country`. All seven wrong runs finished without an error.
+  A person who knows the data is messy would say so; one who doesn't would be getting these.
+- **On ordinary data it mostly works.** 14 of 15 on the milder dataset, and the one failure was a crash, not a wrong answer. The
+  silent wrong answers belong to the worst case and to the missing warning.
+- **The debugging loop worked once.** The one crash (a `NaN` reaching a string function) was shown to a fresh agent as
+  `datanyx run` would show it: the exception type, the file and line, and the code, with the home folder and username removed.
+  That was enough: the agent fixed it without any data, and the corrected script gave the right answer. One case proves the loop
+  can work, not how often it does.
+- **On the worst-case data, countries is the hardest question, for one reason.** Grouping on the lowercased country (I checked this
+  against the data) gives `us, ca, gb`, because it merges `US` with `us` but leaves `USA` and `United States` as separate countries,
+  so each country's revenue stays split across its spellings. Nine runs gave exactly `["US","ca","gb"]`: all three without the
+  warning and all six that were given a hint about it (below). Telling the schema about the case variants didn't change that.
+
+## A "values differ by case or spacing" hint (tried, and removed)
 
 I tried adding a `--column-hints` phrase for text columns whose values differ only by case or spacing
 (`country: ... some values differ only by case or spacing`). The same questions, the same prompt apart from a sentence
@@ -84,12 +119,13 @@ Read these before quoting the numbers.
 
 - **The prompt warns the agent that the data is messy** ("Real exports are messy"). That is deliberate: someone who
   hands real data to an agent knows it is not clean, and would say so. Every agent responded with defensive code.
-  The pass rate without the warning wasn't measured.
+  Without the warning the pass rate on the same data fell from 13 of 15 to 8 of 15 (above). The warning was only varied
+  on the worst-case data.
 - **15 runs, one model, one dataset I designed.** The mess is the kind a model expects (dates, currency
   symbols, case). Mess it doesn't think to guard against (a unit change halfway through a column, an `N/A` that means
   something, two meanings of one status) isn't tested.
-- **No agent crashed, so the retry loop wasn't exercised.** That the scrubbed feedback is enough to fix a crash is
-  tested elsewhere (`docs/debugging.md`), not here.
+- **The retry loop was exercised once** (above), on the milder dataset. Across the 66 agent runs in all the experiments on this page, 1 crashed. How often scrubbed feedback
+  is enough to fix a crash is not measured by one case.
 - **The agents' isolation was by absence, not enforcement.** The data wasn't on disk and the generator was moved
   out of the repository, but they could have searched the filesystem. Each used three tool calls, consistent with
   reading the briefing and writing one file, and I did not read their transcripts to confirm.
