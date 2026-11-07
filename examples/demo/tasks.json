@@ -1,0 +1,7 @@
+[
+  {"id": "revenue", "ask": "What is the total revenue from completed orders? Print {\"total_revenue\": <number, 2 decimals>}."},
+  {"id": "signups", "ask": "How many customers signed up in 2023? Print {\"signups_2023\": <integer>}."},
+  {"id": "countries", "ask": "Which three countries brought in the most revenue from completed orders, highest first? Print {\"top_countries\": [<country>, <country>, <country>]}."},
+  {"id": "inactive", "ask": "How many customers have never placed an order? Print {\"customers_without_orders\": <integer>}."},
+  {"id": "plans", "ask": "What is the average value of a completed order for each plan? Print {\"avg_by_plan\": {<plan>: <number, 2 decimals>, ...}}."}
+]
