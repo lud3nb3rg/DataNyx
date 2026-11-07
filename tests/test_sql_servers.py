@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -34,6 +35,7 @@ PW = "datanyx-test-Pw1"
 READER = "dn_reader"
 READER_PW = "dn-Reader-Pw1"
 ORACLE_SERVICE = "?service_name=FREEPDB1"
+ORACLE_WAIT_SECONDS = 90
 VISIBLE_TABLES = {"dn_users", "dn_orders", "dn_items", "dn_refunds", "dn_links"}
 DRIVERS = {
     "postgresql": "postgresql+psycopg",
@@ -227,6 +229,35 @@ def backend(request):
         create_reader(backend, connection)
     engine.dispose()
     return backend
+
+
+@pytest.fixture(autouse=True)
+def _wait_until_oracle_answers(request):
+    """Oracle Free on a shared CI runner now and then refuses connections for a few seconds, long after it reported healthy.
+
+    That made unrelated tests fail with a connection error (a flake: about one `servers` run in twelve, always Oracle, always
+    `OperationalError`). So before each Oracle test, wait, for a bounded time, until the database answers a trivial query, and let
+    the test then measure DataNyx instead of the container. A server that never answers still fails, with its own error.
+    This cannot cover a stall that starts in the middle of a test.
+    """
+    if "backend" not in request.fixturenames or request.getfixturevalue("backend").name != "oracle":
+        yield
+        return
+    url = request.getfixturevalue("backend").admin_url
+    deadline = time.monotonic() + ORACLE_WAIT_SECONDS
+    while True:
+        engine = engine_for(url, connect_args={"tcp_connect_timeout": 10})
+        try:
+            with engine.connect() as connection:
+                connection.execute(sa.text("SELECT 1 FROM dual"))
+            break
+        except sa.exc.OperationalError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(3)
+        finally:
+            engine.dispose()
+    yield
 
 
 @contextmanager
