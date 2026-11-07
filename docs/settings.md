@@ -16,7 +16,7 @@ map_paths = ["$.users"]                  # hide every key under these paths
 keep_names = ["Order Details"]           # show names the rules hid
 scale_hints = true                       # row counts as an order of magnitude
 infer_keys = true                        # yes/no guesses about unique columns and joins
-column_hints = true                      # ranges for distinct values, missing values and text length
+column_hints = true                      # ranges for distinct values, missing values and text length, and whether values are respelled
 max_rows = 100000                        # read only this many rows of a data file
 
 [anonymize]

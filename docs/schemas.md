@@ -223,16 +223,23 @@ root: array<{
 | How many different values | `one value only`, `2 to 9`, `10 to 99`, `100 to 999`, `1,000 or more distinct values` |
 | How often it is missing (empty or null) | `never`, `rarely` (under a tenth), `often` (up to half), `mostly missing` |
 | How long the longest text is | `text up to 9`, `99`, `999 characters`, or `1,000 characters or more` |
+| Whether values are respelled | `some values differ only by case or spacing` (under a third of the distinct values), `many values ...`. Said only when it happens |
 
 A column with 3 values is a category an agent can group by; one with 1,000 or more is not. A column that is mostly
-missing is a poor join key. These are the questions the hints are for. Things to know:
+missing is a poor join key. A column whose values differ only by case or spacing (`US`, `us`, `Us `) is one an agent
+has to normalize before it groups by it, and it can't see that from the schema; without the hint it counts `us` and
+`US` as two countries and nothing crashes. These are the questions the hints are for. Things to know:
+
+- The respelling hint folds case and whitespace only. It can't know that `USA` and `United States` are one place, and
+  it says nothing when there are no such variants. A distinct-value count far above the number of categories you
+  expect (a `country` with "10 to 99" values) is the other sign to look for.
 
 - A table needs at least 20 rows, and a table that was cut short by `--max-rows` gets none. Columns with a hidden
   name get none either.
 - It reads CSV, TSV, JSON Lines, JSON arrays and Excel, as `--infer-keys` does. Databases and the formats that carry
   their own schema say that no hint is available.
-- Counting distinct values keeps a hash of each value in memory while the file is read, up to 1,000 per column, and throws
-  them away.
+- Counting distinct values keeps a hash of each value, and of its case-folded form, in memory while the file is read, up
+  to 1,000 per column, and throws them away.
 - Set `column_hints = true` under `[schema]` to make it the project's default. For the MCP server it is an option of
   whoever starts it (`datanyx mcp --column-hints`), and an agent can't turn it on or off.
 
