@@ -75,6 +75,16 @@ uv run mypy
 uv run pytest --cov                  # coverage report
 ```
 
+**Where a test goes.** Tests are named for the behaviour they cover (`test_scan_reports.py`, `test_mcp_access_and_tools.py`,
+`test_document_anonymization.py`), not for the review or the fix that produced them. Put a new test with the behaviour it
+checks. The `test_security_*.py` files are different on purpose: each test there is a way past one of DataNyx's promises that
+once worked, kept so it can't come back, grouped by what was attacked (the MCP server, the guard, schema values, documents,
+resources and logs). A new bypass fix goes there, with a comment on what the bypass was. Helpers used by more than one file live
+in a small module next to the tests (`text_corpus.py`, `docx_helpers.py`).
+
+The coverage floor in `pyproject.toml` is set from a measurement, with the number and the reasoning beside it. Raise it when
+coverage really goes up; don't lower it to get a change through.
+
 `tests/test_fuzz_leaks.py` generates documents with a canary planted in every value, in
 JSON, JSON Lines, CSV, YAML and XML, and fails if the canary reaches any output format or
 note. Run it with other seeds using `uv run pytest tests/test_fuzz_leaks.py --hypothesis-seed=N`.

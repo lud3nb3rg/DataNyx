@@ -138,8 +138,11 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-# CI measures about 90% without the NER models. The floor catches a new module that ships with no tests.
-fail_under = 88
+# Measured: 90.6% with every extra and without the NER models (Windows, Python 3.12, 2026-11-07), which is what the CI test
+# cells run. The floor sits 1.5 points below, so the small differences between Linux and Windows and between Python
+# versions don't fail a cell, but a new module of a few hundred untested lines (about 1 to 3 points) does. When a
+# real improvement raises the measured number by more than a point or two, raise the floor with it.
+fail_under = 89
 
 [[tool.mypy.overrides]]
 module = "datanyx.mcp_server"
