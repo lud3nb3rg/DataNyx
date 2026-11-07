@@ -84,6 +84,14 @@ def _add_input_arguments(parser: argparse.ArgumentParser) -> None:
         help="also give each column coarse ranges: how many distinct values, how often it is missing, how long its text gets (CSV, TSV, JSON Lines, JSON and Excel)",
     )
     parser.add_argument(
+        "--public-column", action="append", default=[], metavar="NAME",
+        help=(
+            "list the values of this column (repeatable), for a column whose labels are safe to show, such as a country or a status; "
+            "sorted, never counted, and only if there are few and they look like plain words. The one option that shows values "
+            "(CSV, TSV, JSON Lines, JSON and Excel)"
+        ),
+    )
+    parser.add_argument(
         "--map-path",
         action="append",
         default=[],
@@ -183,6 +191,7 @@ def _policy(args: argparse.Namespace) -> KeyPolicy:
         scale_hints=bool(getattr(args, "scale_hints", False) or config.scale_hints),
         infer_keys=bool(getattr(args, "infer_keys", False) or config.infer_keys),
         column_hints=bool(getattr(args, "column_hints", False) or config.column_hints),
+        public_columns=frozenset([*config.public_columns, *getattr(args, "public_column", [])]),
         delimiter=getattr(args, "delimiter", None),
         views=bool(getattr(args, "views", False) or config.views),
         include=tuple(getattr(args, "include", None) or ()),

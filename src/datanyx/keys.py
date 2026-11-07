@@ -1,9 +1,10 @@
 """Opt-in hints drawn from the values of a table, kept as yes/no flags and coarse buckets.
 
 A schema from a file has no keys, so an agent can't tell that `orders.customer_id` points at `customers.id`, nor
-whether `status` is a handful of categories or free text. Two options add that. The sources that read every row of a
+whether `status` is a handful of categories or free text. Three options add that. The sources that read every row of a
 table (CSV, TSV, JSON Lines, Excel and JSON arrays) hand each record to an `Evidence` object while they read. It keeps
-hashes and counters in memory only, and what comes out is a flag or a bucket. Never a count, never a value.
+hashes and counters in memory only, and what comes out is a flag or a bucket. Never a count, and never a value, except for
+the columns the owner of the data declares public (`--public-column`, below).
 
 `--infer-keys` (keys):
 
@@ -18,6 +19,12 @@ hashes and counters in memory only, and what comes out is a flag or a bucket. Ne
 (as a range such as "10 to 99"), how often it is missing (never, rarely, often, mostly), and for text how long the
 longest value is (as a range). Distinct counting stops at `MAX_PROFILE_DISTINCT`.
 
+`--public-column NAME` (labels): for a column the owner names, its distinct values are listed, sorted and never counted.
+That is the one place values are shown, so it is the owner's decision and has safety nets. A value must look like a plain
+label (no email, ID, phone number, long number or token; at most 40 characters of ordinary punctuation), must be seen at
+least `MIN_LABEL_COUNT` times, and the column may have at most `MAX_LISTED_LABELS` such labels; rarer values are left
+out. A column that fails says so, without saying why in terms of any value.
+
 The flags are guesses from the data seen: the output says "inferred", and nothing enforces them. A table that was only
 partly read (`--max-rows`) gets none of them.
 """
@@ -30,9 +37,14 @@ from dataclasses import replace
 from itertools import combinations
 from typing import Any
 
+from .privacy import looks_like_data_value
 from .schema import Array, DataSchema, Field, ForeignKey, Node, Object
 
 MIN_ROWS = 20
+MAX_TRACKED_LABELS = 200
+MAX_LISTED_LABELS = 25
+MIN_LABEL_COUNT = 3
+_LABEL = re.compile(r"[\w .,&+()/'\-]{1,40}")
 MAX_DISTINCT = 200_000
 MAX_PAIR_DISTINCT = 100_000
 MAX_PAIR_COLUMNS = 5
@@ -191,16 +203,64 @@ def _length_phrase(profile: _Profile) -> str | None:
     return "text of 1,000 characters or more"
 
 
+class _Labels:
+    """The values of one column the owner declared public, counted only so that rare ones can be left out.
+
+    The counts stay in memory and are never output: what comes out is the sorted labels that were seen often enough.
+    """
+
+    __slots__ = ("counts", "odd", "overflow", "structured")
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+        self.odd = False  # Some value was not a plain label, so it is not listed.
+        self.overflow = False
+        self.structured = False
+
+    def add(self, value: object) -> None:
+        if value is None or value == "":
+            return
+        if isinstance(value, (list, tuple, dict, set, frozenset)):
+            self.structured = True
+            return
+        text = value if isinstance(value, str) else str(value)
+        if not _LABEL.fullmatch(text) or looks_like_data_value(text):
+            self.odd = True
+            return
+        if text in self.counts:
+            self.counts[text] += 1
+        elif len(self.counts) >= MAX_TRACKED_LABELS:
+            self.overflow = True
+        else:
+            self.counts[text] = 1
+
+    def listed(self) -> tuple[tuple[str, ...], str | None, bool]:
+        """The labels to show (sorted), why none are shown (or None), and whether some values were left out."""
+        left_out = self.odd or any(count < MIN_LABEL_COUNT for count in self.counts.values())
+        if self.structured:
+            return (), "it holds lists or objects", False
+        if self.overflow:
+            return (), f"it has more than {MAX_TRACKED_LABELS} different values", False
+        frequent = sorted(label for label, count in self.counts.items() if count >= MIN_LABEL_COUNT)
+        if len(frequent) > MAX_LISTED_LABELS:
+            return (), f"it has more than {MAX_LISTED_LABELS} frequent values", False
+        if not frequent:
+            return (), ("its values are not plain labels" if self.odd and not self.counts else "no value repeats often enough to be a label"), False
+        return tuple(frequent), None, left_out
+
+
 class TableEvidence:
-    def __init__(self, keys: bool = True, profiles: bool = False) -> None:
+    def __init__(self, keys: bool = True, profiles: bool = False, public: frozenset[str] = frozenset()) -> None:
         self.rows = 0
         #: Set when only the first rows were read. What holds for them may not hold for the rest, so nothing is claimed.
         self.partial = False
         self._keys = keys
         self._profiling = profiles
+        self._public = public
         self.columns: dict[str, _Column | None] = {}  # None: not a key-looking name.
         self.pairs: dict[tuple[str, str], _Pair] = {}
         self.profiles: dict[str, _Profile] = {}
+        self.labels: dict[str, _Labels] = {}
 
     def add(self, record: Any) -> None:
         if not isinstance(record, dict):
@@ -210,6 +270,11 @@ class TableEvidence:
         for name, value in record.items():
             if not isinstance(name, str):
                 continue
+            if name in self._public:
+                collector = self.labels.get(name)
+                if collector is None:
+                    collector = self.labels[name] = _Labels()
+                collector.add(value)
             if self._profiling:
                 profile = self.profiles.get(name)
                 if profile is None:
@@ -293,21 +358,31 @@ class TableEvidence:
         parts = (_distinct_phrase(profile), _missing_phrase(profile), _length_phrase(profile))
         return tuple(part for part in parts if part)
 
+    def label_values(self, name: str) -> tuple[tuple[str, ...], str | None, bool] | None:
+        """(labels, why none are shown, whether values were left out) for a declared column, or None if it was never seen."""
+        collector = self.labels.get(name)
+        if collector is None:
+            return None
+        if self.partial:
+            return (), "only part of the file was read", False
+        return collector.listed()
+
 
 class Evidence:
     """The evidence of one `extract` call, keyed by the name each table ends up with."""
 
-    def __init__(self, keys: bool = True, profiles: bool = False) -> None:
+    def __init__(self, keys: bool = True, profiles: bool = False, public: frozenset[str] = frozenset()) -> None:
         #: Set by a folder reader to the file being read, so a table is named as the folder will name it.
         self.scope: str | None = None
         self.keys = keys
         self.profiles = profiles
+        self.public = public
         self.tables: dict[str | None, TableEvidence] = {}
 
     def table(self, name: str | None) -> TableEvidence:
         key = name if self.scope is None else (self.scope if name is None else f"{self.scope}{_SEPARATOR}{name}")
         if key not in self.tables:
-            self.tables[key] = TableEvidence(self.keys, self.profiles)
+            self.tables[key] = TableEvidence(self.keys, self.profiles, self.public)
         return self.tables[key]
 
 
@@ -340,15 +415,44 @@ def apply_evidence(schema: DataSchema, evidence: Evidence) -> DataSchema:
             if table is not None:
                 profiles[i] = {name: phrases for name in fields[i] if (phrases := table.phrases(name))}
 
+    labelled: list[dict[str, tuple[str, ...]]] = [{} for _ in entities]
+    label_notes: list[str] = []
+    if evidence.public:
+        found: set[str] = set()
+        for i, table in enumerate(tables):
+            if table is None:
+                continue
+            for name in fields[i]:
+                if name not in evidence.public:
+                    continue
+                found.add(name)
+                outcome = table.label_values(name)
+                if outcome is None:
+                    continue
+                values, reason, left_out = outcome
+                where = f"{name} (in {entities[i].name})" if len(entities) > 1 and entities[i].name else name
+                if values:
+                    labelled[i][name] = values
+                    if left_out:
+                        label_notes.append(
+                            f"{where}: values seen fewer than {MIN_LABEL_COUNT} times, or that are not plain labels, are left out of the list"
+                        )
+                else:
+                    label_notes.append(f"{where}: values not listed, because {reason}")
+        missing = sorted(evidence.public - found)
+        if missing:
+            label_notes.append(f"declared public but not found as a column: {', '.join(missing)}")
+    listed = sum(len(items) for items in labelled)
+
     flagged = sum(len(columns) for columns in unique)
     pairs = sum(len(items) for items in composite)
     profiled = sum(len(items) for items in profiles)
-    if not (flagged or pairs or joins or profiled):
+    if not (flagged or pairs or joins or profiled or listed or label_notes):
         return schema
     result = [
         replace(
             entity,
-            node=_decorate(entity.node, unique[i], profiles[i]),
+            node=_decorate(entity.node, unique[i], profiles[i], labelled[i]),
             foreign_keys=tuple(keys[i]),
             inferred_unique_keys=tuple(composite[i]),
         )
@@ -363,6 +467,13 @@ def apply_evidence(schema: DataSchema, evidence: Evidence) -> DataSchema:
         )
     if profiled:
         notes.append("column hints are ranges taken from the values; they describe the data as it was read")
+    if listed:
+        shown = ", ".join(sorted({name for items in labelled for name in items}))
+        notes.append(
+            f"the values of these columns are listed because their owner declared them public: {shown}. "
+            "They are sorted and never counted, and no other value is shown"
+        )
+    notes.extend(label_notes)
     return DataSchema(schema.source_kind, tuple(result), tuple(notes))
 
 
@@ -371,11 +482,11 @@ def _fields_of(node: Node) -> dict[str, Any]:
     return dict(node.fields) if isinstance(node, Object) else {}
 
 
-def _decorate(node: Node, unique: set[str], profiles: dict[str, tuple[str, ...]]) -> Node:
-    if not unique and not profiles:
+def _decorate(node: Node, unique: set[str], profiles: dict[str, tuple[str, ...]], labels: dict[str, tuple[str, ...]]) -> Node:
+    if not unique and not profiles and not labels:
         return node
     if isinstance(node, Array):
-        return Array(_decorate(node.items, unique, profiles))
+        return Array(_decorate(node.items, unique, profiles, labels))
     if isinstance(node, Object):
         marked: dict[str, Field] = {}
         for name, item in node.fields.items():
@@ -383,6 +494,8 @@ def _decorate(node: Node, unique: set[str], profiles: dict[str, tuple[str, ...]]
                 item = replace(item, unique=True)
             if name in profiles:
                 item = replace(item, profile=profiles[name])
+            if name in labels:
+                item = replace(item, values=labels[name])
             marked[name] = item
         return Object(marked, node.extra, node.key_format)
     return node

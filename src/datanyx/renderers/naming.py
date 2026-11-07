@@ -46,9 +46,16 @@ def unique_label(field) -> str | None:
     return "unique" if field.unique_declared else "unique (inferred)"
 
 
+def values_label(field) -> str | None:
+    """The labels of a column its owner declared public, as `values: "a" | "b"`. Quotes can't occur inside a label."""
+    if not field.values:
+        return None
+    return "values: " + " | ".join(f'"{value}"' for value in field.values)
+
+
 def field_notes(field) -> list[str]:
-    """Everything a comment beside a field says: its source type, its uniqueness, and any column hints."""
-    return [item for item in (field.native_type, unique_label(field), *field.profile) if item]
+    """Everything a comment beside a field says: its source type, its uniqueness, any column hints and any public labels."""
+    return [item for item in (field.native_type, unique_label(field), *field.profile, values_label(field)) if item]
 
 
 def entity_facts(entity) -> list[str]:

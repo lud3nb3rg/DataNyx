@@ -192,6 +192,7 @@ def create_server(
     max_rows: int | None = None,
     debug_log: str | Path | None = None,
     column_hints: bool = False,
+    public_columns: Sequence[str] = (),
 ):
     """Build the server.
 
@@ -230,7 +231,7 @@ def create_server(
         A selection of tables is only for describe_data: code checked against a trimmed schema would report
         tables that exist as unknown.
         """
-        return KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys, column_hints=column_hints, views=views, max_rows=max_rows, **selection)
+        return KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys, column_hints=column_hints, public_columns=frozenset(public_columns), views=views, max_rows=max_rows, **selection)
 
     def tool(function: Callable[..., str]) -> Callable[..., str]:
         """Register a tool: refusals and failures become fixed messages, and every call is recorded."""
@@ -482,6 +483,7 @@ def run(
     max_rows: int | None = None,
     debug_log: str | Path | None = None,
     column_hints: bool = False,
+    public_columns: Sequence[str] = (),
 ) -> None:
     allowed = {*ENTITY_KINDS, SECRET, *kinds_of(list(detectors))}
     unknown = set(keep_entity) - allowed
@@ -490,6 +492,7 @@ def run(
     server = create_server(
         roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys, allow_env, scan_settings,
         views=views, max_tables=max_tables, max_rows=max_rows, debug_log=debug_log, column_hints=column_hints,
+        public_columns=public_columns,
     )
     if http is None:
         server.run("stdio")

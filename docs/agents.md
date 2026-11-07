@@ -62,7 +62,7 @@ and the installed DataNyx itself, including reverting them with git (`git checko
 file or if its command names the data, and `anonymize --mapping`, `restore`, `pseudonymize`, `eval`, `init` and
 `protect` are refused. So are the options that loosen what you set up, since each shows something
 hidden, weakens detection or works as a way to test guesses: `--keep-name`, `--keep-names`, `--keep`,
-`--keep-entity`, `--allow`, `--keep-numbers`, `--no-ner`, `--show-paths`, `--include-examples`, `--reveal`,
+`--keep-entity`, `--allow`, `--keep-numbers`, `--no-ner`, `--show-paths`, `--public-column`, `--include-examples`, `--reveal`,
 `--allow-urls`, `--allow-env`, `--allow-unscanned`, `--hide`, `--model`, `--backend`, `--detectors`,
 `--config`, `--no-config` and the `DATANYX_CONFIG` variable. `--names-from` can only name the protected data,
 and no output option can point at it. The agent can't edit `datanyx.toml` or `datanyx.local.toml`, and can't

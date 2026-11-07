@@ -14,6 +14,7 @@ datanyx config          # the settings in effect, and the files they came from
 [schema]
 map_paths = ["$.users"]                  # hide every key under these paths
 keep_names = ["Order Details"]           # show names the rules hid
+public_columns = ["country", "status"]   # columns whose labels may be listed (the one setting that shows values)
 scale_hints = true                       # row counts as an order of magnitude
 infer_keys = true                        # yes/no guesses about unique columns and joins
 column_hints = true                      # ranges for distinct values, missing values and text length

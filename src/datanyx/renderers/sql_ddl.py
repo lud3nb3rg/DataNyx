@@ -24,6 +24,7 @@ from ..schema import (
     Union,
     Unknown,
 )
+from .naming import values_label
 
 # Sources whose type names mean nothing to SQL (Avro's `union`, Stata's `%8.0g`), and names a source summarises
 # nested types with, which SQL can't read whichever schema carries them: synth's own schema does too.
@@ -73,6 +74,7 @@ def _table(entity: Entity, native: bool) -> str:
         f"-- inferred unique together (not enforced): {', '.join(map(_quote, columns))}" for columns in entity.inferred_unique_keys
     )
     guesses.extend(f"-- {_quote(column)}: {', '.join(field.profile)}" for column, field in node.fields.items() if field.profile)
+    guesses.extend(f"-- {_quote(column)}: {values_label(field)}" for column, field in node.fields.items() if field.values)
     if unique:
         guesses.append(f"-- inferred unique (not enforced): {', '.join(map(_quote, unique))}")
     if entity.scale:

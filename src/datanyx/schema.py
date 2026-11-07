@@ -62,6 +62,8 @@ class Field:
     unique_declared: bool = False
     #: Set only by `--column-hints`: coarse ranges taken from the values ("10 to 99 distinct values", "rarely missing").
     profile: tuple[str, ...] = ()
+    #: Set only for columns the owner declared public (`--public-column`): the labels in them, sorted, never counted.
+    values: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

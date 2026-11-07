@@ -236,6 +236,45 @@ missing is a poor join key. These are the questions the hints are for. Things to
 - Set `column_hints = true` under `[schema]` to make it the project's default. For the MCP server it is an option of
   whoever starts it (`datanyx mcp --column-hints`), and an agent can't turn it on or off.
 
+## Public columns
+
+A schema can say a column is a string, but not that `country` is spelled `US`, `USA` and `United States`. For columns like that
+the labels *are* the information, and the person who owns the data knows which ones are safe to show. `--public-column`
+lets them say so:
+
+```sh
+datanyx schema orders.csv --public-column country --public-column status --format text
+```
+
+```
+country: string  -- values: "CA" | "Canada" | "DE" | "FR" | "France" | "US" | "USA" | "United States" | "us"
+status: string  -- values: "cancelled" | "completed" | "refunded"
+```
+
+This is the one option that shows values, so it works only for the columns you name, and it has safety nets:
+
+| Rule | Why |
+|---|---|
+| Only the columns you name, by exact name (in any table that has one) | Nothing else is ever listed |
+| A label must be seen at least 3 times; rarer values are left out, and a note says some were | A one-off value is the one most likely to identify someone |
+| At most 25 labels, else the column isn't listed | A real category is short; a long list is data |
+| A value must look like a plain label: up to 40 characters of letters, digits, spaces and `. , & + ( ) / ' -`, and not shaped like an email, ID, phone number, long number or token | Catches a column declared by mistake, and keeps a value from breaking a comment in the output |
+| Labels are sorted and never counted | The order and counts would say more than the labels |
+| A file read in part (`--max-rows`), or a source that can't be read row by row, lists nothing, and says so | A partial list would look complete |
+
+What it can't do: tell that a short list of *names* is personal. Declare categories, not people. The agent can't turn this on:
+`datanyx protect` refuses `--public-column`, and for the MCP server it is an option of whoever starts it
+(`datanyx mcp --public-column country`). Fake rows from `datanyx synth` use the listed labels for those columns, so code
+meets the real spellings (`us` as well as `US`) before it meets the real data.
+
+In the [end-to-end demo](https://github.com/lud3nb3rg/DataNyx/blob/main/examples/demo/README.md#public-columns-the-data-owner-lists-the-labels-of-a-few-columns),
+listing the labels of three columns took agents from 13 to 15 of 15 right on a deliberately messy dataset, and from 8 to 13 of 15 when
+they weren't told the data was messy. It fixed every failure that came from not knowing the spellings, and none of the ones that
+didn't (duplicate rows, text amounts).
+
+Set `public_columns = ["country", "status"]` under `[schema]` to make it a project's default. It reads CSV, TSV, JSON Lines,
+JSON and Excel, like `--column-hints`, and not databases, whose rows the tool never reads.
+
 ## Huge files
 
 CSV, TSV, JSON Lines and Excel files are read one row at a time, so memory stays small however big the file is.

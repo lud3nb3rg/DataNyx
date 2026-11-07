@@ -54,6 +54,17 @@ def _is_opaque_token(key: str) -> bool:
     return has_digit and any(c.isalpha() for c in key)
 
 
+def looks_like_data_value(label: str) -> bool:
+    """True when a value, taken as a category label, still looks like data: an email, an ID, a long number, a token.
+
+    Unlike a key, a label may hold spaces ("United States"), so that rule isn't applied. Names of people can't be told
+    from other words here; that is why the owner of the data chooses which columns may list their labels.
+    """
+    if detect_format(label) is not None or _PHONE.fullmatch(label) or _LONG_DIGIT_RUN.search(label) or _HEX_TOKEN.fullmatch(label):
+        return True
+    return _is_opaque_token(label)
+
+
 def file_name_looks_personal(name: str) -> bool:
     """A file name that names a subject and something more, such as a person: jane_doe_medical.csv."""
     stem = name.rsplit(".", 1)[0] if "." in name else name
@@ -78,6 +89,9 @@ class KeyPolicy:
     infer_keys: also flag key-looking columns that are unique, and joins between tables.
     column_hints: also give each column of a table coarse ranges for how many distinct values it has,
         how often it is missing, and how long its text gets.
+    public_columns: names of columns whose labels the owner of the data has declared safe to show (a country, a status, a
+        plan). Their distinct values are then listed, without counts, if there are few of them and they look like plain labels.
+        Everything else stays hidden. Only for CSV, TSV, JSON Lines, JSON and Excel, like `column_hints`.
     delimiter: the one-character separator of CSV and TSV input, instead of the usual one.
     views: also describe database views (names and columns only; a view's definition is never read).
     include, exclude: glob patterns on table (or file) names; only matching names are described, minus
@@ -96,6 +110,7 @@ class KeyPolicy:
     scale_hints: bool = False
     infer_keys: bool = False
     column_hints: bool = False
+    public_columns: frozenset[str] = frozenset()
     delimiter: str | None = None
     views: bool = False
     include: tuple[str, ...] = ()

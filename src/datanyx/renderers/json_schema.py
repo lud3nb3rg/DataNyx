@@ -76,6 +76,8 @@ def _field(field: Field) -> dict:
             result["x-unique-declared"] = True
     if field.profile:
         result["x-profile"] = list(field.profile)
+    if field.values:
+        result["x-public-values"] = list(field.values)
     return result
 
 

@@ -56,11 +56,13 @@ try its code on [fake rows](docs/synthetic-data.md) generated from the schema.
 Does it work? [An end-to-end demo](examples/demo/README.md) has agents write analysis code from a schema alone, then runs it
 on messy data. On ordinary data 14 of 15 were right first time (15 of 15 after one fix from a scrubbed error); on a deliberately
 worst-case dataset 13 of 15, and 8 of 15 if the agent isn't told the data is messy. The failures were silent wrong answers, not crashes.
+Letting the data owner [list the labels of a few columns](docs/schemas.md#public-columns) such as country and status raised those to 15 of 15 and 13 of 15.
 
 ## What it guarantees, and what it doesn't
 
-- **The schema contains no values.** That is enforced by design and tested hard. Field names are still shown, so
-  read the schema before sharing it.
+- **The schema contains no values by default.** That is enforced by design and tested hard. The one exception is a column
+  *you* declare public (`--public-column country`), whose few, plain labels are then listed. Field names are still shown,
+  so read the schema before sharing it.
 - **Text anonymization is best effort.** It misses things. Review the result.
 - **`datanyx protect` is a guardrail, not a sandbox.** It stops Claude Code's own tools from reading the data, but a
   script the agent writes and runs can print rows. For an agent that cannot reach the data at all, use the

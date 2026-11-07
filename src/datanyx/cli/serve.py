@@ -37,6 +37,7 @@ def _run_mcp(args: argparse.Namespace) -> int:
         scale_hints=bool(args.scale_hints or config.scale_hints),
         infer_keys=bool(args.infer_keys or config.infer_keys),
         column_hints=bool(args.column_hints or config.column_hints),
+        public_columns=[*config.public_columns, *args.public_column],
         views=bool(args.views or config.views),
         max_tables=args.max_tables,
         max_rows=args.max_rows or config.max_rows,
@@ -83,6 +84,10 @@ def add_mcp(commands: argparse._SubParsersAction) -> None:
     serve.add_argument("--scale-hints", action="store_true", help="give agents each table's size as an order of magnitude")
     serve.add_argument("--infer-keys", action="store_true", help="give agents yes/no guesses about unique columns and joins")
     serve.add_argument("--column-hints", action="store_true", help="give agents coarse ranges for each column: distinct values, missing values, text length")
+    serve.add_argument(
+        "--public-column", action="append", default=[], metavar="NAME",
+        help="let agents see the values of this column, for one whose labels are safe to show, such as a country or a status (repeatable; sorted, never counted)",
+    )
     serve.add_argument("--views", action="store_true", help="let agents see database views (names and columns only)")
     serve.add_argument(
         "--max-rows", type=int, metavar="N",

@@ -22,6 +22,7 @@ from ..schema import (
     Boolean,
     DataSchema,
     Entity,
+    Field,
     Integer,
     Node,
     Null,
@@ -174,11 +175,25 @@ class _Generator:
             if name in fixed:
                 result[name] = fixed[name]
             elif field.required or self.rng.random() < _OPTIONAL_PRESENT:
-                result[name] = self.value(field.node, name)
+                result[name] = self._label(field) if field.values else self.value(field.node, name)
         if node.extra is not None:
             for _ in range(self.rng.randint(1, 3)):
                 result[self._extra_key(node.key_format)] = self.value(node.extra, "value")
         return result
+
+    def _label(self, field: Field) -> Any:
+        """One of the labels the owner declared public, so fake rows carry the real spellings (and the real mess)."""
+        nodes = field.node.options if isinstance(field.node, Union) else (field.node,)
+        if any(isinstance(o, Null) for o in nodes) and self.rng.random() < _NULL_CHANCE:
+            return None
+        base = next((o for o in nodes if not isinstance(o, Null)), None)
+        label = self.rng.choice(field.values)
+        if isinstance(base, Integer):  # A numeric code listed as a label comes back as the number it was.
+            try:
+                return int(label)
+            except ValueError:
+                return label
+        return label
 
     def value(self, node: Node, hint: str) -> Any:
         rng = self.rng

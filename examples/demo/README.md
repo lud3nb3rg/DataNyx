@@ -83,6 +83,38 @@ What the runs show:
   so each country's revenue stays split across its spellings. Nine runs gave exactly `["US","ca","gb"]`: all three without the
   warning and all six that were given a hint about it (below). Telling the schema about the case variants didn't change that.
 
+## Public columns: the data owner lists the labels of a few columns
+
+The hint below failed because a tool can't know that `CA` and `Canada` are one value. The data owner can. `--public-column` lets
+them declare columns such as `country`, `plan` and `status`, and then `schema` lists those columns' labels (a handful of plain,
+frequent values, sorted, never counted; [details](../../docs/schemas.md#public-columns)) and `synth` uses them in its fake rows.
+`prepare WORKDIR --public-column country --public-column plan --public-column status` builds that briefing, and the prompt
+gets one extra sentence saying that the schema lists the values of columns the owner declared safe to show. Worst-case data,
+three agents per question:
+
+| Prompt | Without public columns | With public columns |
+|---|---|---|
+| says the data is messy | 13 of 15 | **15 of 15** |
+| doesn't say so | 8 of 15 | **13 of 15** |
+
+By question, with the warning left out: countries 3 of 3 (was 0 of 3), plans 3 of 3 (was 0 of 3), signups 3 of 3, customers who
+never ordered 3 of 3, **revenue 1 of 3** (was 2 of 3). The two wrong revenue answers are the same missed deduplication as before,
+about 2% too high: duplicate rows are not something a label list can reveal.
+
+What this shows, and what it doesn't:
+
+- **It fixes the failures that came from not knowing the spellings.** Agents given the labels grouped by the real values and
+  merged `US`, `USA` and `United States` the way a person who can see them would. Every countries and plans run was right, with
+  or without the warning (12 of 12), where none had been before.
+- **It doesn't help with mess that isn't in a labelled column.** Duplicated rows, `$1,234.50` text amounts and similar problems
+  stay invisible, and the warning remains the biggest lever for those.
+- **This is close to a best case.** The owner declared exactly the three columns where the mess was, which is what an owner who
+  knew the data would do, but also what one who didn't know where the mess was would not. And with 15 runs per row, one model and a
+  dataset I designed, the 13 → 15 difference with the warning is small; the 8 → 13 difference without it is the clearer one.
+- **The effect of the schema and of the fake rows can't be told apart**: both carry the labels, so I don't know which the agents
+  used.
+- **It shows real values**: that is its cost, and the safety nets and the owner's choice are the whole protection.
+
 ## A "values differ by case or spacing" hint (tried, and removed)
 
 I tried adding a `--column-hints` phrase for text columns whose values differ only by case or spacing

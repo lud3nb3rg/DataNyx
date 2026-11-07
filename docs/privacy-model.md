@@ -4,7 +4,8 @@
 
 **Values can't reach the output.** Each value is reduced to a type and a format label
 (`email`, `uuid`, `date`, `date-time`, `uri`, `ipv4`, `ipv6`) and then discarded. The
-schema model has no field that could hold a value.
+schema model has one field that can hold values, `Field.values`, and it stays empty unless the owner of the data names
+a column with `--public-column` ([public columns](schemas.md#public-columns)). Nothing the agent sends can fill it.
 
 **Keys are treated as possible data.** A JSON key is hidden, and its value's structure
 described under `[key: ...]` / `additionalProperties`, when any of these apply:
@@ -75,6 +76,12 @@ the URLs you want it to use in environment variables and allow only those with `
 
 # Known limits
 
+- **A public column shows its labels.** That is the point of `--public-column`, and it is the owner's decision: declare
+  categories (a country, a status, a plan), never a column that could hold names or identifiers. The safety nets
+  (at most 25 labels, each seen at least 3 times, nothing shaped like an email, ID, phone number or long number, and no
+  counts) catch a column declared by mistake, such as one of emails. They can't tell that a short list of people's names, or one
+  rare diagnosis seen three times, is personal. The agent can't switch it on: `datanyx protect` refuses `--public-column`,
+  and an MCP server's public columns are chosen by whoever starts it.
 - **Field names are shown.** They're what make the schema useful, so a sensitive name
   that looks ordinary will get through. **Read the schema before sharing it.**
 - **Text anonymization can miss things**, as [measured above](anonymization.md#how-reliable-text-anonymization-is).

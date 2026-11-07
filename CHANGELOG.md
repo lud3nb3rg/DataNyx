@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `--public-column NAME` (and `public_columns` under `[schema]`, and `datanyx mcp --public-column`) lets the owner of the data declare
+  columns whose labels are safe to show, such as a country, a status or a plan. Their distinct values are listed, sorted and never
+  counted, if there are at most 25, each is seen at least 3 times, and none looks like an email, ID, phone number or long number.
+  Everything else stays hidden, `datanyx protect` refuses the option for an agent, and `datanyx synth` uses the listed labels in
+  its fake rows. It is the one option that shows values: see [public columns](docs/schemas.md#public-columns).
+
 ## 0.2.0 (2026-11-06)
 
 New sources and options, fixes from a full security audit, and releases that can be verified. Several of the fixes change behaviour: read **Changes that may need action** below before upgrading.

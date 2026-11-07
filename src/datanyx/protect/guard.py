@@ -76,7 +76,7 @@ _SAFE_COMMANDS = frozenset(
 # whether it is in the data.
 _WEAKENING = frozenset(
     {
-        "--keep-name", "--keep-names", "--keep", "--keep-entity", "--allow", "--keep-numbers", "--no-ner", "--show-paths",
+        "--keep-name", "--keep-names", "--keep", "--keep-entity", "--allow", "--keep-numbers", "--no-ner", "--show-paths", "--public-column",
         "--reveal", "--config", "--no-config", "--allow-urls", "--allow-env", "--include-examples", "--allow-unscanned",
         "--hide", "--model", "--backend", "--detectors",
     }
