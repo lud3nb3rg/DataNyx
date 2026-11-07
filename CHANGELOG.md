@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-- `--column-hints` also says when some values of a text column differ only by case or spacing (`US` and `us`), as `some` or
-  `many`, and says nothing when none do. The schema alone can't show that a column is split this way, and a script that
-  groups by it then gives a wrong answer without failing. Still never a number or a value.
-
 ## 0.2.0 (2026-11-06)
 
 New sources and options, fixes from a full security audit, and releases that can be verified. Several of the fixes change behaviour: read **Changes that may need action** below before upgrading.

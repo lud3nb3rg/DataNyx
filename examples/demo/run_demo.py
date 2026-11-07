@@ -1,6 +1,7 @@
 """Run the demo: brief an agent with a schema and fake rows only, then run what it wrote on the real data.
 
     uv run python examples/demo/run_demo.py prepare WORKDIR    # schema + fake rows into WORKDIR/briefing
+                                                               # (add --column-hints to put the hints in the schema)
     ... an agent writes WORKDIR/trials/<task>_<n>/solution.py from the briefing alone ...
     uv run python examples/demo/run_demo.py grade WORKDIR      # run every solution on the real data, check the answers
     uv run python examples/demo/run_demo.py report WORKDIR     # the table
@@ -30,7 +31,7 @@ def _run(args: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", **kwargs)
 
 
-def prepare(work: Path) -> None:
+def prepare(work: Path, hints: bool = False) -> None:
     briefing = work / "briefing"
     shutil.rmtree(briefing, ignore_errors=True)
     briefing.mkdir(parents=True)
@@ -38,7 +39,7 @@ def prepare(work: Path) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         data = Path(tmp) / "data"
         generate(data)
-        schema = _run([*DATANYX, "schema", str(data), "--format", "text"])
+        schema = _run([*DATANYX, "schema", str(data), "--format", "text", *(["--column-hints"] if hints else [])])
         (briefing / "schema.txt").write_text(schema.stdout, encoding="utf-8")
         _run([*DATANYX, "synth", str(data), "--rows", "15", "--seed", "1", "--format", "csv", "-o", str(briefing / "sample")])
     shutil.copy(HERE / "tasks.json", briefing / "tasks.json")
@@ -134,6 +135,10 @@ def report(work: Path) -> None:
 
 if __name__ == "__main__":
     commands = {"prepare": prepare, "grade": grade, "report": report}
-    if len(sys.argv) != 3 or sys.argv[1] not in commands:
+    args = [a for a in sys.argv[1:] if a != "--column-hints"]
+    if len(args) != 2 or args[0] not in commands:
         sys.exit(__doc__)
-    commands[sys.argv[1]](Path(sys.argv[2]))
+    if args[0] == "prepare":
+        prepare(Path(args[1]), hints="--column-hints" in sys.argv)
+    else:
+        commands[args[0]](Path(args[1]))

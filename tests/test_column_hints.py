@@ -41,34 +41,6 @@ def people(tmp_path):
     return write(tmp_path / "people.csv", ["id", "status", "email", "nickname", "bio"], rows)
 
 
-def test_values_that_differ_only_by_case_or_spacing_are_flagged_and_clean_columns_are_not(tmp_path):
-    rows = []
-    for i in range(1, 201):
-        rows.append(
-            [
-                i,
-                ["US", "us", "FR", "fr", "DE"][i % 5],  # Two of the five categories are respelled: many.
-                ["Pro", "Team", "Free"][i % 3] if i != 1 else "pro ",  # One stray respelling among three: some.
-                ["North", "South", "East", "West"][i % 4],  # Clean.
-                i * 7,  # A number: nothing to respell.
-            ]
-        )
-    path = write(tmp_path / "t.csv", ["id", "country", "plan", "region", "score"], rows)
-    _, fields = fields_of(extract(str(path), policy=HINTS))
-    assert "many values differ only by case or spacing" in fields["country"].profile
-    assert "some values differ only by case or spacing" in fields["plan"].profile
-    assert not any("differ" in phrase for phrase in fields["region"].profile + fields["score"].profile + fields["id"].profile)
-
-
-def test_the_respelling_hint_gives_no_value_and_no_count(tmp_path):
-    rows = [[i, f"{CANARY}{i % 3}" if i % 2 else f"{CANARY.upper()}{i % 3}"] for i in range(1, 101)]
-    path = write(tmp_path / "t.csv", ["id", "tag"], rows)
-    schema = extract(str(path), policy=HINTS)
-    shown = render(schema, "text") + render(schema, "json-schema")
-    assert "differ only by case or spacing" in shown
-    assert CANARY not in shown and CANARY.upper() not in shown
-
-
 def test_hints_are_off_unless_asked_for(people):
     schema = extract(str(people))
     assert not any(f.profile for f in fields_of(schema)[1].values())

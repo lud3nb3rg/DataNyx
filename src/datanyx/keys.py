@@ -16,8 +16,7 @@ hashes and counters in memory only, and what comes out is a flag or a bucket. Ne
 
 `--column-hints` (profiles): for each column of a table of at least `MIN_ROWS` rows, how many distinct values it has
 (as a range such as "10 to 99"), how often it is missing (never, rarely, often, mostly), and for text how long the
-longest value is (as a range), and whether some values differ only by case or spacing. Distinct counting stops at
-`MAX_PROFILE_DISTINCT`.
+longest value is (as a range). Distinct counting stops at `MAX_PROFILE_DISTINCT`.
 
 The flags are guesses from the data seen: the output says "inferred", and nothing enforces them. A table that was only
 partly read (`--max-rows`) gets none of them.
@@ -127,14 +126,12 @@ class _Pair:
 class _Profile:
     """Counters for one column: how many values were missing, how many different ones, how long the longest text was."""
 
-    __slots__ = ("distinct", "folded", "longest", "missing", "overflow", "seen", "structured")
+    __slots__ = ("distinct", "longest", "missing", "overflow", "seen", "structured")
 
     def __init__(self) -> None:
         self.seen = 0
         self.missing = 0
         self.distinct: set[int] = set()
-        #: The same values after folding case and spaces, so `distinct - folded` is how many are only a respelling.
-        self.folded: set[int] = set()
         self.overflow = False
         self.longest = -1  # -1: no text seen.
         self.structured = False
@@ -150,13 +147,10 @@ class _Profile:
         if isinstance(value, str) and len(value) > self.longest:
             self.longest = len(value)
         if not self.overflow:
-            text = str(value)
-            self.distinct.add(hash(text))
-            self.folded.add(hash(" ".join(text.casefold().split()) if isinstance(value, str) else text))
+            self.distinct.add(hash(str(value)))
             if len(self.distinct) >= MAX_PROFILE_DISTINCT:
                 self.overflow = True
                 self.distinct.clear()
-                self.folded.clear()
 
 
 def _distinct_phrase(profile: _Profile) -> str | None:
@@ -172,20 +166,6 @@ def _distinct_phrase(profile: _Profile) -> str | None:
     if count < 100:
         return "10 to 99 distinct values"
     return "100 to 999 distinct values"
-
-
-def _respelling_phrase(profile: _Profile) -> str | None:
-    """Whether some values are the same word written two ways ("US", "us", " us"). Said only when it happens.
-
-    The agent can't see the values, so it can't see that a column it means to group by is split. Folding case and
-    spaces catches the common cases; it can't know that "USA" and "United States" are one place.
-    """
-    if profile.structured or profile.overflow or len(profile.distinct) < 2:
-        return None
-    extra = len(profile.distinct) - len(profile.folded)
-    if extra <= 0:
-        return None
-    return "some values differ only by case or spacing" if extra * 3 < len(profile.distinct) else "many values differ only by case or spacing"
 
 
 def _missing_phrase(profile: _Profile) -> str:
@@ -310,7 +290,7 @@ class TableEvidence:
         profile = self.profiles.get(name)
         if self.partial or profile is None or profile.seen < MIN_ROWS:
             return ()
-        parts = (_distinct_phrase(profile), _missing_phrase(profile), _length_phrase(profile), _respelling_phrase(profile))
+        parts = (_distinct_phrase(profile), _missing_phrase(profile), _length_phrase(profile))
         return tuple(part for part in parts if part)
 
 

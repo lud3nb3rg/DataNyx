@@ -48,6 +48,36 @@ What that says:
   answers.** A person who knows the data has to sanity-check the answer, which is the step the
   [container setup](../../docs/agents.md#hard-isolation-with-containers) leaves to you on purpose.
 
+## Second experiment: a "values differ by case or spacing" hint (tried, and removed)
+
+I tried adding a `--column-hints` phrase for text columns whose values differ only by case or spacing
+(`country: ... some values differ only by case or spacing`). The same questions, the same prompt apart from a sentence
+saying the schema has hints, 18 new agents (`prepare WORKDIR --column-hints`). For the countries question, 3 more agents
+without hints, so it is 6 against 6. **The hint is not in DataNyx**: it did not help, and the reasoning below is why it
+was taken out.
+
+| Top three countries | Right | Answers |
+|---|---|---|
+| No hints | 2 of 6 | `US, GB, DE` twice; `USA, GB, CA`; `US, GB, Canada`; and two with `ca`/`Ca` split off as its own country |
+| With hints | **0 of 6** | all six answered `["US", "ca", "gb"]` |
+| Every other question | 12 of 12 | same as without hints |
+
+**The hint did not help, and it may have hurt.** (Six runs each is too few to call the difference real; it is certainly
+not an improvement.) What happened: every agent that saw the hint folded case and stopped. Case was not the main
+problem. `US`, `USA` and `United States` are one country, and so are `CA`, `CAN` and `Canada`; folding case merges
+`ca` with `CA`, not with `Canada`, so Canada still outranked Germany and the United Kingdom was split. Without the
+hint, agents reached for what they know about countries and wrote alias tables; the hint pointed them at the one
+kind of variation it can detect, and they treated that as the whole job.
+
+Why it was removed, beyond the numbers:
+
+- **Nobody can say a hint like this is right.** Whether `CA` and `ca` are the same value depends on the data: in a
+  case-sensitive dataset they may be different things, and a hint that says they are respellings pushes the agent to
+  merge what the owner meant to keep apart. A hint the tool can't verify is a guess presented as a fact.
+- **A narrow true hint reads as "this is the problem".** Agents did what it pointed at and stopped.
+- The signal that was always there, `10 to 99 distinct values` for a country column, went unused in both versions.
+- The real fix for aliases is not in the schema: it is the person who knows the data checking the answer.
+
 ## What this does and doesn't show
 
 Read these before quoting the numbers.
