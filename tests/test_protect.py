@@ -454,7 +454,9 @@ def test_protect_command_dry_run_then_write_then_remove(project, capsys):
     assert "would create .claude" in out and "Nothing was changed" in out and not (project / ".datanyx").exists()
 
     assert main(["protect", str(project / "data"), "--dir", str(project), "--command", launcher, "--write"]) == 0
-    assert "Checked: the guard hook refuses protected files." in capsys.readouterr().out
+    written = capsys.readouterr().out
+    assert "Checked: the guard hook refuses protected files." in written
+    assert "not a sandbox" in written and "hard-isolation-with-containers" in written
     assert main(["protect", str(project / "data"), "--dir", str(project), "--command", launcher]) == 0
     assert "Already up to date." in capsys.readouterr().out
 

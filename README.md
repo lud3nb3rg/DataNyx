@@ -53,6 +53,15 @@ $ datanyx anonymize call-notes.txt
 The agent sees the shape of the table and the story in the text, and none of the values. It can also
 try its code on [fake rows](docs/synthetic-data.md) generated from the schema.
 
+## What it guarantees, and what it doesn't
+
+- **The schema contains no values.** That is enforced by design and tested hard. Field names are still shown, so
+  read the schema before sharing it.
+- **Text anonymization is best effort.** It misses things. Review the result.
+- **`datanyx protect` is a guardrail, not a sandbox.** It stops Claude Code's own tools from reading the data, but a
+  script the agent writes and runs can print rows. For an agent that cannot reach the data at all, use the
+  [container setup](docs/agents.md#hard-isolation-with-containers).
+
 ## Install
 
 The PyPI package is the recommended way to install DataNyx:

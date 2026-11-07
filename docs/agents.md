@@ -11,6 +11,18 @@
 If the agent runs DataNyx itself, its output is still safe to show, as long as you
 accept that `--keep-name` lets it [test guesses](schemas.md#adjusting-what-gets-hidden).
 
+## What each setup guarantees
+
+| Setup | The agent can't read the data with its own tools | A script the agent writes can't read it |
+|---|---|---|
+| Nothing set up | No | No |
+| [`datanyx protect`](#enforcing-it-with-datanyx-protect) (a guardrail) | Yes, for Claude Code's tools, as far as the guard can read a command | **No.** Running the agent's script on the data is the intended way to work, and a script can print rows |
+| [Containers](#hard-isolation-with-containers) (the agent has no copy of the data) | Yes | Yes. The script runs where the data isn't |
+
+The guard is worth having, because it stops the common accidents and turns the right workflow into the easy one.
+It does not hold against an agent that is trying to get around it, or a script that happens to print a row.
+If the data is sensitive enough that this matters, use containers.
+
 ## Enforcing it with `datanyx protect`
 
 ```sh
@@ -72,8 +84,43 @@ calls through. `--write` warns if yours is older.
 writes them to a file, is not caught), or follow a path built from a variable the command sets itself
 (`D=data; cat $D/x.csv`), or know what an unfamiliar program does with its arguments or what a pipe feeds it.
 `find . -name '*.csv'` isn't refused either, so file names can still be listed that way. It governs Claude Code's tools only: other agents, a terminal, or someone
-who edits the settings themselves aren't stopped. For hard isolation, use a separate account or
-container with no access to the data, or [a database login that can't read rows](privacy-model.md#a-login-that-cant-read-rows).
+who edits the settings themselves aren't stopped. For hard isolation, use
+[containers](#hard-isolation-with-containers), a separate account with no access to the data, or
+[a database login that can't read rows](privacy-model.md#a-login-that-cant-read-rows).
+
+## Hard isolation with containers
+
+[`examples/isolated`](https://github.com/lud3nb3rg/DataNyx/tree/main/examples/isolated) is a Docker Compose setup
+where the agent runs in a container that has no copy of your data:
+
+- The **`datanyx` container** mounts the data read-only and serves the [MCP server](#as-an-mcp-server) over HTTP.
+  It runs read-only, with no capabilities, and its network has no route to the internet, so it can't send anything
+  out or be pointed at an internal address. Its audit log is in a volume the agent doesn't have.
+- The **`agent` container** mounts a workspace for the code it writes and nothing else. It reaches your data
+  only through the MCP endpoint, which answers with schemas, fake rows, checks of its code and anonymized text.
+
+```sh
+cd examples/isolated
+export DATANYX_MCP_TOKEN="$(openssl rand -hex 24)" DATA_DIR=/path/to/your/data AGENT_IMAGE=your-agent-image
+docker compose up -d datanyx
+docker compose run --rm agent
+```
+
+`workspace/.mcp.json` is the agent's connection to the server. Use any agent image that speaks MCP over HTTP.
+
+**What this covers.** An agent, or a script it writes, in that container can't read the data, because it isn't
+there. That holds whatever the agent tries, including a command the guard would not have recognised.
+
+**What it doesn't.**
+
+- **You still run its code on the real data yourself**, outside the agent container (`datanyx run -- python report.py`,
+  or your own environment), and then read what it prints before anything goes back. Putting that step inside the
+  agent's container would bring the data back in.
+- The token is shared with the agent, which is what lets it use the server. The server is limited to what the tools
+  return, which are the [limits listed here](#as-an-mcp-server) and in the [privacy model](privacy-model.md#known-limits).
+- Field names are still shown, and text anonymization can still miss things.
+- Put TLS in front of the server if the two containers aren't on the same host
+  ([a server a team shares](deployment.md#a-server-a-team-shares)).
 
 ## As an MCP server
 

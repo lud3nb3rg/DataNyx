@@ -1,0 +1,60 @@
+# Hard isolation: the agent runs in a container that has no copy of your data, and reaches it only through
+# the DataNyx MCP server, which can answer with schemas and anonymized text and nothing else.
+# See docs/agents.md#hard-isolation-with-containers.
+#
+#   export DATANYX_MCP_TOKEN="$(openssl rand -hex 24)"
+#   export DATA_DIR=/path/to/your/data
+#   export AGENT_IMAGE=your-agent-image          # an image with your agent in it, for example Claude Code
+#   docker compose up -d datanyx
+#   docker compose run --rm agent
+#
+# Only the `datanyx` service mounts the data, and read-only. The `agent` service has no mount of it and no
+# route to the data's server except the MCP endpoint. The `tools` network has no way out to the internet,
+# so a compromised or misled server can't send anything out or be pointed at an internal address.
+
+services:
+  # A new volume belongs to root, and the server runs as an unprivileged user (uid 10001), so give it the log folder.
+  audit-setup:
+    image: busybox:1.37
+    command: ["sh", "-c", "chown 10001 /audit && chmod 700 /audit"]
+    volumes:
+      - audit:/audit
+    network_mode: none
+
+  datanyx:
+    # Pin a release; check it with `gh attestation verify` (docs/deployment.md#checking-a-release).
+    image: ghcr.io/lud3nb3rg/datanyx:0.2.0
+    command: ["mcp", "--http", "0.0.0.0:8808", "--root", "/data", "--audit-log", "/audit/audit.jsonl"]
+    environment:
+      DATANYX_MCP_TOKEN: ${DATANYX_MCP_TOKEN:?set a token of at least 16 characters}
+    volumes:
+      - ${DATA_DIR:?set the folder to serve}:/data:ro
+      - audit:/audit            # Not mounted in the agent: it can't read or change the log.
+    depends_on:
+      audit-setup:
+        condition: service_completed_successfully
+    networks: [tools]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  agent:
+    image: ${AGENT_IMAGE:?set the image your agent runs in}
+    profiles: [agent]           # Started by `docker compose run`, not by `up`.
+    environment:
+      DATANYX_MCP_TOKEN: ${DATANYX_MCP_TOKEN}
+    volumes:
+      - ./workspace:/workspace  # Code the agent writes. No data goes here.
+    working_dir: /workspace
+    networks: [tools, internet]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  tools:
+    internal: true              # No route out: only the agent and the server are on it.
+  internet: {}                  # The agent needs this to reach its model's API.
+
+volumes:
+  audit: {}

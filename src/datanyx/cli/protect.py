@@ -58,6 +58,10 @@ def _run_protect(args: argparse.Namespace) -> int:
         return 0
     problem = self_test(project, command, targets[0])
     print("Checked: the guard hook refuses protected files." if problem is None else f"warning: {problem}")
+    print(
+        "note: this is a guardrail, not a sandbox: a script the agent runs can still read the data. "
+        "For an agent that has no access to it at all, see docs/agents.md#hard-isolation-with-containers"
+    )
     version_warning = claude_code_warning()
     if version_warning:
         print(f"warning: {version_warning}", file=sys.stderr)

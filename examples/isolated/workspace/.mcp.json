@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "datanyx": {
+      "type": "http",
+      "url": "http://datanyx:8808/mcp",
+      "headers": { "Authorization": "Bearer ${DATANYX_MCP_TOKEN}" }
+    }
+  }
+}
