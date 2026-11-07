@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 build/
 dist/
+*.whl
 
 # Real data and credentials must never be committed. Test data is generated
 # in temporary folders, so nothing here needs to be tracked.

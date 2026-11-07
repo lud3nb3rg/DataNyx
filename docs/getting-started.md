@@ -2,19 +2,29 @@
 
 ## Install
 
-`pip install datanyx` installs the latest release from PyPI. To work on it, or to run the newest code, install from a clone. There is also a [container image, a pre-commit hook and a GitHub Action](deployment.md).
+The PyPI package is the recommended way to install DataNyx. There is also a [container image, a pre-commit hook and a GitHub Action](deployment.md).
 
 ```sh
-git clone <this repository> datanyx && cd datanyx
-uv sync --all-extras                 # or: pip install -e ".[all]"
+uv tool install "datanyx[all]"       # every reader, driver and the MCP server
 
 datanyx schema customers.csv --format text
 datanyx doctor                       # shows which optional packages and models are installed
 ```
 
-Pick only what you need if you'd rather keep it small, for example `pip install -e .` for
-CSV, JSON, XML and SQLite, or `pip install -e ".[parquet,excel]"`. The
-[sources table](sources.md) lists the extra for each format.
+Pick only what you need if you'd rather keep it small: `uv tool install datanyx` for
+CSV, JSON, XML and SQLite, or `uv tool install "datanyx[parquet,excel]"`. The
+[sources table](sources.md) lists the extra for each format. To use DataNyx as a library in a project,
+run `uv add datanyx` instead.
+
+### From a clone
+
+To work on DataNyx, or to run the newest code, install from a clone:
+
+```sh
+git clone https://github.com/lud3nb3rg/DataNyx.git && cd DataNyx
+uv sync --all-extras
+uv run datanyx doctor
+```
 
 Requires Python 3.10 or newer.
 

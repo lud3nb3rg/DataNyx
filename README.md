@@ -55,11 +55,15 @@ try its code on [fake rows](docs/synthetic-data.md) generated from the schema.
 
 ## Install
 
+The PyPI package is the recommended way to install DataNyx:
+
 ```sh
-git clone <this repository> datanyx && cd datanyx
-uv sync --all-extras                 # or: pip install -e ".[all]"
+uv tool install "datanyx[all]"       # or just datanyx, for CSV, JSON, XML and SQLite
 datanyx doctor                       # shows which optional packages and models are installed
 ```
+
+To use it as a library in a project, run `uv add datanyx` instead. To work on DataNyx or run the newest code,
+install from a clone: `git clone https://github.com/lud3nb3rg/DataNyx.git && cd DataNyx && uv sync --all-extras`.
 
 Python 3.10 or newer. [Supported sources](docs/sources.md) lists the extra for each format.
 
