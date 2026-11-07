@@ -218,7 +218,7 @@ def test_gliner_labels_become_kinds_and_windows_keep_offsets(monkeypatch):
 
 def test_gliner_reports_a_missing_package_and_a_model_that_wont_load(monkeypatch):
     monkeypatch.setitem(sys.modules, "gliner", None)
-    with pytest.raises(SourceError, match="pip install gliner"):
+    with pytest.raises(SourceError, match="uv tool install datanyx --with gliner"):
         GlinerDetector()
     broken = types.ModuleType("gliner")
 

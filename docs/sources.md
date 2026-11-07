@@ -29,12 +29,24 @@
 | MariaDB | `mariadb://` | `.[mysql]` |
 | SQL Server | `mssql://` | `.[mssql]` |
 | Oracle | `oracle://` | `.[oracle]` |
-| BigQuery | `bigquery://project/dataset` | `.[bigquery]` |
-| Snowflake | `snowflake://` | `.[snowflake]` |
+| BigQuery (experimental) | `bigquery://project/dataset` | `.[bigquery]` |
+| Snowflake (experimental) | `snowflake://` | `.[snowflake]` |
 | A compressed file | `.gz`, `.bz2`, `.xz`, `.zst` after a text format, such as `orders.csv.gz` | `.zst` needs `.[zstd]` |
 | A file at a URL | `https://`, `s3://`, `gs://`, `az://` (also `abfs://`) and a file type above | `.[remote]`, `.[s3]`, `.[gcs]` or `.[azure]` |
 | A folder | Every readable file in it, with `-r` for subfolders | as for the files in it |
 | Text and documents (`anonymize`) | Text, HTML, `.eml`, `.docx`, `.pdf`, WhatsApp and Slack exports, a folder of them, or `-` for stdin | `.[text]`, plus a [model](anonymization.md#text-anonymization); PDF needs `.[pdf]` |
+
+## How each source is tested
+
+- **Every file format in the table** is in the canary test (`tests/test_canary_everywhere.py`). A distinctive value is planted in
+  values, names, comments, defaults, enum labels and file metadata, and the test fails if it shows up in any output of the library,
+  the command line or the MCP tools. That includes the compressed files (`.csv.gz`, `.jsonl.bz2`).
+- **CSV, TSV, JSON, JSON Lines, XML and YAML** are also fuzzed with random documents that have the canary in every value.
+- **PostgreSQL, MySQL, MariaDB, SQL Server, Oracle and MongoDB** run against real servers in CI. MongoDB, and the canary test for it,
+  also run against an in-memory stand-in.
+- **BigQuery and Snowflake are experimental**: no live service, so nothing beyond the shared SQL code path is checked for them.
+
+A new source is not finished until it is in the canary test. See [Contributing](contributing.md).
 
 ## Files at a URL
 
@@ -100,8 +112,10 @@ A JSON or YAML file is taken for an API description only if it begins with an `o
 
 **BigQuery and Snowflake** are read like any other SQL database, through their SQLAlchemy dialects
 (`bigquery://my-project/my_dataset`, `snowflake://user@account/database/schema`, with the password from
-`env:NAME`). These two are wired up but are not tested against a live warehouse the way PostgreSQL, MySQL, MariaDB,
-SQL Server and Oracle are, so check the output the first time you use one.
+`env:NAME`). **These two are experimental.** They are wired up, but they are not tested against a live warehouse the way
+PostgreSQL, MySQL, MariaDB, SQL Server and Oracle are (those run against real servers in CI, with canary values planted in
+defaults, enum labels, comments and names). Treat the output as unverified the first time you use one: check it, and
+use a login that can read the catalog but not the rows. `datanyx doctor` marks them the same way.
 
 **Formats that carry their own schema** (Parquet, ORC, Avro, SAS, Stata and SPSS) are described from the
 file's header or footer alone. No row is decoded. Avro enum symbols, and the value labels and variable
@@ -133,5 +147,7 @@ building one needs a C library; use Python 3.11 or newer there.
 
 Extras are installed as `uv tool install "datanyx[yaml]"` (in a clone, `uv sync --extra yaml`), and `[all]` installs every reader and
 driver. Large JSON files stream with `[streaming]`, SAS, Stata and SPSS need `[stats]`, SQL checking needs `[check]`, PDF needs `[pdf]`, the Presidio backend needs `[presidio]`, and the MCP server needs `[mcp]`.
+`uv tool install` replaces the earlier install of the tool, so name every extra you want in one command
+(`uv tool install "datanyx[yaml,parquet,mcp]"`).
 Other SQLAlchemy URLs should work if you install their dialect, but only the databases listed above
 as tested are.

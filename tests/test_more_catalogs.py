@@ -398,3 +398,14 @@ def test_doctor_copes_with_a_missing_parent_package(monkeypatch, capsys):
     monkeypatch.setattr(importlib.util, "find_spec", find_spec)
     assert main(["doctor"]) == 0
     assert "Snowflake" in capsys.readouterr().out
+
+
+def test_doctor_marks_the_warehouses_that_are_not_tested_live_and_suggests_uv(monkeypatch, capsys):
+    import importlib.util
+
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name == "snowflake.sqlalchemy" else real(name, *a))
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "BigQuery (experimental)" in out and "Snowflake (experimental)" in out
+    assert 'uv tool install "datanyx[snowflake]"' in out and "pip install" not in out

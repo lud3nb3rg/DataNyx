@@ -250,7 +250,7 @@ def _load_model(model: str):
     try:
         import spacy
     except ImportError:
-        raise SourceError('text anonymization needs spaCy; run: pip install "datanyx[text]"') from None
+        raise SourceError('text anonymization needs spaCy; run: uv tool install "datanyx[text]"') from None
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

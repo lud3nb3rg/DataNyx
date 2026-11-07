@@ -137,7 +137,7 @@ class GlinerDetector:
         try:
             from gliner import GLiNER
         except ImportError:
-            raise SourceError("the GLiNER backend needs the gliner package; install it with: pip install gliner") from None
+            raise SourceError("the GLiNER backend needs the gliner package; install it with: uv tool install datanyx --with gliner (or uv add gliner)") from None
         try:
             self._model: Any = GLiNER.from_pretrained(model)
         except Exception as error:
@@ -213,7 +213,7 @@ def _require_model(model: str) -> None:
     try:
         import spacy.util
     except ImportError:
-        raise SourceError('this backend needs spaCy; run: pip install "datanyx[text]"') from None
+        raise SourceError('this backend needs spaCy; run: uv tool install "datanyx[text]"') from None
     if not spacy.util.is_package(model):
         raise SourceError(f"NER model not found; run: python -m spacy download {model}")
 

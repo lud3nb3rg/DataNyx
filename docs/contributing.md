@@ -54,6 +54,11 @@ and connection timeout argument to `sql_source.py`, add the extra to `pyproject.
 and add a server to the live tests. Anything else with a catalog should read it directly
 and build `Object` nodes, with one `Entity` per table, so it never has to query any rows.
 
+**Every new source needs a builder in `tests/test_canary_everywhere.py`**: a small function that writes a file with the canary
+planted in values, names, comments, defaults and metadata. The test then runs it through the library, the command line and the
+MCP tools. A source that can't be written to a file (a database server) gets a test in the same file, or a server test. A source
+with no such test is documented as experimental until it has one.
+
 ## Development
 
 The project uses [uv](https://docs.astral.sh/uv/). `uv sync` creates `.venv` from

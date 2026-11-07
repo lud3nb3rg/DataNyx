@@ -59,7 +59,7 @@ _OPTIONAL = (
     ("CSV, TSV, JSON, XML, SQLite", "sqlalchemy", "built in"),
     ("YAML", "yaml", "datanyx[yaml]"),
     ("Excel", "openpyxl", "datanyx[excel]"),
-    ("Parquet and ORC", "pyarrow", "datanyx[parquet] or datanyx[orc]"),
+    ("Parquet and ORC", "pyarrow", "datanyx[parquet]"),
     ("Avro", "fastavro", "datanyx[avro]"),
     ("DuckDB", "duckdb", "datanyx[duckdb]"),
     ("SAS, Stata and SPSS", "pyreadstat", "datanyx[stats]"),
@@ -74,8 +74,8 @@ _OPTIONAL = (
     ("MySQL / MariaDB", "pymysql", "datanyx[mysql]"),
     ("SQL Server", "pymssql", "datanyx[mssql]"),
     ("Oracle", "oracledb", "datanyx[oracle]"),
-    ("BigQuery", "sqlalchemy_bigquery", "datanyx[bigquery]"),
-    ("Snowflake", "snowflake.sqlalchemy", "datanyx[snowflake]"),
+    ("BigQuery (experimental)", "sqlalchemy_bigquery", "datanyx[bigquery]"),
+    ("Snowflake (experimental)", "snowflake.sqlalchemy", "datanyx[snowflake]"),
     ("SQL files (CREATE TABLE)", "sqlglot", "datanyx[ddl]"),
     ("Zstandard files", "zstandard", "datanyx[zstd]"),
     ("Text anonymization", "spacy", "datanyx[text]"),
@@ -95,14 +95,14 @@ def _run_doctor(args: argparse.Namespace) -> int:
 
     for label, module, install in _OPTIONAL:
         found = _installed(importlib.util, module)
-        print(f"{'ok     ' if found else 'missing'}  {label}" + ("" if found else f'  ->  pip install "{install}"'))
+        print(f"{'ok     ' if found else 'missing'}  {label}" + ("" if found else f'  ->  uv tool install "{install}"'))
     if importlib.util.find_spec("spacy") is not None:
         import spacy.util
 
         found = spacy.util.is_package(args.model)
         print(f"{'ok     ' if found else 'missing'}  NER model {args.model}" + ("" if found else f"  ->  python -m spacy download {args.model}"))
     for name, installed in backend_availability().items():
-        hint = "" if installed else ('  ->  pip install "datanyx[presidio]"' if name == "presidio" else "  ->  pip install gliner")
+        hint = "" if installed else ('  ->  uv tool install "datanyx[presidio]"' if name == "presidio" else "  ->  uv tool install datanyx --with gliner")
         print(f"{'ok     ' if installed else 'missing'}  backend {name}{hint}")
     print(f"        packs: {', '.join(sorted(PACKS))}")
     return 0

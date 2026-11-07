@@ -9,6 +9,9 @@ A name that looks like a plain identifier is shown by design, so canary names ha
 """
 
 import asyncio
+import bz2
+import datetime
+import gzip
 import json
 import sqlite3
 
@@ -213,7 +216,93 @@ def _openapi(folder):
     return path
 
 
-BUILDERS = [_csv, _tsv, _json, _jsonl, _yaml, _xml, _xlsx, _parquet, _sqlite, _duckdb, _hl7, _fhir, _arrow, _delta, _iceberg, _proto, _ddl, _openapi]
+def _avro(folder):
+    fastavro = pytest.importorskip("fastavro")
+    # Avro field names must be identifiers, and an identifier is shown by design, so the canary rides in values, symbols,
+    # docs, defaults and file metadata instead.
+    schema = {
+        "type": "record",
+        "name": "r",
+        "doc": CANARY,
+        "fields": [
+            {"name": "id", "type": "long", "doc": CANARY},
+            {"name": "plan", "type": {"type": "enum", "name": "Plan", "symbols": [CANARY, "other"]}, "default": CANARY},
+            {"name": "note", "type": "string", "default": CANARY},
+            {"name": "tags", "type": {"type": "array", "items": "string"}},
+        ],
+    }
+    path = folder / "t.avro"
+    with open(path, "wb") as stream:
+        fastavro.writer(stream, schema, [{"id": i, "plan": CANARY, "note": CANARY, "tags": [CANARY]} for i in range(ROWS)], metadata={"owner": CANARY})
+    return path
+
+
+def _orc(folder):
+    pa = pytest.importorskip("pyarrow")
+    orc = pytest.importorskip("pyarrow.orc")
+    table = pa.table({"id": list(range(ROWS)), ODD_NAME: [CANARY] * ROWS, "tags": [[CANARY]] * ROWS})
+    path = folder / "t.orc"
+    try:
+        orc.write_table(table, str(path))
+    except pa.ArrowException as error:  # Windows builds of pyarrow have no time zone database.
+        pytest.skip(f"this pyarrow cannot write ORC here ({type(error).__name__})")
+    return path
+
+
+def _frame():
+    pd = pytest.importorskip("pandas")
+    return pd.DataFrame(
+        {
+            "id": list(range(ROWS)),
+            "name": [CANARY] * ROWS,
+            "sex": [1, 2] * (ROWS // 2) + [1],
+            "born": [datetime.date(2000, 1, 2)] * ROWS,
+        }
+    )
+
+
+def _dta(folder):
+    pyreadstat = pytest.importorskip("pyreadstat")
+    path = folder / "t.dta"
+    pyreadstat.write_dta(
+        _frame(), str(path), variable_value_labels={"sex": {1: CANARY, 2: "f"}}, column_labels=["i", CANARY, CANARY, "b"], file_label=CANARY
+    )
+    return path
+
+
+def _sav(folder):
+    pyreadstat = pytest.importorskip("pyreadstat")
+    path = folder / "t.sav"
+    pyreadstat.write_sav(
+        _frame(), str(path), variable_value_labels={"sex": {1: CANARY, 2: "f"}}, column_labels=["i", CANARY, CANARY, "b"], file_label=CANARY
+    )
+    return path
+
+
+def _xpt(folder):
+    pyreadstat = pytest.importorskip("pyreadstat")
+    path = folder / "t.xpt"
+    pyreadstat.write_xport(_frame()[["id", "name"]], str(path))
+    return path
+
+
+def _csv_gz(folder):
+    path = folder / "zipped.csv.gz"
+    lines = [f"id,{ODD_NAME}"] + [f"{i},{CANARY}{i}" for i in range(1, ROWS + 1)]
+    path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    return path
+
+
+def _jsonl_bz2(folder):
+    path = folder / "zipped.jsonl.bz2"
+    path.write_bytes(bz2.compress("\n".join(json.dumps({"id": i, ODD_NAME: CANARY, "tags": [CANARY]}) for i in range(ROWS)).encode()))
+    return path
+
+
+BUILDERS = [
+    _csv, _tsv, _json, _jsonl, _yaml, _xml, _xlsx, _parquet, _sqlite, _duckdb, _hl7, _fhir, _arrow, _delta, _iceberg, _proto, _ddl, _openapi,
+    _avro, _orc, _dta, _sav, _xpt, _csv_gz, _jsonl_bz2,
+]
 
 
 @pytest.fixture(scope="module")
@@ -302,5 +391,80 @@ def test_the_probe_can_fail(data):
     """A control: if the owner chooses to show the odd name, the canary does appear, so the checks above can see it."""
     _root, made = data
     policy = KeyPolicy(keep_names=frozenset({ODD_NAME}))
-    for name in ("csv", "parquet", "sqlite"):
-        assert CANARY in render(extract(str(made[name]), policy=policy), "text")
+    for name in ("csv", "parquet", "sqlite", "csv_gz", "jsonl_bz2", "orc"):
+        if name in made:  # ORC can't be written by every pyarrow build, and a skipped builder is not in `made`.
+            assert CANARY in render(extract(str(made[name]), policy=policy), "text"), name
+    assert {"csv_gz", "jsonl_bz2"} <= set(made), "the compressed builders need nothing optional, so they must run"
+
+
+# --- MongoDB is not a file, so it has its own fixture; the channels are the same ----------------------------
+
+
+@pytest.fixture
+def mongo_url(monkeypatch):
+    mongomock = pytest.importorskip("mongomock")
+    pytest.importorskip("pymongo")
+    import bson
+
+    from datanyx.sources import mongodb_source
+
+    client = mongomock.MongoClient("mongodb://localhost/shop")
+    database = client["shop"]
+    database["users"].insert_many(
+        [
+            {
+                "_id": bson.ObjectId(),
+                "email": f"{CANARY}@example.com",
+                "age": 31,
+                "tags": [CANARY],
+                "address": {"city": CANARY},
+                ODD_NAME: CANARY,
+            },
+            {"_id": bson.ObjectId(), "email": None, "nick": CANARY},
+        ]
+    )
+    database[ODD_NAME].insert_one({"x": CANARY})
+    monkeypatch.setattr(mongodb_source, "_client", lambda url: client)
+    monkeypatch.setenv("DN_CANARY_MONGO", f"mongodb://user:{CANARY}-pw@localhost/shop")
+    return "env:DN_CANARY_MONGO"
+
+
+def test_mongodb_never_holds_the_canary_in_any_channel(mongo_url, capsys, tmp_path):
+    outputs = []
+    for policy in _hint_policies():
+        schema = extract(mongo_url, source="mongodb", policy=policy)
+        outputs += [render(schema, name) for name in RENDERERS] + list(schema.notes)
+        for table in synthesize(schema, rows=30):
+            outputs += [render_table(table, kind) for kind in ("json", "jsonl", "csv")]
+    assert CANARY not in "\n".join(outputs)
+
+    for argv in (
+        *[["schema", mongo_url, "--source", "mongodb", "--format", name, "--column-hints"] for name in RENDERERS],
+        ["synth", mongo_url, "--source", "mongodb", "--rows", "30"],
+    ):
+        main(argv)
+        seen = capsys.readouterr()
+        assert CANARY not in seen.out + seen.err, argv
+
+
+def test_mongodb_through_the_mcp_server_never_holds_the_canary(mongo_url, tmp_path):
+    pytest.importorskip("mcp")
+    from datanyx.mcp_server import create_server
+
+    server = create_server([tmp_path], allow_env=["DN_CANARY_MONGO"], column_hints=True)
+
+    def call(tool, arguments):
+        try:
+            result = asyncio.run(server.call_tool(tool, arguments))
+        except Exception as error:  # Refusals are fine; what they say must be clean.
+            return str(error)
+        return "\n".join(getattr(block, "text", "") for block in result.content) if hasattr(result, "content") else str(result)
+
+    collected = [
+        call("describe_data", {"target": mongo_url}),
+        call("synthetic_sample", {"target": mongo_url, "rows": 20}),
+        call("check_code", {"code": "select nope from nowhere", "target": mongo_url}),
+        call("schema_diff", {"old": mongo_url, "new": mongo_url}),
+    ]
+    assert CANARY not in "\n".join(collected)
+    assert any("users" in text for text in collected), "the tools should have described the collections"
