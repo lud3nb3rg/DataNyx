@@ -8,11 +8,11 @@ Actions, and as a server a team shares.
 Releases are published to [PyPI](https://pypi.org/project/datanyx/) from a version tag:
 
 ```sh
-pip install datanyx                    # CSV, JSON, XML and SQLite
-pip install "datanyx[all]"             # every reader, driver and the MCP server
+uv tool install datanyx                # CSV, JSON, XML and SQLite
+uv tool install "datanyx[all]"         # every reader, driver and the MCP server
 ```
 
-The [sources table](sources.md) lists the extra for each format.
+To use it as a library in a project, `uv add datanyx`. The [sources table](sources.md) lists the extra for each format.
 
 ## In a container
 

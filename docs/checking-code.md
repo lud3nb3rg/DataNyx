@@ -18,7 +18,7 @@ query.sql:5:44: error: unknown table 'orders'
 ```
 
 ```sh
-pip install -e ".[check]"                                  # SQL checking needs sqlglot
+uv tool install "datanyx[check]"                           # SQL checking needs sqlglot
 datanyx check query.sql --against shop.db                  # a database: dialect and column types come from it
 datanyx check analyze.py --against customers.csv           # pandas code
 datanyx check report.sql --against ./exports/ --strict     # a folder of files; warnings fail too

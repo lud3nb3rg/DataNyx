@@ -15,15 +15,16 @@
 services:
   # A new volume belongs to root, and the server runs as an unprivileged user (uid 10001), so give it the log folder.
   audit-setup:
-    image: busybox:1.37
+    image: busybox:1.37@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
     command: ["sh", "-c", "chown 10001 /audit && chmod 700 /audit"]
     volumes:
       - audit:/audit
     network_mode: none
 
   datanyx:
-    # Pin a release; check it with `gh attestation verify` (docs/deployment.md#checking-a-release).
-    image: ghcr.io/lud3nb3rg/datanyx:0.2.0
+    # A release pinned by digest, so the tag can't be moved under you; check it with `gh attestation verify`
+    # (docs/deployment.md#checking-a-release). To update: `docker buildx imagetools inspect ghcr.io/lud3nb3rg/datanyx:X.Y.Z`.
+    image: ghcr.io/lud3nb3rg/datanyx:0.2.0@sha256:b1135a78a0a3170959c9dfda2459212104780406f71b914e61b5a2ff891a1bcb
     command: ["mcp", "--http", "0.0.0.0:8808", "--root", "/data", "--audit-log", "/audit/audit.jsonl"]
     environment:
       DATANYX_MCP_TOKEN: ${DATANYX_MCP_TOKEN:?set a token of at least 16 characters}

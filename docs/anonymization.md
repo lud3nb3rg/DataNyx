@@ -1,8 +1,8 @@
 # Text anonymization
 
 ```sh
-uv sync --all-extras --group models         # spaCy plus en_core_web_lg and fr_core_news_md
-# or: pip install -e ".[text]" && python -m spacy download en_core_web_lg   (about 400 MB)
+uv tool install "datanyx[text]" --with "en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl"   # from PyPI; the model is about 400 MB
+# in a clone: uv sync --all-extras --group models   (spaCy plus en_core_web_lg and fr_core_news_md)
 
 datanyx anonymize notes.txt                 # print to stdout
 datanyx anonymize notes.txt -o clean.txt    # write to a file

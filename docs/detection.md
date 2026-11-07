@@ -104,7 +104,7 @@ pattern sees. Scanning with a pack counts its kinds by default, and `--keep-enti
 | Backend | What it adds |
 |---|---|
 | `presidio[:LANG[:MODEL]]` | Microsoft Presidio's recognisers for many national ids and formats. Needs `.[presidio]` and a spaCy model for the language (`presidio:de:de_core_news_lg`) |
-| `gliner[:MODEL]` | A GLiNER model for personal data, useful for names the spaCy models miss and for languages they don't cover. Needs `pip install gliner`; the model downloads once from Hugging Face, and the text itself never leaves your machine |
+| `gliner[:MODEL]` | A GLiNER model for personal data, useful for names the spaCy models miss and for languages they don't cover. Needs the `gliner` package (`uv tool install datanyx --with gliner`, or `uv add gliner`); the model downloads once from Hugging Face, and the text itself never leaves your machine |
 | `ollama[:MODEL[@URL]]` | A language model running on this computer through Ollama, asked to quote what is sensitive in each passage |
 
 The Ollama backend **refuses any server that isn't on this computer**: sending sensitive text to a remote
