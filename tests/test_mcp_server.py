@@ -41,6 +41,17 @@ def test_lists_only_the_safe_tools(folder):
     assert asyncio.run(names()) == ["anonymize_file", "check_code", "describe_data", "scan_folder", "schema_diff", "synthetic_sample"]
 
 
+def test_every_tool_declares_all_four_hints(folder):
+    async def hints():
+        return [tool.annotations.model_dump(by_alias=True) for tool in await create_server([folder]).list_tools()]
+
+    expected = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
+    declared = asyncio.run(hints())
+    assert len(declared) == 6
+    for hint in declared:
+        assert {name: hint[name] for name in expected} == expected
+
+
 def test_describe_data_returns_schema_without_values(folder):
     result = call(create_server([folder]), "describe_data", {"target": str(folder / "d.csv")})
     text = result.content[0].text

@@ -143,6 +143,20 @@ def _tool_error() -> type[Exception]:
     return ToolError
 
 
+# True of every tool: each one only reads, gives the same answer for the same input (synthetic rows
+# use a fixed seed), and reaches nothing but the folders and databases the owner allowed.
+TOOL_HINTS = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
+
+
+def _annotations() -> Any:
+    """The hints as the MCP library's own type, or None where the library has none."""
+    try:
+        from mcp.types import ToolAnnotations
+    except ImportError:
+        return None
+    return ToolAnnotations.model_validate(TOOL_HINTS)  # By wire name: the field names differ between mcp 1.x and 2.x.
+
+
 def _guard(function: Callable[..., str], on_failure: Callable[[str, BaseException], None] | None = None) -> Callable[..., str]:
     """Let only fixed messages out: an exception's own text can quote the data.
 
@@ -248,7 +262,10 @@ def create_server(
             audit.record(function.__name__, kwargs, "ok", None, started, len(result))
             return result
 
-        return server.tool()(audited)  # type: ignore[no-any-return]
+        try:
+            return server.tool(annotations=_annotations())(audited)  # type: ignore[no-any-return]
+        except TypeError:  # An mcp too old to take annotations.
+            return server.tool()(audited)  # type: ignore[no-any-return]
 
     @tool
     def describe_data(
