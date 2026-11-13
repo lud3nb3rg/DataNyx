@@ -54,7 +54,8 @@ from .text.backends import BACKEND_KINDS
 INSTRUCTIONS = (
     "Describes the user's data without revealing it. `describe_data` returns a schema "
     "(types and field names, never values) for a file, folder or database. "
-    "`synthetic_sample` returns fake rows that match that schema, for trying code out. "
+    "`synthetic_sample` returns fake rows that match that schema, for trying code out; ask for `messy` rows "
+    "before you call code finished, because real data has blanks, stray spaces and text among numbers. "
     "`check_code` checks your SQL or pandas code against that schema before you run it. "
     "`scan_folder` reports which files hold personal data or secrets, never the values. "
     "`schema_diff` compares two schemas and says what could break. "
@@ -207,6 +208,8 @@ def create_server(
     debug_log: str | Path | None = None,
     column_hints: bool = False,
     public_columns: Sequence[str] = (),
+    keep_names: Sequence[str] = (),
+    map_paths: Sequence[str] = (),
 ):
     """Build the server.
 
@@ -219,6 +222,8 @@ def create_server(
     how many tables `describe_data` returns at once (the summary format is not capped). `max_rows` limits how many
     rows of a data file are read, so one huge file can't hold the server up. `debug_log` is a private file that
     gets where each unexpected failure happened (file, line and function, never the message or any value).
+    `keep_names` and `map_paths` are the owner's, as in `datanyx.toml`, so the server describes the data the way
+    `datanyx schema` does there; the agent can add map paths, which only hide more, but no names to keep.
     """
     try:
         from mcp.server.mcpserver import MCPServer as Server  # type: ignore[import-not-found]  # mcp 2.x
@@ -238,6 +243,7 @@ def create_server(
     audit = AuditLog(audit_log)
     debug = DebugLog(debug_log)
     hide_terms = list(hide)
+    owner_keep_names, owner_map_paths = frozenset(keep_names), tuple(map_paths)
 
     def key_policy(map_paths: Sequence[str] | None = None, **selection: Any) -> KeyPolicy:
         """One policy for every tool, so they all describe the data alike. Only the owner sets the hints.
@@ -245,7 +251,7 @@ def create_server(
         A selection of tables is only for describe_data: code checked against a trimmed schema would report
         tables that exist as unknown.
         """
-        return KeyPolicy(map_paths=frozenset(map_paths or ()), scale_hints=scale_hints, infer_keys=infer_keys, column_hints=column_hints, public_columns=frozenset(public_columns), views=views, max_rows=max_rows, **selection)
+        return KeyPolicy(map_paths=frozenset([*owner_map_paths, *(map_paths or ())]), keep_names=owner_keep_names, scale_hints=scale_hints, infer_keys=infer_keys, column_hints=column_hints, public_columns=frozenset(public_columns), views=views, max_rows=max_rows, **selection)
 
     def tool(function: Callable[..., str]) -> Callable[..., str]:
         """Register a tool: refusals and failures become fixed messages, and every call is recorded."""
@@ -282,7 +288,8 @@ def create_server(
 
         target: a path to a file, a folder of files, or env:NAME naming an environment
             variable that holds a database URL. Files: CSV, TSV, JSON, JSON Lines, YAML, XML,
-            Excel, Parquet, ORC, Avro, SAS, Stata, SPSS, SQLite, DuckDB, FHIR and HL7 v2.
+            Excel, Parquet, ORC, Avro, Arrow, SAS, Stata, SPSS, SQLite, DuckDB, FHIR, HL7 v2,
+            Protocol Buffers, SQL files, OpenAPI, and Delta Lake or Iceberg table folders.
         format: "text" (compact), "json-schema", or "summary" (one line per table: a first look at a big database).
         tables: only tables or files whose names match one of these globs, such as ["sales_*"].
         exclude: leave out names matching these globs.
@@ -312,18 +319,23 @@ def create_server(
         recursive: bool = False,
         map_paths: list[str] | None = None,
         database_schema: str | None = None,
+        messy: bool = False,
     ) -> str:
         """Fake rows that match the schema of a file, folder or database, as JSON Lines.
 
         Use this to try out code and see realistic output. Nothing real is in it: it is
         generated from the schema alone. Several tables come back as sections, one per
         table, each headed by its name.
+
+        messy: also give the rows the flaws real data has (padded and oddly cased text, empty strings,
+            "n/a" and numbers written as text in columns that mix both, extreme numbers, more nulls,
+            repeated rows). Test against these before trusting code: it will meet them in the real data.
         """
         if not 1 <= rows <= MAX_SAMPLE_ROWS:
             raise SourceError(f"rows must be between 1 and {MAX_SAMPLE_ROWS}")
         policy = key_policy(map_paths)
         schema = extract(access.check(target), policy=policy, namespace=database_schema, recursive=recursive)
-        tables = synthesize(schema, rows)
+        tables = synthesize(schema, rows, messy=messy)
         if len(tables) == 1:
             return render_table(tables[0], "jsonl")
         sections = [f"-- {table.name or 'root'}" + chr(10) + render_table(table, "jsonl") for table in tables]
@@ -501,6 +513,8 @@ def run(
     debug_log: str | Path | None = None,
     column_hints: bool = False,
     public_columns: Sequence[str] = (),
+    keep_names: Sequence[str] = (),
+    map_paths: Sequence[str] = (),
 ) -> None:
     allowed = {*ENTITY_KINDS, SECRET, *kinds_of(list(detectors))}
     unknown = set(keep_entity) - allowed
@@ -509,7 +523,7 @@ def run(
     server = create_server(
         roots, allow_urls, model, keep_entity, hide, detectors, audit_log, scale_hints, infer_keys, allow_env, scan_settings,
         views=views, max_tables=max_tables, max_rows=max_rows, debug_log=debug_log, column_hints=column_hints,
-        public_columns=public_columns,
+        public_columns=public_columns, keep_names=keep_names, map_paths=map_paths,
     )
     if http is None:
         server.run("stdio")

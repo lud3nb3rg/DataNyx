@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import subprocess
 import sys
+from dataclasses import replace
 
-from .. import extract
+from .. import extract, render
 from ..scrub import ScrubPolicy, scrub, shape, visible_names
 from ..sources import SourceError
 from ..text import (
@@ -95,18 +97,8 @@ def _run_command(args: argparse.Namespace) -> int:
     environment = dict(os.environ)
     environment.setdefault("PYTHONIOENCODING", "utf-8")
     environment.setdefault("PYTHONUTF8", "1")
-    timed_out = False
-    try:
-        result = subprocess.run(
-            command, stdin=subprocess.DEVNULL, capture_output=True, timeout=args.timeout, env=environment, check=False
-        )
-        out, err, code = result.stdout, result.stderr, result.returncode
-    except subprocess.TimeoutExpired as error:
-        out, err, code, timed_out = error.stdout or b"", error.stderr or b"", 124, True
-    except FileNotFoundError:
-        raise SourceError("cannot run the command: not found") from None
-    except OSError as error:
-        raise SourceError(f"cannot run the command: {error.strerror}") from None
+    before = {path: _stamp(path) for path in args.describe_output}
+    out, err, code, timed_out = _run_to_the_end(command, environment, args.timeout)
 
     raw_out, raw_err = out.decode("utf-8", errors="replace"), err.decode("utf-8", errors="replace")
     if args.save_stdout:
@@ -123,7 +115,96 @@ def _run_command(args: argparse.Namespace) -> int:
     shown = {"shape": "hidden", "scrubbed": "scrubbed", "none": "hidden"}[args.stdout]
     summary = f"datanyx: exit code {code}; stdout {shown} ({shape(raw_out)})"
     print(("datanyx: timed out; " if timed_out else "") + summary, file=sys.stderr)
+    for path in args.describe_output:
+        _describe_output(path, before[path], args)
     return code if 0 <= code <= 255 else 1
+
+
+def _run_to_the_end(command: list[str], environment: dict[str, str], timeout: float | None) -> tuple[bytes, bytes, int, bool]:
+    """Run the command and return its stdout, stderr, exit code and whether it ran out of time.
+
+    A command is often a launcher (`uv run python report.py`), whose child does the work and holds the output
+    open. Stopping the launcher alone would leave us waiting for the child, so the whole tree is stopped.
+    """
+    try:
+        process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+            start_new_session=os.name != "nt",  # Its own process group, so the group can be stopped as one.
+        )
+    except FileNotFoundError:
+        raise SourceError("cannot run the command: not found") from None
+    except OSError as error:
+        raise SourceError(f"cannot run the command: {error.strerror}") from None
+    try:
+        out, err = process.communicate(timeout=timeout)
+        return out, err, process.returncode, False
+    except subprocess.TimeoutExpired:
+        _stop_tree(process)
+        try:
+            out, err = process.communicate(timeout=_AFTER_STOP_SECONDS)
+        except subprocess.TimeoutExpired as late:  # Something outside the tree still holds the output open.
+            out, err = late.stdout or b"", late.stderr or b""
+        return out or b"", err or b"", 124, True
+    except BaseException:  # Ctrl+C reaches us but not a command in its own group, so it is stopped here.
+        _stop_tree(process)
+        raise
+
+
+_AFTER_STOP_SECONDS = 5
+
+
+def _stop_tree(process: subprocess.Popen) -> None:
+    """Stop the command and everything it started."""
+    try:
+        if sys.platform == "win32":  # sys.platform, not os.name, so type checkers know which branch can run.
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=_AFTER_STOP_SECONDS,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        process.kill()  # Whatever the above did, the command itself must not outlive us.
+    except OSError:
+        pass
+
+
+def _stamp(path: str) -> tuple[int, int] | None:
+    """What tells one version of a file from the next, or None if it isn't there."""
+    try:
+        status = os.stat(path)
+    except OSError:
+        return None
+    return status.st_mtime_ns, status.st_size
+
+
+def _describe_output(path: str, before: tuple[int, int] | None, args: argparse.Namespace) -> None:
+    """Say what the command wrote to `path` as a schema: its shape, never its values.
+
+    A file the command didn't touch is said to be that, and not described: an old result read as a new one
+    is how a wrong answer goes unnoticed."""
+    after = _stamp(path)
+    if after is None:
+        print(f"datanyx: output {path}: not written", file=sys.stderr)
+        return
+    if after == before:
+        print(f"datanyx: output {path}: not changed by the command, so not described", file=sys.stderr)
+        return
+    try:
+        # A result is small next to its source, and its size is the first thing that shows a wrong join or filter.
+        schema = extract(path, policy=replace(_policy(args), scale_hints=True))
+    except SourceError as error:
+        print(f"datanyx: output {path}: cannot describe it: {error}", file=sys.stderr)
+        return
+    except Exception as error:
+        print(f"datanyx: output {path}: cannot describe it ({type(error).__name__})", file=sys.stderr)
+        return
+    print(f"datanyx: output {path}:")
+    print(render(schema, "text"))
+    for note in schema.notes:
+        print(f"note: {note}", file=sys.stderr)
 
 
 def add_scrub(commands: argparse._SubParsersAction) -> None:
@@ -160,6 +241,14 @@ def add_run(commands: argparse._SubParsersAction) -> None:
         help="what to show of stdout: only its size (default), a scrubbed copy, or nothing",
     )
     run.add_argument("--timeout", type=float, metavar="SECONDS", help="stop the command after this long")
+    run.add_argument(
+        "--describe-output", action="append", default=[], metavar="FILE",
+        help=(
+            "after the command ends, print the schema of this file it wrote (a CSV, JSON or Parquet result, say): field names, "
+            "types and a size bucket, never values, so a result that came out empty, all null or the wrong shape shows "
+            "(repeatable). A file the command didn't write or change is reported as such"
+        ),
+    )
     run.add_argument("--save-stdout", metavar="FILE", help="also save the real stdout to this new file, for you to read")
     run.add_argument("--save-stderr", metavar="FILE", help="also save the real stderr to this new file, for you to read")
     run.add_argument("program", nargs=argparse.REMAINDER, metavar="COMMAND", help="the command to run, after --")

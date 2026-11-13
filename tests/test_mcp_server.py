@@ -171,3 +171,32 @@ def test_every_tool_describes_data_with_the_owners_hints(tmp_path):
     (tmp_path / "saved.json").write_text(saved.split("\n\nNotes:")[0], encoding="utf-8")
     diff = call(server, "schema_diff", {"old": str(tmp_path / "saved.json"), "new": str(tmp_path / "t.csv")}).content[0].text
     assert diff == "No differences."
+
+
+def test_the_owners_names_to_keep_and_map_paths_reach_every_tool(tmp_path):
+    """`keep_names` and `map_paths` in datanyx.toml must mean the same to the server as to `datanyx schema`."""
+    import json
+
+    (tmp_path / "d.json").write_text(json.dumps([{"Order Details": 1, "id": 2, "tags": {"red": 1, "blue": 2}}] * 3), encoding="utf-8")
+    target = {"target": str(tmp_path / "d.json")}
+    default = call(create_server([tmp_path]), "describe_data", target).content[0].text
+    assert "Order Details" not in default and "blue" in default
+    server = create_server([tmp_path], keep_names=["Order Details"], map_paths=["$[].tags"])
+    described = call(server, "describe_data", target).content[0].text
+    assert "Order Details" in described and "blue" not in described
+    sample = call(server, "synthetic_sample", {**target, "rows": 3}).content[0].text
+    assert "Order Details" in sample and '"red"' not in sample
+    # What the agent adds can only hide more.
+    assert "id" in call(server, "describe_data", {**target, "map_paths": ["$[]"]}).content[0].text.replace("Order Details", "")
+
+
+def test_cli_passes_the_settings_files_names_to_the_server(tmp_path, monkeypatch):
+    from datanyx import mcp_server
+    from datanyx.cli import main
+
+    (tmp_path / "datanyx.toml").write_text('[schema]\nkeep_names = ["Order Details"]\nmap_paths = ["$.users"]\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+    monkeypatch.setattr(mcp_server, "run", lambda *args, **kwargs: seen.update(kwargs))
+    assert main(["mcp"]) == 0
+    assert tuple(seen["keep_names"]) == ("Order Details",) and tuple(seen["map_paths"]) == ("$.users",)

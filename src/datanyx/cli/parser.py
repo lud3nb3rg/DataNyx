@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from .. import __version__
 from ..text import DEFAULT_MODEL  # noqa: F401
 from .anonymize import add_anonymize, add_restore
 from .check import add_check
@@ -25,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="datanyx",
         description="Describe data to an AI agent without showing it the data.",
     )
+    parser.add_argument("--version", action="version", version=f"datanyx {__version__}")
     parser.add_argument("--config", dest="config_file", metavar="FILE", help="settings file to use instead of the nearest datanyx.toml")
     parser.add_argument("--no-config", action="store_true", help="ignore datanyx.toml")
     commands = parser.add_subparsers(dest="command", required=True)

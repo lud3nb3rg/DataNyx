@@ -19,7 +19,7 @@ _GIT_CONTENT = frozenset({"diff", "show", "archive", "format-patch", "bundle", "
 _GIT_PATCH_OPTIONAL = frozenset({"log", "whatchanged"})  # These print contents only if asked to.
 _GIT_PATCH_FLAGS = frozenset({"-p", "-u", "--patch", "--patch-with-stat", "--patch-with-raw"})
 _GIT_SUMMARIES = frozenset({"--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--summary", "-s", "--no-patch"})
-_RUN_VALUES = frozenset({"--names-from", "--allow", "--hide", "--model", "--pack", "--backend", "--detectors", "--stdout", "--timeout", "--save-stdout", "--save-stderr"})
+_RUN_VALUES = frozenset({"--names-from", "--allow", "--hide", "--model", "--pack", "--backend", "--detectors", "--stdout", "--timeout", "--describe-output", "--save-stdout", "--save-stderr"})
 _PYTHONS = re.compile(r"(python|pypy)[\d.]*|py")
 _UV_VALUE_OPTIONS = frozenset({"--project", "--directory", "--python", "-p", "--env-file", "--with", "--with-editable", "--with-requirements", "--package", "--group", "--extra", "--index", "--from", "--spec"})
 

@@ -33,7 +33,7 @@ _COUNT = "count"
 _LENGTH = "length"
 _RULES: dict[str, dict[str, str]] = {
     "describe_data": {k: _KEEP for k in ("target", "format", "recursive", "map_paths", "database_schema")},
-    "synthetic_sample": {k: _KEEP for k in ("target", "rows", "recursive", "map_paths", "database_schema")},
+    "synthetic_sample": {k: _KEEP for k in ("target", "rows", "recursive", "map_paths", "database_schema", "messy")},
     "check_code": {"code": _LENGTH, **{k: _KEEP for k in ("target", "language", "dialect", "table", "database_schema")}},
     "scan_folder": {"target": _KEEP, "kinds": _KEEP},
     "schema_diff": {"old": _KEEP, "new": _KEEP},

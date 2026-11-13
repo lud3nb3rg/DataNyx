@@ -249,3 +249,66 @@ def test_csv_handles_a_list_that_mixes_records_and_nulls(tmp_path):
     schema = extract(str(write(tmp_path, "d.json", json.dumps([None, {"id": 1}, None, {"id": 2}]))))
     text = render_table(synthesize(schema, 10)[0], "csv")
     assert text.splitlines()[0] == "id,value"
+
+
+# --- Messy rows -------------------------------------------------------------------
+
+
+def mixed(tmp_path):
+    rows = "".join(f"{i},{'n/a' if i % 7 == 0 else i * 1.5},note {CANARY} {i},{'' if i % 5 == 0 else 'x'}\n" for i in range(1, 60))
+    return str(write(tmp_path, "m.csv", "id,amount,notes,flag\n" + rows))
+
+
+def test_messy_is_off_unless_asked_for_and_repeatable(tmp_path):
+    schema = extract(mixed(tmp_path))
+    plain = render_table(synthesize(schema, 200)[0], "csv")
+    assert plain == render_table(synthesize(schema, 200, messy=False)[0], "csv")
+    messy = render_table(synthesize(schema, 200, messy=True)[0], "csv")
+    assert messy != plain and messy == render_table(synthesize(schema, 200, messy=True)[0], "csv")
+
+
+def test_messy_rows_have_the_flaws_real_data_has_and_nothing_real(tmp_path):
+    table = synthesize(extract(mixed(tmp_path)), 400, messy=True)[0]
+    amounts = [row["amount"] for row in table.rows]
+    texts = [value for value in amounts if isinstance(value, str)]
+    assert any(value in ("n/a", "N/A", "NA", "-", "null", "NULL", "none", "unknown", "?", "") for value in texts)
+    assert any(any(char.isdigit() for char in value) for value in texts)  # A number written as text.
+    assert any(isinstance(value, float) and value < 0 for value in amounts)
+    notes = [row["notes"] for row in table.rows if isinstance(row.get("notes"), str)]
+    assert any(note != note.strip() for note in notes) and "" in notes
+    assert len({json.dumps(row, sort_keys=True) for row in table.rows}) < len(table.rows)  # Repeated rows.
+    assert CANARY not in render_table(table, "csv")
+
+
+def test_messy_rows_still_read_back_as_the_same_columns(tmp_path):
+    path = mixed(tmp_path)
+    fake = str(write(tmp_path, "fake.csv", render_table(synthesize(extract(path), 300, messy=True)[0], "csv")))
+    assert "amount: string | number" in render(extract(fake), "text") and "notes: string" in render(extract(fake), "text")
+
+
+def test_messy_keeps_keys_and_references_whole(shop, tmp_path):
+    out = tmp_path / "fake.db"
+    assert main(["synth", str(shop), "--rows", "80", "--messy", "--format", "sqlite", "-o", str(out)]) == 0
+    connection = sqlite3.connect(out)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        connection.close()
+
+
+def test_mcp_synthetic_sample_can_be_messy(tmp_path):
+    pytest.importorskip("mcp")
+    import asyncio
+
+    from datanyx.mcp_server import create_server
+
+    path = mixed(tmp_path)
+    server = create_server([tmp_path])
+
+    async def call(arguments):
+        return await server.call_tool("synthetic_sample", arguments)
+
+    plain = asyncio.run(call({"target": str(path), "rows": 200})).content[0].text
+    messy = asyncio.run(call({"target": str(path), "rows": 200, "messy": True})).content[0].text
+    assert messy != plain and CANARY not in messy and '"amount": "' in messy
