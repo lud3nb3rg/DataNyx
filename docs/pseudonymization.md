@@ -18,8 +18,9 @@ Plan:
   notes        text        the name says free text
   joined       keep        dates are kept, except birth dates
 
-Kept as they are, and holding text: plan. Check them, and use --column NAME=KIND or --strict.
+Kept as they are, and worth a look: plan. Check them, and use --column NAME=KIND or --strict.
 Wrote 3 rows to fake.csv. Replaced: 3 id, 3 name, 3 email, 3 phone, 3 city, 1 text.
+note: numbers, categories and dates that were kept can still identify people in combination; see the documentation
 ```
 
 ```sh
@@ -42,7 +43,9 @@ mapping files inside a path you protect, or outside the project, since the guard
 | `--column NAME=KIND` | Treat a column as this kind (repeatable); `TABLE.COLUMN=KIND` for one table of a database |
 | `--keep-column NAME` | Leave a column as it is |
 | `--strict` | Replace text columns that weren't recognised, instead of keeping them |
-| `--source` | The input type, if the extension doesn't say |
+| `--source` | The input type (`csv`, `tsv`, `json`, `jsonl`, `sqlite`), if the extension doesn't say |
+| `--delimiter` | The separator of a CSV or TSV file, when it isn't the usual one |
+| `--hide`, `--model`, `--pack`, `--backend`, `--detectors` | For free-text columns: the same detectors as [`anonymize`](anonymization.md) |
 
 **What becomes what.** A column's kind comes from your override, `--keep-column`, being a key in a
 database, its name, then what its values look like. The kinds are `name`, `first_name`, `last_name`,
@@ -89,8 +92,12 @@ database, its name, then what its values look like. The kinds are `name`, `first
 
 ```python
 from datanyx.pseudonymize import Options, Pseudonymizer, load_key, pseudonymize_file
+from datanyx.text import Anonymizer, PatternDetector, SecretDetector, SpacyDetector
 
-pseudo = Pseudonymizer(load_key("pseudonyms.key"))
-pseudonymize_file("customers.csv", "fake.csv", "csv", pseudo, Options())
-print(pseudo.apply("email", "jane@acme-corp.io"))      # the same fake every time
+text = Anonymizer([PatternDetector(), SecretDetector(), SpacyDetector("en_core_web_lg")])  # for free-text columns
+pseudo = Pseudonymizer(load_key("pseudonyms.key"), text)
+report = pseudonymize_file("customers.csv", "fake.csv", "csv", pseudo, Options(keep=frozenset({"region"})))
+print(report.rows, pseudo.apply("email", "jane@acme-corp.io"))   # the same fake every time
 ```
+
+Without a text anonymizer, a file with a free-text column is refused rather than copied with the text in the clear.

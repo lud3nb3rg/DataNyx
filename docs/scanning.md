@@ -40,12 +40,18 @@ datanyx scan ./project --exclude 'fixtures' --exclude '*.lock'
 |---|---|
 | `--kinds` | What to look for (repeatable). The default is `EMAIL`, `PHONE`, `CREDIT_CARD`, `IBAN`, `IP_ADDRESS`, `MAC_ADDRESS`, `ADDRESS` and `SECRET`. `all` adds dates, money, URLs and bare IDs, which match too much ordinary code to be useful by default |
 | `--ner` | Also find names, organisations and places with the NER model. Slow, so it is opt-in |
-| `--exclude GLOB` | Skip names matching a pattern (repeatable), in a folder or among files named one by one, as a pre-commit hook passes them. `.git`, `node_modules`, virtual environments and caches are skipped already |
+| `--exclude GLOB` | Skip names matching a pattern (repeatable), in a folder or among files named one by one, as a pre-commit hook passes them. `.git`, `node_modules`, virtual environments, caches, `dist`, `build` and editor folders are skipped already |
 | `--max-size MB` | Skip larger files (default 5) |
 | `--include-examples` | Also count `example.com` emails and loopback or documentation IP addresses, which are ignored by default |
 | `--show-paths` | Show real file names, including ones that look like data |
 | `--fail-on-findings` | Exit with 1 if anything is found, or if a file that may hold data couldn't be read |
 | `--allow-unscanned` | With `--fail-on-findings`, don't fail for a file that was too large or couldn't be read |
+| `--format json` | The report as data, for scripts |
+| `--model`, `--pack`, `--backend`, `--detectors` | More detectors: a model for `--ner`, [packs, backends and your own](detection.md) |
+
+Defaults go under `[scan]` in [`datanyx.toml`](settings.md), and custom detectors there are counted too.
+
+Line numbers are listed for every secret, and for other kinds when a file has three or fewer of them, up to 20 per kind.
 
 **Secrets** are found by their shape: private key headers, AWS, GitHub, Slack, Google and Stripe
 keys, JWTs, the password in a `scheme://user:password@host` URL, and values assigned to names
@@ -59,8 +65,8 @@ others are `file_N` until you pass `--show-paths`. Run it yourself, or let an ag
 through the MCP server's `scan_folder` tool, which always hides such names.
 
 **Limits.** It finds what patterns find, so it misses names (without `--ner`), free-text
-descriptions of a person, and anything in a binary file: spreadsheets, Parquet files and databases
-are listed as not scanned, because they can't be read as text, and the report then doesn't claim
+descriptions of a person, and anything in a binary file: spreadsheets, Parquet files, databases and archives
+(`.zip`, `.gz`) are listed as not scanned, because they can't be read as text, and the report then doesn't claim
 the folder is clean. UTF-16 and UTF-32 text files are read. Phone numbers are matched more
 strictly than in anonymization (dates, version numbers and IPs are not counted), so some real
 ones in unusual formats can be missed. Expect some false positives, such as test fixtures; the

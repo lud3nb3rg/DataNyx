@@ -2,11 +2,28 @@
 
 ## Unreleased
 
+**Added**
+
 - `--public-column NAME` or `TABLE.NAME` (and `public_columns` under `[schema]`, and `datanyx mcp --public-column`) lets the owner of the data declare
   columns whose labels are safe to show, such as a country, a status or a plan. Their distinct values are listed, sorted and never
   counted, if there are at most 25, each is seen at least 3 times, and none looks like an email, ID, phone number or long number.
   Everything else stays hidden, `datanyx protect` refuses the option for an agent, and `datanyx synth` uses the listed labels in
   its fake rows. It is the one option that shows values: see [public columns](docs/schemas.md#public-columns).
+- `datanyx synth --messy` (and `messy` on the MCP server's `synthetic_sample`, and `synthesize(..., messy=True)`) gives the fake
+  rows the flaws real data has: padded and oddly cased text, empty strings, `n/a` and numbers written as text in columns that mix
+  both, dates in several styles, extreme numbers, more nulls and a few repeated rows. All invented; keys stay clean. See
+  [messy rows](docs/synthetic-data.md#messy-rows).
+- `datanyx run --describe-output FILE` prints the schema of a file the command wrote, with its size as an order of magnitude and
+  never a value, so a result that came out empty or the wrong shape shows. A file the command didn't write or change is
+  reported as such. See [checking what a script wrote](docs/debugging.md#checking-what-a-script-wrote).
+- `datanyx --version`.
+
+**Fixed**
+
+- The MCP server ignored `keep_names` and `map_paths` under `[schema]` in `datanyx.toml`, so it described data differently from
+  `datanyx schema` in the same folder. Every tool now uses them.
+- `datanyx run --timeout` stops everything the command started, not only the command itself, so a launcher such as
+  `uv run python report.py` no longer keeps running past the timeout.
 
 ## 0.2.0 (2026-11-06)
 
@@ -36,7 +53,7 @@ New sources and options, fixes from a full security audit, and releases that can
 - `pseudonymize` on SQLite left a foreign key unchanged when its name looked personal (`author`), which broke `PRAGMA foreign_key_check`.
 - A decimal such as `1234.50000` was hidden as a phone number; it is now an ID. `.xpt` columns no longer show a `None` type, `eval` says "1 labelled string", and the shared-fields note for a folder groups files with the same fields.
 
-A security release: the fixes from a full audit. Each of these closed a way past what DataNyx promises, and `tests/test_security.py` keeps it closed.
+A security release: the fixes from a full audit. Each of these closed a way past what DataNyx promises, and the `tests/test_security_*.py` files keep it closed.
 
 **Changes that may need action**
 

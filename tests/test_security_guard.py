@@ -62,6 +62,16 @@ def test_run_checks_its_command_with_or_without_the_separator(config, command):
     assert bash(config, command), command
 
 
+def test_run_finds_its_command_past_every_option_that_takes_a_value(config):
+    """`--describe-output FILE` was unknown to the guard, which took FILE for the command and missed the `bash -c` after it."""
+    from datanyx.protect.programs import _RUN_VALUES
+
+    run = next(a for a in build_parser()._actions if a.dest == "command").choices["run"]
+    takes_value = {flag for action in run._actions if action.nargs != 0 and action.option_strings for flag in action.option_strings}
+    assert takes_value <= _RUN_VALUES, sorted(takes_value - _RUN_VALUES)
+    assert bash(config, 'datanyx run --describe-output out.csv bash -c "cat data/x.csv"')
+
+
 def test_abbreviated_options_dont_exist():
     parser = build_parser()
     for arguments in (

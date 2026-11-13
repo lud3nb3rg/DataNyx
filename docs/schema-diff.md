@@ -30,13 +30,13 @@ Either side can be a saved schema or any input DataNyx reads: another file, a fo
 | A field that was always there is now optional | **breaking** |
 | A field or table added | compatible |
 | A type narrowed, a format gained, an optional field now always present | compatible |
-| A database type changed, a primary or foreign key changed, key names newly hidden | info |
+| A database type changed, a primary or foreign key changed, key names newly hidden or shown, a type that became or stopped being `unknown` | info |
 
 `--fail-on breaking` (the default) exits with 1 when anything breaking changed, `--fail-on any` for any
 difference and `--fail-on never` to just report. `--format json` is for scripts, and the options for
 reading inputs (`--source`, `--schema`, `-r`, `--map-path`, `--keep-name`) work as in `datanyx schema`.
 Nested changes have paths such as `$.user.address.zip` or `users[].tags[]`. The MCP server has a
-`schema_diff` tool.
+`schema_diff` tool, and the [GitHub Action](deployment.md#in-github-actions) runs `diff` on pull requests.
 
 A schema built from a file is built from what the file contains, so a difference can come from the
 data in a new export, not only from its design: a column that was never empty can show up as nullable.

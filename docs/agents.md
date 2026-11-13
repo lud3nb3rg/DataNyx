@@ -43,31 +43,39 @@ Running it again replaces its own entries rather than adding more, and a setting
 isn't valid JSON is left alone. Paths outside the project are covered by the hook only, since
 the deny rules are relative to the project.
 
-**What the guard refuses.** Reading, searching or listing a protected path with Read, Grep or
-Glob, including a Glob pattern that would match one (`**/*.csv`, though `**/*.py` is fine if no such file is
-there). Shell commands that name one: `cat data/x.csv`, `ls data`, `cd data && ...`, `cat data/*.csv`,
-`python -c "open('data/x.csv')"`, and absolute, Windows-style or Git Bash paths. Commands are read the way a
-shell reads them, so quotes and escapes (`da''ta/x.csv`), redirections, `$(...)`, backticks, subshells,
-`{data,src}/x.csv`, `a & cat data/x.csv`, `dd if=data/x.csv`, here-documents, `bash -c` and `eval` don't hide
-a path. Git commands that would print the data: `git show HEAD:data/x.csv` and `git grep`, and `git diff`,
-`git show` or `git log -p` when git holds the data, unless narrowed to other paths. Recursive searches from a
-folder that has protected data inside it (`grep -r foo .`, `rg foo`, `find . -exec ...`); pass
-`--allow-broad-search` to allow those. Changes to the protected data and to what sets the protection
-up: `.claude`, `.datanyx`, `.mcp.json`, a `datanyx.toml` in any folder, your own `~/.claude/settings.json`,
-and the installed DataNyx itself, including reverting them with git (`git checkout -- .`, `git clean`,
-`git reset --hard`). Every refusal says what to run instead.
+**What the guard refuses.** Every refusal says what to run instead.
 
-**What it lets through**, because they work with the data without showing it: `datanyx schema`,
-`synth`, `check`, `scrub`, `anonymize`, `run`, `scan`, `diff`, `audit` and `config`. `run` is refused if it saves raw output to a
-file or if its command names the data, and `anonymize --mapping`, `restore`, `pseudonymize`, `eval`, `init` and
-`protect` are refused. So are the options that loosen what you set up, since each shows something
-hidden, weakens detection or works as a way to test guesses: `--keep-name`, `--keep-names`, `--keep`,
-`--keep-entity`, `--allow`, `--keep-numbers`, `--no-ner`, `--show-paths`, `--public-column`, `--include-examples`, `--reveal`,
-`--allow-urls`, `--allow-env`, `--allow-unscanned`, `--hide`, `--model`, `--backend`, `--detectors`,
-`--config`, `--no-config` and the `DATANYX_CONFIG` variable. `--names-from` can only name the protected data,
-and no output option can point at it. The agent can't edit `datanyx.toml` or `datanyx.local.toml`, and can't
-read the local one, which lists the terms you hide. Running a script that reads the data, like
-`datanyx run -- python report.py`, is the intended way to work.
+- **Reading, searching or listing a protected path** with Read, Grep or Glob, including a Glob pattern that would
+  match one (`**/*.csv`, though `**/*.py` is fine if no such file is there).
+- **Shell commands that name one**: `cat data/x.csv`, `ls data`, `cd data && ...`, `cat data/*.csv`,
+  `python -c "open('data/x.csv')"`, and absolute, Windows-style or Git Bash paths. Commands are read the way a
+  shell reads them, so quotes and escapes (`da''ta/x.csv`), redirections, `$(...)`, backticks, subshells,
+  `{data,src}/x.csv`, `a & cat data/x.csv`, `dd if=data/x.csv`, here-documents, `bash -c` and `eval` don't hide
+  a path.
+- **Git commands that would print the data**: `git show HEAD:data/x.csv` and `git grep`, and `git diff`,
+  `git show` or `git log -p` when git holds the data, unless narrowed to other paths.
+- **Recursive searches from a folder that has protected data inside it** (`grep -r foo .`, `rg foo`,
+  `find . -exec ...`). `datanyx protect --allow-broad-search` allows those.
+- **Changes to the protected data and to what sets the protection up**: `.claude`, `.datanyx`, `.mcp.json`, a
+  `datanyx.toml` in any folder, your own `~/.claude/settings.json`, and the installed DataNyx itself, including
+  reverting them with git (`git checkout -- .`, `git clean`, `git reset --hard`).
+
+**What it lets through**, because they work with the data without showing it: `datanyx schema`, `synth`, `check`,
+`scrub`, `anonymize`, `run`, `scan`, `diff`, `audit`, `config`, `doctor` and `mcp`. Running a script that reads the
+data, like `datanyx run -- python report.py`, is the intended way to work. Within those:
+
+- `run` is refused if it saves the real output to a file (`--save-stdout`, `--save-stderr`), or if its command, or
+  any of its options, names the data.
+- `anonymize --mapping`, `restore`, `pseudonymize`, `eval`, `init` and `protect` are refused, since each writes or
+  shows real values or changes the setup.
+- Options that loosen what you set up are refused, since each shows something hidden, weakens detection or works
+  as a way to test guesses: `--keep-name`, `--keep-names`, `--keep`, `--keep-entity`, `--allow`, `--keep-numbers`,
+  `--no-ner`, `--show-paths`, `--public-column`, `--include-examples`, `--reveal`, `--allow-urls`, `--allow-env`,
+  `--allow-unscanned`, `--hide`, `--model`, `--backend`, `--detectors`, `--config`, `--no-config` and the
+  `DATANYX_CONFIG` variable.
+- `--names-from` can only name the protected data, and no output option can point at it.
+- The agent can't edit `datanyx.toml` or `datanyx.local.toml`, and can't read the local one, which lists the
+  terms you hide.
 
 The hook is the command `datanyx hook --require-config`. Claude Code runs it before each tool call and reads its verdict; you don't run it yourself, and `datanyx protect --write` is the way to install it.
 
@@ -107,6 +115,10 @@ docker compose run --rm agent
 ```
 
 `workspace/.mcp.json` is the agent's connection to the server. Use any agent image that speaks MCP over HTTP.
+The `datanyx` service runs a released image from `ghcr.io`, pinned by digest so the tag can't be moved under you;
+a feature newer than that release (see the [changelog](https://github.com/lud3nb3rg/DataNyx/blob/main/CHANGELOG.md)) needs a newer
+image, or one you build from this repository ([in a container](deployment.md#in-a-container)). The image reads files and
+MongoDB but has no drivers for SQL servers, so a PostgreSQL or MySQL database needs an image built with that extra.
 
 **What this covers.** An agent, or a script it writes, in that container can't read the data, because it isn't
 there. That holds whatever the agent tries, including a command the guard would not have recognised.
@@ -143,11 +155,21 @@ Add it to your agent's MCP configuration:
 }
 ```
 
-The agent gets six tools: `describe_data` (a schema for a file, folder or `env:NAME`
-database), `synthetic_sample` (up to 200 fake rows that match it), `check_code` (checks its
-SQL or pandas code against that schema), `scan_folder` (which files hold personal data or
-secrets, by kind and count), `schema_diff` (what changed between two schemas) and
-`anonymize_file` (a text file with placeholders).
+The agent gets six tools:
+
+| Tool | What it returns |
+|---|---|
+| `describe_data` | A schema for a file, folder or `env:NAME` database, as `text` (the default), `json-schema` or `summary` |
+| `synthetic_sample` | Fake rows that match it, as JSON Lines: 20 by default, at most 200. `messy` adds the [flaws real data has](synthetic-data.md#messy-rows) |
+| `check_code` | Findings for its SQL or pandas code against that schema, as `datanyx check` gives them |
+| `scan_folder` | Which files hold personal data or secrets, by kind and count |
+| `schema_diff` | What changed between two schemas, and what could break |
+| `anonymize_file` | A UTF-8 text file with placeholders in place of names, identifiers and credentials |
+
+Every tool describes the data the way `datanyx schema` does in that folder: the `[schema]` settings of
+`datanyx.toml` (names to keep, map paths, hints, public columns, views, `max_rows`) apply, along with the
+options the server was started with. The agent can add map paths, which only hide more, and nothing else.
+
 It's limited by design:
 
 - It can only read under `--root` (default: the current folder), and database URLs are
@@ -156,12 +178,13 @@ It's limited by design:
   variable and name that variable: `datanyx mcp --allow-env DATABASE_URL`, and the agent can then use
   `env:DATABASE_URL`. No other variable can be used, and one that holds a path or a `sqlite:///` URL stays
   limited to `--root`, as does a `sqlite:///` URL under `--allow-urls`.
-- `anonymize_file` also hides credentials, and refuses files that exist to hold them or real values:
-  `.env`, `*.key`, `*.pem`, mapping files and `datanyx.local.toml`. It reads up to 5 MB.
+- `anonymize_file` also hides credentials, and refuses files that exist to hold them or real values,
+  such as `.env`, `*.key`, `*.pem`, `id_rsa`, `.netrc`, mapping files and `datanyx.local.toml`. It reads up to 5 MB.
 - `describe_data` returns at most 200 tables at once (`--max-tables N` changes it), and says how many were left out. The agent can narrow it with `tables` and `exclude` (glob patterns, which only ever match names it may see) and `limit`, or ask for `format="summary"`, one line per table with no cap. `--views` lets it see database views. `check_code` and `schema_diff` always use every table.
 - There's no `keep` or `hide` option, because either one tests whether a name exists. Choose
   `--keep-entity` and the terms to hide when you start the server instead.
-- `scan_folder` uses the custom detectors, packs and `[scan]` settings the server was started with.
+- `scan_folder` uses the custom detectors and packs the server was started with, and `exclude`, `max_size` and
+  `include_examples` from `[scan]`. It doesn't run the name model.
 - There's no restore tool and no mapping, since both hold the real values.
 - Errors are fixed messages, never the library's own text.
 

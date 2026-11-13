@@ -38,6 +38,8 @@ def _run_mcp(args: argparse.Namespace) -> int:
         infer_keys=bool(args.infer_keys or config.infer_keys),
         column_hints=bool(args.column_hints or config.column_hints),
         public_columns=[*config.public_columns, *args.public_column],
+        keep_names=config.keep_names,
+        map_paths=config.map_paths,
         views=bool(args.views or config.views),
         max_tables=args.max_tables,
         max_rows=args.max_rows or config.max_rows,
@@ -64,8 +66,9 @@ def add_mcp(commands: argparse._SubParsersAction) -> None:
         "mcp",
         help="run an MCP server that gives an agent schemas and anonymized text, not data",
         description=(
-            "Serve `describe_data` and `anonymize_file` over MCP (stdio, or HTTP with --http). The agent can only "
-            "read files under --root, and never receives values, a mapping, or a restore tool."
+            "Serve DataNyx's tools to an agent over MCP (stdio, or HTTP with --http): describe_data, synthetic_sample, "
+            "check_code, scan_folder, schema_diff and anonymize_file. The agent can only read files under --root, and never "
+            "receives values, a mapping, or a restore tool. The [schema] settings of datanyx.toml apply, as for `datanyx schema`."
         ),
     )
     serve.add_argument(

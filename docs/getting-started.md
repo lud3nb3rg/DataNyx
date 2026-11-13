@@ -1,20 +1,31 @@
 # Getting started
 
+You want an agent to write a report, a query or a data-cleaning script, but the data is
+customers, patients or payroll. Pasting rows into a chat is a leak. Describing the
+columns by hand is tedious and error-prone. DataNyx sits in between:
+
+|  | What the agent gets | What it never gets |
+|---|---|---|
+| **Structured data**<br>`datanyx schema` | Field names, types, formats, nesting, primary and foreign keys | Values, examples, enum labels, counts or statistics |
+| **Free text**<br>`datanyx anonymize` | The text with `<PERSON_1>`, `<EMAIL_1>` and friends in place of identifiers | The identifiers themselves (best effort: [review the result](anonymization.md#how-reliable-text-anonymization-is)) |
+
 ## Install
 
 The PyPI package is the recommended way to install DataNyx. There is also a [container image, a pre-commit hook and a GitHub Action](deployment.md).
 
 ```sh
 uv tool install "datanyx[all]"       # every reader, driver and the MCP server
-
-datanyx schema customers.csv --format text
 datanyx doctor                       # shows which optional packages and models are installed
+datanyx --version
 ```
 
 Pick only what you need if you'd rather keep it small: `uv tool install datanyx` for
 CSV, JSON, XML and SQLite, or `uv tool install "datanyx[parquet,excel]"`. The
-[sources table](sources.md) lists the extra for each format. To use DataNyx as a library in a project,
+[sources table](sources.md) lists the extra for each format. Text anonymization also needs a
+[spaCy model](anonymization.md#text-anonymization). To use DataNyx as a library in a project,
 run `uv add datanyx` instead.
+
+Requires Python 3.10 or newer.
 
 ### From a clone
 
@@ -25,8 +36,6 @@ git clone https://github.com/lud3nb3rg/DataNyx.git && cd DataNyx
 uv sync --all-extras
 uv run datanyx doctor
 ```
-
-Requires Python 3.10 or newer.
 
 ## See it work
 
@@ -80,15 +89,12 @@ $ datanyx anonymize call-notes.txt
 
 The same person keeps the same placeholder, so the agent can still follow who did what.
 
-## Why it exists
+## Next steps
 
-You want an agent to write a report, a query or a data-cleaning script, but the data is
-customers, patients or payroll. Pasting rows into a chat is a leak. Describing the
-columns by hand is tedious and error-prone.
-
-DataNyx sits in between:
-
-|  | What the agent gets | What it never gets |
-|---|---|---|
-| **Structured data**<br>`datanyx schema` | Field names, types, formats, nesting, primary and foreign keys | Values, examples, enum labels, counts or statistics |
-| **Free text**<br>`datanyx anonymize` | The text with `<PERSON_1>`, `<EMAIL_1>` and friends in place of identifiers | The identifiers themselves (best effort: [review the result](anonymization.md#how-reliable-text-anonymization-is)) |
+- **Let the agent work on its own.** [Using it with an agent](agents.md) sets up Claude Code so it can't read the
+  data directly (`datanyx protect`), and serves schemas, fake rows and checks over MCP (`datanyx mcp`).
+- **Run what it writes.** `datanyx run -- python report.py` runs its script on the real data and shows it only a
+  scrubbed error ([debugging](debugging.md)); `datanyx check` catches wrong names before that ([checking code](checking-code.md)).
+- **Look before you share a folder.** `datanyx scan` reports where personal data and secrets are ([scanning](scanning.md)).
+- **Settle the policy once.** `datanyx init` writes a `datanyx.toml` for the project ([team settings](settings.md)).
+- **Know the limits.** The [privacy model](privacy-model.md) says what is guaranteed and what is best effort.

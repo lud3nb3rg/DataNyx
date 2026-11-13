@@ -122,11 +122,13 @@ def anonymize_text(
     return anonymize(text, detectors, hide, keep, keep_entity)
 
 
-def synthesize(schema: DataSchema, rows: int = 100, seed: int | None = 0):
-    """Fake data matching `schema`, as a list of `datanyx.synth.Table`. See `datanyx.synth`."""
+def synthesize(schema: DataSchema, rows: int = 100, seed: int | None = 0, messy: bool = False):
+    """Fake data matching `schema`, as a list of `datanyx.synth.Table`. See `datanyx.synth`.
+
+    `messy` adds the flaws real data has (padded text, "n/a" among numbers, repeated rows), all invented."""
     from .synth import synthesize as generate
 
-    return generate(schema, rows, seed)
+    return generate(schema, rows, seed, messy)
 
 
 __all__ = [

@@ -225,3 +225,37 @@ def test_run_does_not_read_our_stdin():
 def test_run_refuses_to_start_without_the_model_unless_told_to(tmp_path):
     result = datanyx("run", "--model", "no_such_model", *py("print(1)"))
     assert result.returncode == 1 and "model" in result.stderr.lower()
+
+
+def test_run_timeout_stops_what_the_command_started():
+    """A launcher's child holds the output open: stopping the launcher alone would wait for the child to finish."""
+    import time
+
+    child = "import time; print('begun', flush=True); time.sleep(60)"
+    launcher = f"import subprocess, sys; subprocess.run([sys.executable, '-c', {child!r}])"
+    started = time.monotonic()
+    slow = datanyx("run", "--no-ner", "--timeout", "3", *py(launcher))
+    assert slow.returncode == 124 and "timed out" in slow.stderr
+    assert time.monotonic() - started < 40
+    assert "stdout hidden (1 line" in slow.stderr  # What was printed before the stop still counts.
+
+
+def test_run_describes_a_file_the_command_wrote_without_its_values(tmp_path):
+    result_file, stale, absent = tmp_path / "result.csv", tmp_path / "stale.csv", tmp_path / "absent.csv"
+    stale.write_text("a\n1\n", encoding="utf-8")
+    code = f"open({str(result_file)!r}, 'w').write('plan,total\\njane@example.com,1.5\\npro,\\n')"
+    result = datanyx(
+        "--no-config", "run", "--no-ner",
+        "--describe-output", str(result_file), "--describe-output", str(stale), "--describe-output", str(absent), *py(code),
+    )
+    assert result.returncode == 0
+    assert "plan: string" in result.stdout and "total: number | null" in result.stdout and "fewer than 1,000 rows" in result.stdout
+    assert "jane@example.com" not in result.stdout + result.stderr and "1.5" not in result.stdout
+    assert "stale.csv: not changed by the command" in result.stderr and "absent.csv: not written" in result.stderr
+
+
+def test_run_passes_the_exit_code_on_when_the_output_cannot_be_described(tmp_path):
+    target = tmp_path / "result.json"
+    code = f"import sys; open({str(target)!r}, 'w').write('{{not json'); sys.exit(3)"
+    result = datanyx("--no-config", "run", "--no-ner", "--describe-output", str(target), *py(code))
+    assert result.returncode == 3 and "cannot describe it" in result.stderr and "not json" not in result.stderr

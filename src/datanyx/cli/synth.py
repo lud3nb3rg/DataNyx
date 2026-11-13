@@ -25,7 +25,7 @@ def _run_synth(args: argparse.Namespace) -> int:
     schema = extract(args.input, source=args.source, policy=policy, namespace=args.schema, recursive=args.recursive)
     if not 0 <= args.rows <= MAX_ROWS:
         raise SourceError(f"--rows must be between 0 and {MAX_ROWS}")
-    tables = synthesize(schema, args.rows, args.seed)
+    tables = synthesize(schema, args.rows, args.seed, args.messy)
     if not tables:
         for note in schema.notes:
             print(f"note: {note}", file=sys.stderr)
@@ -80,6 +80,14 @@ def add_synth(commands: argparse._SubParsersAction) -> None:
     _add_input_arguments(synth)
     synth.add_argument("--rows", type=int, default=100, help="rows per table (default: %(default)s)")
     synth.add_argument("--seed", type=int, default=0, help="makes the output repeatable (default: %(default)s)")
+    synth.add_argument(
+        "--messy", action="store_true",
+        help=(
+            "also give the fake rows the flaws real data has: padded and oddly cased text, empty strings, markers such as 'n/a' "
+            "and numbers written as text in columns that mix text and numbers, dates in several styles, extreme numbers, "
+            "more nulls and a few repeated rows. Invented like the rest; keys stay clean"
+        ),
+    )
     synth.add_argument(
         "--format",
         choices=SYNTH_FORMATS,

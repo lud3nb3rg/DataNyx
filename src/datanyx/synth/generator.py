@@ -47,6 +47,13 @@ _STATUSES = ["active", "inactive", "pending", "archived"]
 _CURRENCIES = ["EUR", "USD", "GBP", "JPY"]
 _WORDS = ["amber", "basil", "cobalt", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper", "kestrel", "lantern", "meadow", "nectar", "onyx", "pebble", "quartz", "ripple", "saffron", "timber", "umber", "velvet", "willow", "yarrow", "zephyr"]
 
+# What `messy` writes. All of it is fixed here, like the word lists above: none of it comes from the data.
+_MESS_CHANCE = 0.15
+_DUPLICATE_SHARE = 0.03
+_MISSING_MARKERS = ["n/a", "N/A", "NA", "-", "null", "NULL", "none", "unknown", "?", ""]
+_DATE_WORDS = frozenset({"date", "day", "time", "at", "on", "dob", "born", "created", "updated", "timestamp", "when"})
+_DATE_STYLES = ["%d/%m/%Y", "%m/%d/%Y", "%d.%m.%Y", "%Y/%m/%d", "%d %b %Y", "%b %d, %Y", "%Y%m%d"]
+
 _SPLIT_WORDS = re.compile(r"[a-z]+")
 _CAMEL = re.compile(r"([a-z])([A-Z])")
 
@@ -62,14 +69,18 @@ class Table:
     document: bool = False
 
 
-def synthesize(schema: DataSchema, rows: int = 100, seed: int | None = 0) -> list[Table]:
+def synthesize(schema: DataSchema, rows: int = 100, seed: int | None = 0, messy: bool = False) -> list[Table]:
     """Fake data for every entity in `schema`: `rows` rows each, or one document.
 
     `seed` makes the result repeatable; pass None for a different result every time.
+    `messy` adds the flaws real data has, as far as the schema allows them: padded and oddly cased text,
+    empty strings, markers such as "n/a" and numbers written as text where a column mixes text and numbers,
+    dates in several styles in a plain text column, extreme numbers, more nulls and a few repeated rows.
+    Keys stay clean, so tables still join. It is invented like everything else here.
     """
     if not 0 <= rows <= MAX_ROWS:
         raise ValueError(f"rows must be between 0 and {MAX_ROWS}")
-    generator = _Generator(random.Random(seed), rows)
+    generator = _Generator(random.Random(seed), rows, messy)
     by_name = {entity.name: entity for entity in schema.entities}
     tables: dict[str | None, Table] = {}
     for entity in _in_dependency_order(schema.entities, by_name):
@@ -99,9 +110,10 @@ def _in_dependency_order(entities: tuple[Entity, ...], by_name: dict[str | None,
 
 
 class _Generator:
-    def __init__(self, rng: random.Random, rows: int) -> None:
+    def __init__(self, rng: random.Random, rows: int, messy: bool = False) -> None:
         self.rng = rng
         self.rows = rows
+        self.messy = messy
         # A lone document can't show both an empty and a filled list, so it gets items.
         self.min_items = 0
 
@@ -123,7 +135,17 @@ class _Generator:
 
         fixed = self._key_columns(entity, item, count, done)
         rows = [self.object(item, {name: values[i] for name, values in fixed.items()}) for i in range(count)]
-        return Table(entity.name, entity, _unique_by_key(rows, entity, item), False)
+        rows = _unique_by_key(rows, entity, item)
+        if self.messy and len(rows) > 1 and not entity.primary_key and not any(f.unique or f.unique_declared for f in item.fields.values()):
+            rows = self._with_repeats(rows)
+        return Table(entity.name, entity, rows, False)
+
+    def _with_repeats(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Some rows a second time, in place of others, as a file exported twice has. Only where nothing is declared unique."""
+        for _ in range(max(1, round(len(rows) * _DUPLICATE_SHARE))):
+            source, target = self.rng.randrange(len(rows)), self.rng.randrange(len(rows))
+            rows[target] = dict(rows[source])
+        return rows
 
     def _key_columns(
         self, entity: Entity, item: Object, count: int, done: dict[str | None, Table]
@@ -202,10 +224,12 @@ class _Generator:
         if isinstance(node, Boolean):
             return rng.random() < 0.5
         if isinstance(node, Integer):
-            return self._integer(hint)
+            return self._outlier(True) if self._mess() else self._integer(hint)
         if isinstance(node, Number):
-            return self._number(hint)
+            return self._outlier(False) if self._mess() else self._number(hint)
         if isinstance(node, String):
+            if node.format is None and self._mess():
+                return self._messy_text(hint)
             return self._string(node.format, hint)
         if isinstance(node, Array):
             if isinstance(node.items, Unknown):
@@ -216,10 +240,39 @@ class _Generator:
         if isinstance(node, Union):
             nulls = [o for o in node.options if isinstance(o, Null)]
             others = [o for o in node.options if not isinstance(o, Null)]
-            if nulls and (not others or rng.random() < _NULL_CHANCE):
+            if nulls and (not others or rng.random() < (2 * _NULL_CHANCE if self.messy else _NULL_CHANCE)):
                 return None
-            return self.value(rng.choice(others), hint)
+            chosen = rng.choice(others)
+            if self.messy and isinstance(chosen, String) and chosen.format is None and any(isinstance(o, (Integer, Number)) for o in others):
+                # Text in a column of numbers is rarely prose: it is a marker for "missing", or a number written another way.
+                return self._number_as_text(hint)
+            return self.value(chosen, hint)
         raise TypeError(f"unhandled node: {type(node).__name__}")
+
+    # --- mess --------------------------------------------------------------
+
+    def _mess(self) -> bool:
+        """Whether this value is one of the flawed ones. Draws nothing unless `messy`, so plain output is unchanged."""
+        return self.messy and self.rng.random() < _MESS_CHANCE
+
+    def _outlier(self, whole: bool) -> int | float:
+        rng = self.rng
+        value = rng.choice([0, -1, -rng.randint(1, 1000), rng.randint(10**6, 10**9)])
+        return value if whole else value + 0.5
+
+    def _number_as_text(self, hint: str) -> str:
+        rng = self.rng
+        if rng.random() < 0.6:
+            return rng.choice(_MISSING_MARKERS)
+        amount = self._number(hint) * rng.choice([1, 1000])
+        return rng.choice([f"{amount:,.2f}", f"{amount:.2f}".replace(".", ","), f" {amount:.2f} ", f"${amount:,.2f}", f"{amount:.0f}%"])
+
+    def _messy_text(self, hint: str) -> str:
+        rng = self.rng
+        if _words(hint) & _DATE_WORDS:
+            return self._date().strftime(rng.choice(_DATE_STYLES))  # A text column of dates has no single style, or it would have a format.
+        text = self._text(hint)
+        return rng.choice([f" {text}", f"{text} ", f"  {text}  ", text.upper(), text.lower(), text.title(), text.replace(" ", "  "), f"{text}\t", ""])
 
     def _integer(self, hint: str) -> int:
         words = _words(hint)

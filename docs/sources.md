@@ -22,7 +22,7 @@
 | SPSS | `.sav`, `.zsav`, `.por` | `.[stats]` |
 | DuckDB | `.duckdb`, `.ddb` | `.[duckdb]` |
 | MongoDB | `mongodb://`, `mongodb+srv://` (or `--source mongodb` with `env:NAME`) | `.[mongodb]` |
-| FHIR | `.fhir.json`, `.fhir.ndjson`, `.fhir`, or any JSON with `--source fhir` | built in |
+| FHIR | `.fhir.json`, `.fhir.ndjson`, `.fhir.jsonl`, `.fhir`, or any JSON with `--source fhir` | built in |
 | HL7 v2 | `.hl7`, `.er7` | built in |
 | PostgreSQL | `postgresql://` | `.[postgres]` |
 | MySQL | `mysql://` | `.[mysql]` |
@@ -89,7 +89,7 @@ Feather version 1 isn't supported.
 **Delta Lake and Iceberg** tables are folders. Point at the table's folder and it is described as one table, from
 the transaction log (`_delta_log`) or the table's current metadata file (`metadata/`), and never from a data file.
 Table properties, column comments and the paths and partition values of data files are not read into the schema.
-For `--scale-hints`, Delta counts the records in the log's file statistics (only when the log has no checkpoint),
+For `--scale-hints`, Delta counts the records in the log's file statistics (only when the log has no checkpoint and at most 1,000 commits),
 and Iceberg uses the record count in the current snapshot's summary. An Iceberg table's identifier fields become
 unique keys. A Delta log that has been checkpointed may need `.[parquet]` to read its schema. These tables are
 read from a folder on your computer, not a URL.
@@ -127,7 +127,7 @@ foreign keys. The file is opened read-only with external access switched off, so
 read other files or write anything. Enum labels and the field names of nested `STRUCT` columns aren't shown.
 
 **MongoDB** has no catalog of fields, so this is the one database source that reads data: it samples up to
-500 documents per collection into memory, records their types, and discards them. Only the structure leaves
+500 documents in each of up to 100 collections into memory, records their types, and discards them. Only the structure leaves
 the program, as with a JSON file, but because documents are read, use a role that can read only what you
 are willing to have sampled. Fields that appear in few documents can be missed. Keep the URL, which holds
 the password, in the environment: `datanyx schema env:MONGO_URL --source mongodb`. The database is the one

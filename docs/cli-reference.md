@@ -7,6 +7,7 @@ own page; `datanyx COMMAND --help` prints the same information in a terminal.
 
 | Argument | Meaning |
 |---|---|
+| `--version` | show program's version number and exit |
 | `--config` `FILE` | settings file to use instead of the nearest datanyx.toml |
 | `--no-config` | ignore datanyx.toml |
 
@@ -67,6 +68,7 @@ datanyx synth input [options]
 | `--keep-name` `NAME` | show this exact key, table or column name even if it looks like data (repeatable); --map-path still hides it |
 | `--rows` `ROWS` | rows per table (default: 100) |
 | `--seed` `SEED` | makes the output repeatable (default: 0) |
+| `--messy` | also give the fake rows the flaws real data has: padded and oddly cased text, empty strings, markers such as 'n/a' and numbers written as text in columns that mix text and numbers, dates in several styles, extreme numbers, more nulls and a few repeated rows. Invented like the rest; keys stay clean |
 | `--format` `FORMAT` | output format (default: json). Choices: `json`, `jsonl`, `csv`, `sqlite`. |
 | `-o`, `--output` `OUTPUT` | file to write, or a folder when the input has several tables (one file each); required for sqlite. Existing files are never overwritten |
 
@@ -245,6 +247,7 @@ datanyx run COMMAND [options]
 | `--detectors` `FILE` | a file of custom detectors for your own formats and names (repeatable) |
 | `--stdout` `STDOUT` | what to show of stdout: only its size (default), a scrubbed copy, or nothing. Choices: `shape`, `scrubbed`, `none`. |
 | `--timeout` `SECONDS` | stop the command after this long |
+| `--describe-output` `FILE` | after the command ends, print the schema of this file it wrote (a CSV, JSON or Parquet result, say): field names, types and a size bucket, never values, so a result that came out empty, all null or the wrong shape shows (repeatable). A file the command didn't write or change is reported as such |
 | `--save-stdout` `FILE` | also save the real stdout to this new file, for you to read |
 | `--save-stderr` `FILE` | also save the real stderr to this new file, for you to read |
 | `COMMAND` | the command to run, after -- |
@@ -361,7 +364,7 @@ datanyx doctor [options]
 
 ## `datanyx mcp`
 
-Serve `describe_data` and `anonymize_file` over MCP (stdio, or HTTP with --http). The agent can only read files under --root, and never receives values, a mapping, or a restore tool.
+Serve DataNyx's tools to an agent over MCP (stdio, or HTTP with --http): describe_data, synthetic_sample, check_code, scan_folder, schema_diff and anonymize_file. The agent can only read files under --root, and never receives values, a mapping, or a restore tool. The [schema] settings of datanyx.toml apply, as for `datanyx schema`.
 
 ```
 datanyx mcp [options]
