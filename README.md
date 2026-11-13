@@ -51,10 +51,11 @@ $ datanyx anonymize call-notes.txt
 ```
 
 The agent sees the shape of the table and the story in the text, and none of the values. It can also
-try its code on [fake rows](docs/synthetic-data.md) generated from the schema.
+try its code on [fake rows](docs/synthetic-data.md) generated from the schema, clean or with the flaws real data has
+(`--messy`), and run it on the real data through `datanyx run`, which shows it only a [scrubbed error](docs/debugging.md).
 
 Does it work? [An end-to-end demo](examples/demo/README.md) has agents write analysis code from a schema alone, then runs it
-on messy data. On ordinary data 14 of 15 were right first time (15 of 15 after one fix from a scrubbed error); on a deliberately
+on messy data. In the recorded runs (one model, 15 agents per setting; the demo says what they do and don't show), on ordinary data 14 of 15 were right first time (15 of 15 after one fix from a scrubbed error); on a deliberately
 worst-case dataset 13 of 15, and 8 of 15 if the agent isn't told the data is messy. The failures were silent wrong answers, not crashes.
 Letting the data owner [list the labels of a few columns](docs/schemas.md#public-columns) such as country and status raised those to 15 of 15 and 13 of 15.
 

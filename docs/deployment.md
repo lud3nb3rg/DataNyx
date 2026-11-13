@@ -16,13 +16,22 @@ To use it as a library in a project, `uv add datanyx`. The [sources table](sourc
 
 ## In a container
 
-The `Dockerfile` builds an image with the common readers, the MCP server and the text tools. The image
+The `Dockerfile` builds an image with the file readers (YAML, Excel, Parquet, ORC, Avro, DuckDB, SAS, Stata and SPSS,
+compressed files, https and S3), MongoDB, the MCP server, code checking and the text tools. It has no drivers for the SQL servers
+(PostgreSQL, MySQL, SQL Server, Oracle, BigQuery, Snowflake) and no Google Cloud or Azure storage; `datanyx doctor` in the
+image lists what is there. The image
 runs as a non-root user and starts in `/data`, so mount what you want to read there, read-only:
 
 ```sh
 docker build -t datanyx .
 docker run --rm -v "$PWD:/data:ro" datanyx scan /data
 docker run --rm -v "$PWD:/data:ro" datanyx schema /data/customers.csv --format text
+```
+
+To run the [shared MCP server](#a-server-a-team-shares) from the image, pass the token through the environment:
+
+```sh
+docker run -d -p 8808:8808 -e DATANYX_MCP_TOKEN -v "$PWD/data:/data:ro" datanyx mcp --http 0.0.0.0:8808 --root /data
 ```
 
 The spaCy models are large and left out. To add one, build with `--build-arg MODEL=en_core_web_sm`
@@ -41,7 +50,7 @@ needs a tool you may not have: [`pypi-attestations`](https://pypi.org/project/py
 | The wheel and sdist on PyPI came from this repository | `pypi-attestations verify pypi --repository https://github.com/lud3nb3rg/DataNyx pypi:datanyx-X.Y.Z-py3-none-any.whl` |
 | A file you downloaded was built by the release workflow | `gh attestation verify datanyx-X.Y.Z-py3-none-any.whl --repo lud3nb3rg/DataNyx` |
 | The container image was built and signed by it | `gh attestation verify oci://ghcr.io/lud3nb3rg/datanyx:X.Y.Z --repo lud3nb3rg/DataNyx` |
-| The same, with cosign | `cosign verify ghcr.io/lud3nb3rg/datanyx:X.Y.Z --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/lud3nb3rg/DataNyx/\.github/workflows/release\.yml@refs/tags/v'` |
+| The same, with cosign 3 or later (cosign 2 doesn't find the signature) | `cosign verify ghcr.io/lud3nb3rg/datanyx:X.Y.Z --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/lud3nb3rg/DataNyx/\.github/workflows/release\.yml@refs/tags/v'` |
 
 Two lists of what is inside come with a release. The GitHub Release has `datanyx-X.Y.Z.cdx.json`, a
 [CycloneDX](https://cyclonedx.org/) list of the package's locked dependencies. The image carries its own SBOM and its
@@ -118,8 +127,8 @@ A request without it gets a bare 401, and the token is compared in constant time
 
 - The token comes from the environment (`--token-env NAME` picks another variable) and must be at
   least 16 characters. It is never a command-line option, so it stays out of process listings.
-- The server offers the same tools as over stdio, so it still returns only schemas and anonymized text,
-  and only for files under `--root`.
+- The server offers the same tools as over stdio, so it still returns only schemas, fake rows, findings and
+  anonymized text, and only for files under `--root`.
 - **Put TLS in front of it** (a reverse proxy such as Caddy or nginx) before it leaves a trusted
   network: the bearer token is sent with every request.
 - One token is shared by everyone who uses the server. The audit log records what was asked, never

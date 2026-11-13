@@ -42,13 +42,13 @@ a script or CI. `--format json` gives the findings as data.
 file the schema covers, then copied, filtered, sorted or subset. Anything else (a merge, a
 function's result) ends the tracking, so the checker stays quiet when it can't be sure.
 
-- column names in `df["a"]`, `df[["a", "b"]]` and `df.a` (the last needs pandas installed)
+- column names in `df["a"]`, `df[["a", "b"]]` and `df.a` (pandas itself doesn't need to be installed)
 - names passed to `groupby`, `sort_values`, `merge`, `pivot_table`, `drop`, `rename`, `set_index`
   and similar, with case-sensitivity hints (`'Plan'` vs `'plan'`)
 - columns the script adds itself are known afterwards
 - pandas mistakes that don't raise errors: `.mean()` on a text column, `.dt` on a column pandas
   read as text, `.str` on numbers, a text column compared with a number
-- SQL in string literals passed to `execute`, `read_sql` and similar is checked too
+- SQL in string literals passed to `execute`, `read_sql` and similar is checked too (with `.[check]`)
 
 **What it can't tell you.** It doesn't know your data, only the schema: a column that was
 hidden isn't known, so a name that isn't in the schema is a warning, not an error, when the

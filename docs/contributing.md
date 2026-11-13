@@ -3,13 +3,14 @@
 ## Architecture
 
 ```
-Source               --->  DataSchema (schema.py)  --->  Renderer
-CSV, TSV, JSON, JSONL,     no values by design           JSON Schema, text,
-YAML, XML, Excel,                |                       TypeScript, Pydantic, SQL
-Parquet, SQL, folders            +---------------------> Synthetic data
-                                 +---------------------> Code checks
+Source                     --->  DataSchema (schema.py)  --->  Renderer
+files, folders, databases,       no values by design           JSON Schema, text, TypeScript,
+URLs (sources/)                        |                       Pydantic, SQL, summary
+                                       +---------------------> Synthetic data (synth/)
+                                       +---------------------> Code checks (check/)
+                                       +---------------------> Schema diff (diff.py)
 
-Text  --->  Detectors (patterns, NER)  --->  Placeholders
+Text  --->  Detectors (patterns, secrets, NER, packs, backends)  --->  Placeholders (text/)
 ```
 
 | Module | Purpose |
@@ -17,18 +18,24 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `schema.py` | Source-neutral model: `DataSchema` > `Entity` > `Node` |
 | `sources/` | `Source` interface, registry and input readers (`sql_source.py` covers every SQL database) |
 | `sources/directory.py` | Describes a folder: one entry per file, with file names held to the same rules |
+| `sources/files.py` | What file sources share: opening a path, a compressed file or a file at a URL, typing cell text, and telling a header from data |
 | `inference.py` | Builds nodes from sampled values, for sources without a catalog |
-| `privacy.py` | Decides which names are structure and which are data |
+| `privacy.py` | `KeyPolicy`, and which names are structure and which are data |
 | `formats.py` | Recognises string formats, returning only a label |
+| `keys.py` | The opt-in hints drawn from values: `--infer-keys`, `--column-hints` and `--public-column` |
+| `scale.py` | `--scale-hints`: a row count as an order of magnitude |
+| `selection.py` | `--include`, `--exclude` and `--max-tables`, on names that may be shown only |
 | `renderers/` | Output formats |
 | `config.py` | Reads and merges `datanyx.toml` and `datanyx.local.toml`, and rejects mistakes in them |
 | `diff.py` | Compares two schemas and sorts the changes by whether they could break old code |
 | `audit.py` | The MCP audit log and its summary: tools, paths and outcomes, never values |
+| `debuglog.py` | The MCP debug log: where a failure happened, never its message |
+| `fileperms.py` | Makes a file readable by its owner only, on every system |
 | `scan.py` | Finds personal data and secrets in a folder, by file, kind and line, without values |
 | `protect/` | `datanyx protect` and the guard hook: Claude Code permissions, a hook that refuses direct access, MCP config; `guard.py` decides, `shell.py` reads a command the way a shell would, `paths.py` compares paths and `programs.py` knows what git and DataNyx do with their arguments |
 | `check/` | Checks SQL and pandas code against a schema: unknown names and type mistakes |
 | `scrub.py` | Removes data from error messages and program output, keeping the diagnosis |
-| `synth/` | Generates fake data that fits a schema, and writes it as JSON, JSON Lines, CSV or SQLite |
+| `synth/` | Generates fake data that fits a schema, clean or `messy`, and writes it as JSON, JSON Lines, CSV or SQLite |
 | `mcp_server.py` | MCP server that only exposes schemas, synthetic samples and anonymized text |
 | `text/detectors.py` | Finds sensitive spans: patterns, and spaCy NER through `Detector` |
 | `text/documents.py` | Anonymizes HTML, email, Word, PDF, WhatsApp and Slack files, keeping their structure |
@@ -42,6 +49,16 @@ Text  --->  Detectors (patterns, NER)  --->  Placeholders
 | `text/secrets.py` | Finds credentials by their shape: API keys, tokens, private keys, passwords |
 | `text/anonymizer.py` | Merges spans, finds repeat mentions and assigns placeholders. `Anonymizer` keeps them across many texts |
 | `cli/` | Command line, which reports errors without quoting data: one module per command (`schema.py`, `synth.py`, `scan.py`, ...), `parser.py` for the arguments and `common.py` for what they share |
+
+## Documentation
+
+The pages are in `docs/` and are published with MkDocs (`uv sync --group docs`, then `uv run mkdocs serve`).
+`tests/test_docs.py` keeps them honest: every page is in `mkdocs.yml`, every link and heading it points at exists,
+and every command is explained on some page.
+
+`docs/cli-reference.md` is generated from the argument parser, so change a command's help in `cli/` and run
+`uv run python tools/gen_cli_reference.py`; the test fails while the page is stale. The accuracy tables in
+`docs/anonymization.md` come from `uv run python tools/ner_benchmark.py --write`.
 
 ## Adding a source
 
@@ -74,7 +91,8 @@ uv run datanyx doctor                # shows what's installed
 
 ```sh
 uv run pytest                        # needs no services; model tests skip without the models
-uv run pytest -n auto                # in parallel, in about half the time (each worker loads the models)
+uv run pytest -n auto                # in parallel, in about half the time (each worker loads the models,
+                                     # so use -n 4 if a MemoryError shows up)
 uv run ruff check src tests
 uv run mypy
 uv run pytest --cov                  # coverage report

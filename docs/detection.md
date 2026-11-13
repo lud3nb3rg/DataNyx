@@ -10,7 +10,11 @@ entries in `datanyx.toml`, or in a separate file named by `detectors = [...]` or
 kind = "EMPLOYEE_ID"          # the placeholder becomes <EMPLOYEE_ID_1>
 regex = 'EMP-\d{6}'
 flags = "i"                   # optional: any of i, m, s
-group = 1                     # optional: mark only this part of the match
+
+[[pattern]]
+kind = "BADGE"
+regex = 'badge (?:no\.? )?([A-Z]{2}\d{3})'
+group = 1                     # optional: mark only this group of the match, here the badge itself
 
 [[dictionary]]
 kind = "CLIENT"
@@ -20,10 +24,12 @@ ignore_case = true            # the default
 word_boundaries = true        # the default: "Acme" doesn't match inside "Acmeville"
 ```
 
-- Kinds are capital letters and underscores. They are found by `anonymize`, `scrub`, the MCP server's
-  `anonymize_file`, and `scan`, which counts them by default and accepts them in `--kinds`.
-- A custom kind wins a tie over a built-in one on the same text, so a ticket number is
-  `<TICKET_1>` rather than a generic `<ID_1>`. `--keep-entity TICKET` leaves a kind visible, and
+- Kinds are capital letters and underscores. They are found by `anonymize`, `scrub`, `run`, `eval`, `pseudonymize`'s
+  free text, the MCP server's `anonymize_file` and `scan_folder`, and `scan`, which counts them by default and accepts
+  them in `--kinds`.
+- Where matches overlap they are joined, and the longest names the result. A custom kind wins a tie over a
+  built-in one on the same text, so a ticket number is `<TICKET_1>` rather than a generic `<ID_1>`. A `group`
+  that marks less than a built-in detector matches loses to it, so mark the whole identifier. `--keep-entity TICKET` leaves a kind visible, and
   `restore` puts custom placeholders back like any other.
 - A bad regex, an unknown key or a missing terms file is an error that never repeats a term. Terms
   can be sensitive, so a dictionary of real client names belongs in `datanyx.local.toml` or another
@@ -31,7 +37,7 @@ word_boundaries = true        # the default: "Acme" doesn't match inside "Acmevi
 
 ## Measuring and improving detection
 
-The accuracy table above is for invented names in invented sentences. What matters is *your* text, your
+The [accuracy tables](anonymization.md#how-reliable-text-anonymization-is) are for invented names in invented sentences. What matters is *your* text, your
 names and your languages, so measure that. Label a sample (a few dozen documents is enough to see the
 pattern) and run `datanyx eval`:
 
@@ -88,10 +94,10 @@ or `packs = ["healthcare"]` in the config. Where a format has a check digit it i
 run of digits isn't mistaken for an account, and labelled fields need a label or a digit:
 "member id: pending" isn't a member id.
 
-| Pack | Finds |
-|---|---|
-| `healthcare` | The HIPAA Safe Harbor identifiers that have a form: patient and provider names after "Patient:" or "Dr.", SSN, medical record numbers, health plan and member numbers, NPI and DEA numbers (check digits verified), vehicle (VIN) and device identifiers, ZIP codes after a state, ages over 89, fax numbers |
-| `finance` | Account numbers, routing numbers (checksum verified), SWIFT/BIC codes, sort codes, ISINs (check digit verified), EIN and tax ids, UK National Insurance numbers, VAT numbers, SSNs, crypto wallet addresses |
+| Pack | Finds | Kinds |
+|---|---|---|
+| `healthcare` | The HIPAA Safe Harbor identifiers that have a form: patient and provider names after "Patient:" or "Dr.", SSN, medical record numbers, health plan and member numbers, NPI and DEA numbers and VINs (check digits verified), device identifiers, ZIP codes after a state, ages over 89, fax numbers | `SSN`, `MRN`, `MEMBER_ID`, `NPI`, `DEA_NUMBER`, `VIN`, `DEVICE_ID`, `ZIP_CODE`, `AGE`, and `PERSON` and `PHONE` |
+| `finance` | Account numbers, routing numbers (checksum verified), SWIFT/BIC codes, sort codes, ISINs (check digit verified), EIN and tax ids, UK National Insurance numbers, VAT numbers, SSNs, crypto wallet addresses | `ACCOUNT_NUMBER`, `ROUTING_NUMBER`, `SWIFT_CODE`, `SORT_CODE`, `ISIN`, `TAX_ID`, `NATIONAL_INSURANCE`, `VAT_NUMBER`, `SSN`, `CRYPTO_WALLET` |
 
 Dates, phone numbers, emails, URLs, IP addresses, card numbers and IBANs are found by the general detectors.
 A pack helps with de-identification but isn't a certification that a text meets any standard, and it

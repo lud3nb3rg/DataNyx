@@ -8,21 +8,29 @@ datanyx schema shop.db --format text            # SQLite
 datanyx schema env:DATABASE_URL                 # server database, URL read from the environment
 datanyx schema env:DATABASE_URL --schema sales  # a schema other than the default
 cat customers.json | datanyx schema -           # read stdin
-datanyx schema orders.csv                       # CSV, TSV, YAML, XML, Excel and Parquet work the same way
+datanyx schema orders.csv                       # every format in the sources table works the same way
 datanyx schema ./exports/ -r                    # every readable file in a folder, subfolders too
-datanyx schema orders.csv --format typescript   # or pydantic, or sql
+datanyx schema orders.csv --format typescript   # or pydantic, sql, summary
 ```
 
 | Option | Purpose |
 |---|---|
-| `--format` | `json-schema` (default), `text`, `typescript`, `pydantic` or `sql` |
+| `--format` | `json-schema` (default), `text`, `typescript`, `pydantic`, `sql` or `summary` ([output formats](#output-formats)) |
 | `-r`, `--recursive` | For a folder, also read its subfolders |
 | `-o`, `--output` | Write to a file instead of stdout |
 | `--schema` | Database schema to describe, instead of the database's default |
-| `--source` | Set the input type (`csv`, `tsv`, `json`, `jsonl`, `yaml`, `xml`, `excel`, `parquet`, `sql`) when it can't be detected |
+| `--source` | Set the input type (`csv`, `json`, `parquet`, `fhir`, ...) when the name doesn't say; the [command reference](cli-reference.md#datanyx-schema) lists them all |
 | `--delimiter` | The separator of a CSV or TSV file, such as `;`, `\|` or `tab`, when it isn't a comma (CSV) or a tab (TSV) |
-| `--map-path` | Hide all keys or columns at a path ([details](#adjusting-what-gets-hidden)) |
-| `--keep-name` | Show a name that was hidden automatically ([details](#adjusting-what-gets-hidden)) |
+| `--map-path`, `--keep-name` | Hide more, or show a name that was hidden automatically ([details](#adjusting-what-gets-hidden)) |
+| `--scale-hints`, `--infer-keys` | Add sizes and guessed keys and joins ([details](#size-and-key-hints)) |
+| `--column-hints` | Add ranges for each column's distinct values, missing values and text length ([details](#column-hints)) |
+| `--public-column` | List the labels of a column you declare safe to show ([details](#public-columns)) |
+| `--views` | Describe database views too ([details](#views)) |
+| `--max-rows` | Read only the first N rows of a big file ([details](#huge-files)) |
+| `--include`, `--exclude`, `--max-tables` | Choose which tables to describe ([details](#big-databases)) |
+
+Settings that a project always wants go under `[schema]` in [`datanyx.toml`](settings.md); `synth`, `check`, `diff`,
+`run --describe-output` and the MCP server read them too.
 
 > **Tip:** prefer `env:NAME` over putting a database URL on the command line. A password in
 > the command is visible to an agent running it and is kept in shell history.
@@ -98,12 +106,10 @@ column types are kept as they are. Names that aren't valid identifiers get a Pyd
 | Parquet | From the file footer alone: no row is read, and the file's metadata is ignored. Columns, structs, lists and maps are typed from the Arrow schema. |
 | YAML | Read with the safe loader, so no tag can run code. Several documents are described as an array. |
 | XML | Attributes are keys starting with `-` and text is `$text`. An element that repeats becomes an array. Files with a DOCTYPE or entity declarations are refused. |
-| Folder | One entry per file, named after it. A file name that looks like data becomes `file_N`. Fields shared between files are listed in the notes, since they're likely join keys. Links and dotfiles are skipped. |
+| Folder | One entry per file, named after it (a sheet or table inside it becomes `file#sheet`). A file name that looks like data becomes `file_N`. Fields shared between files are listed in the notes, since they're likely join keys. Links and dotfiles are skipped, a file that can't be read is named in a note, and it stops after 200 readable files. |
 
 Files with unusual extensions can be read with `--source csv`, `--source tsv`, `--source xml`
-and so on.
-
-
+and so on. [Supported sources](sources.md) has the notes for every other format.
 
 ## Adjusting what gets hidden
 
@@ -184,7 +190,7 @@ and as comments rather than constraints in the SQL output, so nothing pretends t
 
 Set both once for a project with `scale_hints = true` and `infer_keys = true` under `[schema]` in
 `datanyx.toml`. For the MCP server they are options of whoever starts it (`datanyx mcp --scale-hints
---infer-keys`), and an agent can't turn them on or off.
+--infer-keys`, or the same settings file), and an agent can't turn them on or off.
 
 ## Keys the database declares
 
@@ -222,7 +228,7 @@ root: array<{
 |---|---|
 | How many different values | `one value only`, `2 to 9`, `10 to 99`, `100 to 999`, `1,000 or more distinct values` |
 | How often it is missing (empty or null) | `never`, `rarely` (under a tenth), `often` (up to half), `mostly missing` |
-| How long the longest text is | `text up to 9`, `99`, `999 characters`, or `1,000 characters or more` |
+| How long the longest text is | `text up to 9`, `99` or `999 characters`, or `text of 1,000 characters or more` |
 
 A column with 3 values is a category an agent can group by; one with 1,000 or more is not. A column that is mostly
 missing is a poor join key. These are the questions the hints are for. Things to know:

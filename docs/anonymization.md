@@ -29,12 +29,17 @@ preserved.
 
 | Option | Purpose |
 |---|---|
-| `-o`, `--output` | Write to a file instead of stdout. It refuses to overwrite the input |
-| `--model` | spaCy model, such as `fr_core_news_md` for French text |
+| `-o`, `--output` | Write to a file instead of stdout (for a folder, a new folder). It refuses to overwrite the input |
+| `--model` | spaCy model, such as `fr_core_news_md` for French text. Repeat it to use several |
 | `--hide` | Always hide this term, ignoring case (repeatable) |
 | `--keep` | Leave this exact term visible (repeatable) |
 | `--keep-entity` | Leave a kind of entity visible, such as `DATE` (repeatable) |
 | `--mapping` | Also save each placeholder's real value to a new file ([details](#restoring-real-values)) |
+| `-r`, `--keep-names`, `--stream` | For folders and streams ([below](#folders-documents-and-streams)) |
+| `--pack`, `--backend`, `--detectors` | More detectors: packs for healthcare and finance, Presidio, GLiNER or a local model, and your own ([detection quality](detection.md)) |
+
+Defaults for all of these can go under `[anonymize]` in [`datanyx.toml`](settings.md), and the terms to hide in
+`datanyx.local.toml`, which isn't committed.
 
 **What it hides**
 
@@ -43,6 +48,9 @@ preserved.
 - **Using patterns:** `EMAIL`, `URL`, `IP_ADDRESS`, `MAC_ADDRESS`, `CREDIT_CARD`, `IBAN`,
   `PHONE`, `ADDRESS`, `ID` (long numbers, UUIDs, keys and references), plus common `DATE`
   and `MONEY` formats in several languages
+- **Using credential shapes:** `SECRET` for passwords, API keys, tokens and private key blocks
+  (the same detector as [`datanyx scan`](scanning.md))
+- **Your own:** [custom detectors and packs](detection.md) add kinds such as `EMPLOYEE_ID` or `SSN`
 
 If spaCy or the model isn't installed, it stops with an error and outputs nothing. It
 doesn't fall back to patterns alone, because names would pass through unnoticed.
@@ -72,7 +80,7 @@ has a file of the same name, is refused.
 |---|---|
 | Text, Markdown, logs, CSV, JSON and similar | The same file, with placeholders. Line endings are kept |
 | HTML | The same page: tags and layout stay, text and attributes change, except the ones about layout (`class`, `style`, `width`...); comments and scripts are removed, and strings and comments in a stylesheet are anonymized. Text with nothing to hide keeps its original spelling |
-| Word (`.docx`) | The same document: styles, tables and layout stay. A paragraph with something to hide loses the formatting *inside* it, and author, company and title are cleared. Who made each comment and revision is replaced, text boxes, alt text, picture names, labels and the paths of links out of the document are anonymized, tracked deletions are removed, and custom properties, custom XML and embedded files are emptied |
+| Word (`.docx`) | The same document: styles, tables and layout stay. A paragraph with something to hide loses the formatting *inside* it, and author, company and title are cleared. Who made each comment and revision is replaced, text boxes, alt text, picture names, labels and the paths of links out of the document are anonymized, tracked deletions and moved-away text are removed, and custom properties, custom XML and embedded files are emptied. A single Word file needs `-o`, since the result isn't text |
 | Email (`.eml`) | A text file of the headers and body. People become placeholders (a sender is `<PERSON_1> (<EMAIL_1>)`), routing headers and attachments are left out, and attachment names are listed |
 | PDF | A text file of the pages, with page markers (needs `.[pdf]`) |
 | WhatsApp export | The same chat, each sender one placeholder, so who said what is still clear. Continuation lines and system messages are handled |
@@ -88,13 +96,20 @@ as it grows, so it survives a stopped stream:
 tail -f app.log | datanyx anonymize - --stream --mapping app.mapping.json
 ```
 
-**What these don't do.** Each line of a stream is judged on its own, so a name split across lines isn't
-joined. Inside HTML, comments and the contents of `<script>` are removed, since code can't be anonymized and still
-mean anything, and in `<style>` only strings and comments are read. A link out of a Word file keeps its host. Images in Word files and the pictures in a PDF aren't read, and a
-scanned PDF has no text to find; the notes printed after a run say when that happened. Changed HTML
-text is re-escaped, so `&nbsp;` becomes a plain non-breaking space. WhatsApp's two usual layouts are
-recognised, and other chat apps aren't. A person is matched by exact name across documents: "Whitfield"
-alone in a later file isn't linked to "Jessica Whitfield" from an earlier one.
+**What these don't do.**
+
+- Each line of a stream is judged on its own, so a name split across lines isn't joined.
+- Inside HTML, comments and the contents of `<script>` are removed, since code can't be anonymized and still
+  mean anything, and in `<style>` only strings and comments are read. Changed HTML text is re-escaped, so `&nbsp;`
+  becomes a plain non-breaking space and a placeholder is written `&lt;PERSON_1&gt;`.
+- A link out of a Word file keeps its host. Images in Word files and the pictures in a PDF aren't read, and a
+  scanned PDF has no text to find; the notes printed after a run say when that happened.
+- A `.txt` file is taken for a WhatsApp export when at least 3 of its first 60 lines start with a chat
+  timestamp, in either of WhatsApp's two usual layouts. A shorter chat, or another app's, is read as plain text, so
+  its senders are left to the detectors like any other name.
+- A person is matched by exact name across documents, and across the parts of one: "Whitfield" alone in a later file
+  isn't linked to "Jessica Whitfield" from an earlier one, and "Tomasz" in an email's body or a chat message gets a
+  placeholder of its own, not the one for "Tomasz Kowalczyk" in the `To:` header or as a sender.
 
 ## Restoring real values
 

@@ -156,7 +156,8 @@ Read these before quoting the numbers.
 - **15 runs, one model, one dataset I designed.** The mess is the kind a model expects (dates, currency
   symbols, case). Mess it doesn't think to guard against (a unit change halfway through a column, an `N/A` that means
   something, two meanings of one status) isn't tested.
-- **The retry loop was exercised once** (above), on the milder dataset. Across the 66 agent runs in all the experiments on this page, 1 crashed. How often scrubbed feedback
+- **The retry loop was exercised once** (above), on the milder dataset. Across the 96 agent runs in all the experiments on this page (45 in the table above, 21 for the hint and 30 with public
+  columns, not counting the one that fixed the crash), 1 crashed. How often scrubbed feedback
   is enough to fix a crash is not measured by one case.
 - **The agents' isolation was by absence, not enforcement.** The data wasn't on disk and the generator was moved
   out of the repository, but they could have searched the filesystem. Each used three tool calls, consistent with

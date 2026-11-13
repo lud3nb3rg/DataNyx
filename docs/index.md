@@ -9,15 +9,15 @@ or pick the job you have:
 | I want to… | Read | Command |
 |---|---|---|
 | Show an agent the shape of a file or database | [Schemas](schemas.md) | `datanyx schema` |
-| Let it try code on realistic fake rows | [Synthetic data](synthetic-data.md) | `datanyx synth` |
-| Let it fix a script that fails on the real data | [Debugging](debugging.md) | `datanyx run` |
+| Let it try code on realistic fake rows, clean or messy | [Synthetic data](synthetic-data.md) | `datanyx synth` |
+| Let it fix a script that fails on the real data, or check what it wrote | [Debugging](debugging.md) | `datanyx run` |
 | Catch wrong column names before anything runs | [Checking code](checking-code.md) | `datanyx check` |
 | Find personal data or secrets in a folder before sharing it | [Scanning](scanning.md) | `datanyx scan` |
 | Give it text with the names and ids removed | [Text anonymization](anonymization.md) | `datanyx anonymize` |
 | Share a copy of a table with consistent fake values | [Pseudonymizing tables](pseudonymization.md) | `datanyx pseudonymize` |
 | Measure and improve what gets detected | [Detection quality](detection.md) | `datanyx eval` |
 | Notice that a data feed changed shape | [Schema diff](schema-diff.md) | `datanyx diff` |
-| Stop an agent from reading the data directly | [Using it with an agent](agents.md) | `datanyx protect` |
+| Stop an agent from reading the data directly, or serve it over MCP | [Using it with an agent](agents.md) | `datanyx protect`, `datanyx mcp` |
 | Run it in a container, a pre-commit hook, CI or a shared server | [Installing and deploying](deployment.md) | `datanyx mcp --http` |
 | Share one policy across a team | [Team settings](settings.md) | `datanyx.toml` |
 
